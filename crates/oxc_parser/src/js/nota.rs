@@ -45,6 +45,11 @@ const DOC: &str = "Doc";
 /// The F1 component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
 const INLINE_COMPONENT: &str = "inlineComponent";
 const BLOCK_COMPONENT: &str = "blockComponent";
+/// Phase-F ambient-prelude tags for code/math spans (referenced as identifiers — the compiler shim
+/// prepends their bindings; the reader emits no import, exactly like a component tag).
+const CODE_INLINE: &str = "CodeInline";
+const CODE_BLOCK: &str = "CodeBlock";
+const MATH: &str = "Math";
 
 /// One piece of an element body, collected during the body-segment loop, *before* the Scribble
 /// whitespace pass turns it into the final child expressions.
@@ -175,6 +180,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             Some(b'{' | b'[') => self.parse_element(span_start, head, in_body),
             Some(b':') if !head.colon_escaped => {
                 self.parse_colon_element(span_start, head, in_body)
+            }
+            // `@code|{ … }|` — a *verbatim* body (Phase F): `|{` after a head opens a raw body that
+            // ends at `}|` (sigils off, braces literal; the armed escape `|@` re-enters Nota).
+            Some(b'|') if self.byte_at(head.end + 1) == Some(b'{') => {
+                self.parse_verbatim_element(span_start, head, in_body)
             }
             // No element trigger ⇒ interpolation: the head expression alone.
             _ => self.finish_interpolation(head, in_body),
@@ -426,6 +436,25 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                                 self.push_literal_byte(items, m);
                                 self.nota_seek_markup(term_off + 1);
                             }
+                        }
+                        Some(b'\\') => {
+                            // General backslash escape (Phase F): `\<c>` → literal `<c>`, `\` dropped.
+                            let resume = self.push_escape(items, term_off);
+                            self.nota_seek_markup(resume);
+                        }
+                        Some(b'`') => {
+                            // Code (Phase F): inline `` `…` `` / fenced ```` ```…``` ````.
+                            self.parse_code_or_literal(items, term_off);
+                        }
+                        Some(b'$') => {
+                            // Math (Phase F): `$…$` / `$$…$$`.
+                            self.parse_math_or_literal(items, term_off);
+                        }
+                        Some(b'|') => {
+                            // A bare `|` in a markup body is literal (the `|{`/`|@` forms are handled
+                            // by the head switch / inside verbatim bodies, never here).
+                            items.push(BodyItem::Text("|"));
+                            self.nota_seek_markup(term_off + 1);
                         }
                         _ => {
                             // EOF.
@@ -1201,6 +1230,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     depth -= 1;
                     i += 1;
                 }
+                // Phase F: skip over a raw span (code/math/verbatim) so a `*`/`_` *inside* raw content
+                // cannot close the emphasis (the raw span owns its own markers).
+                b'`' | b'$' => i = self.skip_raw_span_for_emphasis(i),
+                b'|' if bytes.get(i + 1) == Some(&b'{') => {
+                    i = self.skip_raw_span_for_emphasis(i);
+                }
                 _ if b == marker && depth == 0 => {
                     // A candidate close: valid iff it is a marker (not intra-word).
                     if self.is_emphasis_marker(i as u32) {
@@ -1212,6 +1247,53 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
         }
         None
+    }
+
+    /// Skip a raw span (inline/fenced code, math, or `|{ … }|` verbatim) whose opener byte is at
+    /// `at`, returning the offset just past its close (or just past the opener if it has no valid
+    /// close — then the opener byte was literal and we advance by one to make progress). Used by
+    /// [`Self::find_emphasis_close`] so emphasis matching steps over raw content.
+    fn skip_raw_span_for_emphasis(&self, at: usize) -> usize {
+        let bytes = self.source_text.as_bytes();
+        match bytes[at] {
+            b'`' => {
+                let mut k = at;
+                while k < bytes.len() && bytes[k] == b'`' {
+                    k += 1;
+                }
+                let fence_len = k - at;
+                match self.find_backtick_close(k, fence_len) {
+                    Some(close) => close + fence_len, // past the closing run
+                    None => at + 1,                   // unterminated → the backtick is literal
+                }
+            }
+            b'$' => {
+                let display = bytes.get(at + 1) == Some(&b'$');
+                let delim = if display { 2 } else { 1 };
+                let mut k = at + delim;
+                while k < bytes.len() {
+                    match bytes[k] {
+                        b'\\' => k += 2,
+                        b'$' if !display => return k + 1,
+                        b'$' if display && bytes.get(k + 1) == Some(&b'$') => return k + 2,
+                        _ => k += 1,
+                    }
+                }
+                at + 1 // unterminated → the `$` is literal
+            }
+            b'|' => {
+                // `|{ … }|` — scan to the closing `}|`.
+                let mut k = at + 2;
+                while k < bytes.len() {
+                    if bytes[k] == b'}' && bytes.get(k + 1) == Some(&b'|') {
+                        return k + 2;
+                    }
+                    k += 1;
+                }
+                at + 1 // unterminated
+            }
+            _ => at + 1,
+        }
     }
 
     /// Push a single literal byte (an ASCII sigil that turned out to be non-significant) as text.
@@ -1502,6 +1584,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                                 self.nota_seek_markup(term_off + 1);
                             }
                         }
+                        Some(b'\\') if term_off < end => {
+                            let resume = self.push_escape(items, term_off);
+                            self.nota_seek_markup(resume);
+                        }
+                        Some(b'`') if term_off < end => self.parse_code_or_literal(items, term_off),
+                        Some(b'$') if term_off < end => self.parse_math_or_literal(items, term_off),
+                        Some(b'|') if term_off < end => {
+                            items.push(BodyItem::Text("|"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
                         _ => break,
                     }
                 }
@@ -1512,6 +1604,569 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Kind::Eof => break,
                 _ => self.advance_for_markup_text(),
             }
+        }
+    }
+}
+
+// ===============================================================================================
+// Phase F — verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), and the
+// general backslash escape. Raw spans are scanned over the raw source (the D/E line-construct
+// pattern) and lowered to `String.raw` tagged-template literals so `\` and `{}` survive verbatim
+// (contract §3 last rows, notation.md §Verbatim/§Math/§Code). Math `@`-interpolation becomes a
+// `${…}` substitution in the one template; verbatim `|@` re-enters Nota as a *sibling* child.
+// The raw spans are pushed as pre-lowered `BodyItem::Child`, so the Scribble whitespace pass
+// (`apply_whitespace`) never touches their content (NOTA_READER Phase-F guidance).
+// ===============================================================================================
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    // ------------------------------------------------------------------------------------------
+    // General backslash escape (step 1). `\<c>` → literal `<c>` (the `\` dropped); a trailing lone
+    // `\` at EOF is itself literal. Hooked from the markup collectors' byte-peek `\` arm.
+    // ------------------------------------------------------------------------------------------
+
+    /// Handle a `\` at raw offset `esc_off` (the run stopped there): push the escaped character as a
+    /// literal text item (backslash dropped) and return the offset to resume markup text from. A
+    /// lone trailing `\` (EOF after it) is pushed literally as `\`.
+    fn push_escape(&self, items: &mut Vec<BodyItem<'a>>, esc_off: u32) -> u32 {
+        match self.char_at(esc_off + 1) {
+            Some(c) => {
+                // Emit the escaped char verbatim (the `\` is dropped); resume past `\<c>`.
+                let lit: &'a str = self.alloc_char(c);
+                items.push(BodyItem::Text(lit));
+                esc_off + 1 + c.len_utf8() as u32
+            }
+            None => {
+                // Trailing lone backslash at EOF: literal `\`.
+                items.push(BodyItem::Text("\\"));
+                esc_off + 1
+            }
+        }
+    }
+
+    /// Allocate a single `char` as an arena `&str` (for escaped-literal text items).
+    fn alloc_char(&self, c: char) -> &'a str {
+        let mut buf = [0u8; 4];
+        self.ast.allocator.alloc_str(c.encode_utf8(&mut buf))
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // `String.raw` tagged-template builders (the one AST shape D/E never built).
+    // ------------------------------------------------------------------------------------------
+
+    /// `String.raw\`<raw>\`` — a tagged template over a single raw quasi (no substitutions). Used for
+    /// inline/fenced code, verbatim raw runs, and substitution-free math.
+    fn build_string_raw(&self, span: Span, raw: &'a str) -> Expression<'a> {
+        let ast = self.ast;
+        let mut quasis = ast.vec_with_capacity(1);
+        quasis.push(self.raw_quasi(span, raw, true));
+        let quasi = ast.template_literal(span, quasis, ast.vec());
+        self.tag_string_raw(span, quasi)
+    }
+
+    /// `String.raw\`q0${e0}q1${e1}…\`` — a tagged template with substitutions (math `@`-interp). The
+    /// `quasis` are the raw text chunks (one more than `exprs`); `exprs` are the interpolations.
+    fn build_string_raw_interp(
+        &self,
+        span: Span,
+        quasis_raw: Vec<&'a str>,
+        exprs: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let ast = self.ast;
+        debug_assert_eq!(quasis_raw.len(), exprs.len() + 1);
+        let last = quasis_raw.len() - 1;
+        let mut quasis = ast.vec_with_capacity(quasis_raw.len());
+        for (i, q) in quasis_raw.into_iter().enumerate() {
+            quasis.push(self.raw_quasi(span, q, i == last));
+        }
+        let quasi = ast.template_literal(span, quasis, exprs);
+        self.tag_string_raw(span, quasi)
+    }
+
+    /// One template-literal quasi carrying `raw` as its **raw** value with `cooked: None` (so a
+    /// `String.raw` tag reproduces `raw`: `\` and `{}` are NOT interpreted — that is the whole point
+    /// of `String.raw`).
+    ///
+    /// Crucially we do **not** use codegen's `escape_raw` (which doubles every `\`): for `String.raw`
+    /// the emitted *source* between the backticks must equal the runtime string, so a single LaTeX/
+    /// code backslash must print as a single `\` (`String.raw\`\sum\`` → the string `\sum`). We escape
+    /// only the two characters that would otherwise break the template *syntax* — a backtick (closes
+    /// the template) and a `${` (opens a substitution) — by prefixing a `\`. Those two cannot round-
+    /// trip *exactly* through `String.raw` (JS has no raw escape for a bare backtick), but they are
+    /// degenerate in verbatim/code/math content; the escape keeps the emitted JS valid (the §1.6
+    /// validity invariant) at the cost of a leaked `\` on those rare bytes.
+    fn raw_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
+        let escaped = self.escape_raw_template_syntax(raw);
+        let value = TemplateElementValue { raw: self.ast.str(escaped), cooked: None };
+        self.ast.template_element(span, value, tail, false)
+    }
+
+    /// Prefix a `\` before each backtick and each `${` in `raw` (the only template-syntax breakers),
+    /// returning the original slice unchanged when neither occurs (the common case — no allocation).
+    fn escape_raw_template_syntax(&self, raw: &'a str) -> &'a str {
+        let bytes = raw.as_bytes();
+        let needs = bytes
+            .iter()
+            .enumerate()
+            .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')));
+        if !needs {
+            return raw;
+        }
+        let mut out = String::with_capacity(bytes.len() + 8);
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')) {
+                out.push('\\');
+            }
+            // Push the full UTF-8 char (advance by its byte length).
+            let ch_len =
+                if b < 0x80 { 1 } else { raw[i..].chars().next().map_or(1, char::len_utf8) };
+            out.push_str(&raw[i..i + ch_len]);
+            i += ch_len;
+        }
+        self.ast.allocator.alloc_str(&out)
+    }
+
+    /// `String.raw` — the member-expression callee for the raw tagged template.
+    fn tag_string_raw(&self, span: Span, quasi: TemplateLiteral<'a>) -> Expression<'a> {
+        let ast = self.ast;
+        let empty = Span::empty(span.start);
+        let object = ast.expression_identifier(empty, "String");
+        let property = ast.identifier_name(empty, "raw");
+        let tag = Expression::StaticMemberExpression(
+            ast.alloc_static_member_expression(empty, object, property, false),
+        );
+        ast.expression_tagged_template(span, tag, NONE, quasi)
+    }
+
+    /// Build the ambient-prelude element `h(<Name>, { <props> }, [<raw-children>])` for a code/math
+    /// span (`CodeInline`/`CodeBlock`/`Math` — referenced as identifiers, no import emitted).
+    fn build_raw_element(
+        &self,
+        span: Span,
+        name: &'a str,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let tag = self.ast.expression_identifier(Span::new(span.start, span.start), name);
+        self.build_h(span, tag, props, children)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Verbatim `|{ … }|` (step 2). Raw body: ends at `}|`; the armed escape `|@` re-enters Nota to
+    // produce a *sibling* element child. Lowers to `h("code", {}, [String.raw`…`, <child>, …])`.
+    // ------------------------------------------------------------------------------------------
+
+    /// Parse `@head|{ … }|` — a verbatim-body element. `head.end` points at the `|` of `|{`.
+    fn parse_verbatim_element(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        in_body: bool,
+    ) -> Expression<'a> {
+        // Body starts just past `|{`.
+        let body_start = head.end + 2;
+        let (children, after) = self.collect_verbatim_body(body_start);
+        let span = Span::new(span_start, after);
+        let element = self.build_element(span, head.kind, self.ast.vec(), children);
+        // Resume the outer context past the closing `}|`.
+        if in_body {
+            self.nota_seek_markup(after);
+        } else {
+            self.nota_seek_to(after);
+        }
+        element
+    }
+
+    /// Collect a verbatim body starting at `start` (just past `|{`): raw text runs become
+    /// `String.raw` children; each `|@` re-arms one Nota `@`-form as a sibling child; the body ends
+    /// at `}|`. Returns `(children, after)` where `after` is one past the closing `}|` (or EOF).
+    fn collect_verbatim_body(&mut self, start: u32) -> (ArenaVec<'a, Expression<'a>>, u32) {
+        let bytes = self.source_text.as_bytes();
+        let mut children = self.ast.vec();
+        // Drop a single leading newline right after `|{` (the Scribble `{`-newline rule; otherwise
+        // the body is raw — no indent strip, no trimming). `|{⏎def…` → the chunk starts at `def`.
+        let mut start = start as usize;
+        if bytes.get(start) == Some(&b'\n') {
+            start += 1;
+        }
+        let mut run_start = start;
+        let mut i = start;
+        loop {
+            if i >= bytes.len() {
+                // Unterminated `|{` — surface a diagnostic; emit what we have.
+                self.push_raw_run(&mut children, run_start, bytes.len());
+                let span = Span::new(start as u32, bytes.len() as u32);
+                self.set_fatal_error(diagnostics::nota_unterminated_verbatim(span));
+                return (children, bytes.len() as u32);
+            }
+            // Close `}|`.
+            if bytes[i] == b'}' && bytes.get(i + 1) == Some(&b'|') {
+                // Drop a single trailing newline right before `}|` (the Scribble `}`-newline rule).
+                let run_end = if i > run_start && bytes[i - 1] == b'\n' { i - 1 } else { i };
+                self.push_raw_run(&mut children, run_start, run_end);
+                return (children, i as u32 + 2);
+            }
+            // Armed escape `|@` — flush the raw run, then parse one `@`-form as a child.
+            if bytes[i] == b'|' && bytes.get(i + 1) == Some(&b'@') {
+                self.push_raw_run(&mut children, run_start, i);
+                // Re-enter Nota at the `@` (one past the arming `|`); parse a single form.
+                self.nota_seek_to(i as u32 + 1);
+                debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
+                let child = self.parse_nota_form(false);
+                children.push(child);
+                // `parse_nota_form` left the lexer just past the form; resume the raw scan there.
+                i = self.prev_token_end as usize;
+                run_start = i;
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    /// Push the raw slice `[from, to)` as a `String.raw\`…\`` child (skipped if empty).
+    fn push_raw_run(&self, children: &mut ArenaVec<'a, Expression<'a>>, from: usize, to: usize) {
+        if to <= from {
+            return;
+        }
+        let raw: &'a str = &self.source_text[from..to];
+        let span = Span::new(from as u32, to as u32);
+        children.push(self.build_string_raw(span, raw));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Code — inline `` `…` `` and fenced ```` ```lang⏎…⏎``` ````  (step 3). Fully raw, no
+    // interpolation. The fence length is the opening backtick-run length; a shorter run inside is
+    // literal. Inline (run on one line / 1–2 backticks) → `CodeInline`; a `≥3` run whose opener line
+    // is otherwise blank (modulo a lang tag) → fenced `CodeBlock`.
+    // ------------------------------------------------------------------------------------------
+
+    /// Parse a code span at `tick_off`, or — if it has no valid close — emit the opening backtick run
+    /// as literal text. Either way, re-seek markup text at the resume offset. The byte-peek arm
+    /// driver for code in the markup collectors.
+    fn parse_code_or_literal(&mut self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) {
+        if let Some(resume) = self.parse_code_span(items, tick_off) {
+            self.nota_seek_markup(resume);
+        } else {
+            // No close: the backtick run is literal text. Emit it, resume past it.
+            let bytes = self.source_text.as_bytes();
+            let mut i = tick_off as usize;
+            while i < bytes.len() && bytes[i] == b'`' {
+                i += 1;
+            }
+            let lit: &'a str = &self.source_text[tick_off as usize..i];
+            items.push(BodyItem::Text(lit));
+            self.nota_seek_markup(i as u32);
+        }
+    }
+
+    /// Parse a math span at `dollar_off`, or — if unterminated — emit the opening `$`-run as literal
+    /// text. Re-seeks markup text at the resume offset.
+    fn parse_math_or_literal(&mut self, items: &mut Vec<BodyItem<'a>>, dollar_off: u32) {
+        if let Some(resume) = self.parse_math_span(items, dollar_off) {
+            self.nota_seek_markup(resume);
+        } else {
+            let bytes = self.source_text.as_bytes();
+            let mut i = dollar_off as usize;
+            while i < bytes.len() && bytes[i] == b'$' {
+                i += 1;
+            }
+            let lit: &'a str = &self.source_text[dollar_off as usize..i];
+            items.push(BodyItem::Text(lit));
+            self.nota_seek_markup(i as u32);
+        }
+    }
+
+    /// Parse a code span whose opening backtick run starts at raw offset `tick_off` (the run stopped
+    /// there). Pushes the lowered `h(CodeInline|CodeBlock, …)` child into `items` and returns the
+    /// resume offset, or returns `None` if this is not a valid code opener (run shorter than any
+    /// close → the backticks are literal; the caller emits them as text).
+    fn parse_code_span(&mut self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) -> Option<u32> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = tick_off as usize;
+        while i < bytes.len() && bytes[i] == b'`' {
+            i += 1;
+        }
+        let fence_len = i - tick_off as usize;
+        let content_start = i;
+
+        // A `≥3` run that is the last non-whitespace on its line (modulo a trailing language tag) is
+        // a *fenced* block: ```lang⏎ … ⏎```. Otherwise it is inline code.
+        if fence_len >= 3 {
+            if let Some((element, resume)) =
+                self.parse_fenced_code(tick_off, fence_len, content_start)
+            {
+                items.push(BodyItem::Child(element));
+                return Some(resume);
+            }
+        }
+
+        // Inline code: content up to the next run of exactly `fence_len` backticks on the same scope
+        // (shorter runs are literal content). Search for the closing run.
+        let close = self.find_backtick_close(content_start, fence_len)?;
+        let raw: &'a str = &self.source_text[content_start..close];
+        let span = Span::new(tick_off, close as u32 + fence_len as u32);
+        let raw_child = self.build_string_raw(Span::new(content_start as u32, close as u32), raw);
+        let element =
+            self.build_raw_element(span, CODE_INLINE, self.ast.vec(), self.ast.vec1(raw_child));
+        items.push(BodyItem::Child(element));
+        Some(close as u32 + fence_len as u32)
+    }
+
+    /// Find the next run of *at least* `fence_len` backticks at/after `from`, returning the offset of
+    /// the first backtick of that run (the close), or `None` if none exists. Shorter runs are skipped
+    /// (they are literal content — "backtick runs shorter than the closing fence are literal").
+    fn find_backtick_close(&self, from: usize, fence_len: usize) -> Option<usize> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = from;
+        while i < bytes.len() {
+            if bytes[i] == b'`' {
+                let run_start = i;
+                while i < bytes.len() && bytes[i] == b'`' {
+                    i += 1;
+                }
+                if i - run_start >= fence_len {
+                    return Some(run_start);
+                }
+                // A shorter run: literal, keep scanning past it.
+            } else {
+                i += 1;
+            }
+        }
+        None
+    }
+
+    /// Parse a fenced code block opened by a `fence_len`-backtick run at `tick_off`, where
+    /// `content_start` is just past the opening run. The rest of the opening line (trimmed) is the
+    /// optional language tag. The block ends at a line whose first non-whitespace is a run of `≥
+    /// fence_len` backticks. Returns `(h(CodeBlock,…), resume)`, or `None` if the opening run is not
+    /// a bare fence line (then it is treated as inline code by the caller).
+    fn parse_fenced_code(
+        &mut self,
+        tick_off: u32,
+        fence_len: usize,
+        content_start: usize,
+    ) -> Option<(Expression<'a>, u32)> {
+        let bytes = self.source_text.as_bytes();
+        // The opening line's tail after the run: an optional language tag (no backticks), then `\n`.
+        let mut j = content_start;
+        while j < bytes.len() && bytes[j] != b'\n' {
+            if bytes[j] == b'`' {
+                return None; // backticks on the opener line ⇒ not a fenced block (inline run)
+            }
+            j += 1;
+        }
+        let lang = self.source_text[content_start..j].trim();
+        if j >= bytes.len() {
+            return None; // no newline after the opener ⇒ not a block
+        }
+        let body_start = j + 1; // first line of code content
+
+        // Scan for the closing fence: a line whose first non-ws is a run of ≥ fence_len backticks.
+        let mut line_start = body_start;
+        loop {
+            if line_start >= bytes.len() {
+                // Unterminated fence: code runs to EOF.
+                let raw: &'a str = &self.source_text[body_start..bytes.len()];
+                return Some(self.finish_fenced(
+                    tick_off,
+                    bytes.len() as u32,
+                    lang,
+                    body_start,
+                    raw,
+                ));
+            }
+            let mut k = line_start;
+            while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                k += 1;
+            }
+            let run_start = k;
+            while k < bytes.len() && bytes[k] == b'`' {
+                k += 1;
+            }
+            if k - run_start >= fence_len {
+                // Closing fence. Code body is [body_start, closing-line-start), dropping the `\n`
+                // immediately before the fence line (notation.md fenced example). Resume right after
+                // the backtick run (NOT the rest of the line): trailing content — e.g. the `}` that
+                // closes an enclosing `@d{ … }` body — is left for the collector to handle.
+                let mut code_end = line_start;
+                if code_end > body_start && bytes[code_end - 1] == b'\n' {
+                    code_end -= 1;
+                }
+                let raw: &'a str = &self.source_text[body_start..code_end];
+                return Some(self.finish_fenced(tick_off, k as u32, lang, body_start, raw));
+            }
+            line_start = self.next_line_start(line_start as u32) as usize;
+        }
+    }
+
+    /// Build `h(CodeBlock, { lang: "…" }?, [String.raw`<code>`])` for a fenced block and return it
+    /// with the `resume` offset.
+    fn finish_fenced(
+        &self,
+        tick_off: u32,
+        resume: u32,
+        lang: &str,
+        code_start: usize,
+        raw: &'a str,
+    ) -> (Expression<'a>, u32) {
+        let span = Span::new(tick_off, resume);
+        let mut props = self.ast.vec();
+        if !lang.is_empty() {
+            let lang_s: &'a str = self.ast.allocator.alloc_str(lang);
+            let key = PropertyKey::StaticIdentifier(
+                self.ast.alloc_identifier_name(Span::empty(0), "lang"),
+            );
+            let value = self.ast.expression_string_literal(Span::empty(0), lang_s, None);
+            let prop = self.ast.alloc_object_property(
+                Span::empty(0),
+                PropertyKind::Init,
+                key,
+                value,
+                false,
+                false,
+                false,
+            );
+            props.push(ObjectPropertyKind::ObjectProperty(prop));
+        }
+        let raw_span = Span::new(code_start as u32, code_start as u32 + raw.len() as u32);
+        let raw_child = self.build_string_raw(raw_span, raw);
+        let element = self.build_raw_element(span, CODE_BLOCK, props, self.ast.vec1(raw_child));
+        (element, resume)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Math — `$…$` (inline) and `$$…$$` (display) (step 4). Raw LaTeX; `@name`/`@(expr)` interpolate
+    // a *string value* as a `${…}` substitution in the one `String.raw` template; `\$`/`\@` are
+    // literal but KEEP the backslash (it is LaTeX's own escape).
+    // ------------------------------------------------------------------------------------------
+
+    /// Parse a math span whose opening `$`-run starts at raw offset `dollar_off` (the run stopped
+    /// there). One `$` → inline, `$$` → display. Pushes `h(Math, {display:true}?, [String.raw`…`])`
+    /// into `items` and returns the resume offset, or `None` if unterminated-at-EOF without a close
+    /// (then the `$` is literal — the caller emits it as text).
+    fn parse_math_span(&mut self, items: &mut Vec<BodyItem<'a>>, dollar_off: u32) -> Option<u32> {
+        let bytes = self.source_text.as_bytes();
+        let display = bytes.get(dollar_off as usize + 1) == Some(&b'$');
+        let delim_len = if display { 2 } else { 1 };
+        let content_start = dollar_off as usize + delim_len;
+
+        // Scan the raw LaTeX, splitting at `@`-interpolations, until the closing `$`/`$$`.
+        let mut quasis: Vec<&'a str> = Vec::new();
+        let mut exprs = self.ast.vec();
+        let mut run_start = content_start;
+        let mut i = content_start;
+        let close = loop {
+            if i >= bytes.len() {
+                return None; // unterminated → the opening `$` is literal
+            }
+            match bytes[i] {
+                b'\\' => {
+                    // LaTeX escape: `\$`/`\@`/`\anything` — the backslash is KEPT (raw). Skip the
+                    // escaped char so a `\$` does not close the span and a `\@` does not interpolate.
+                    i += 2;
+                }
+                b'$' => {
+                    if display {
+                        if bytes.get(i + 1) == Some(&b'$') {
+                            break i;
+                        }
+                        // A single `$` inside display math is literal LaTeX.
+                        i += 1;
+                    } else {
+                        break i;
+                    }
+                }
+                b'@' => {
+                    // `@name`/`@(expr)` interpolation → a `${…}` substitution. Flush the raw chunk.
+                    let chunk: &'a str = &self.source_text[run_start..i];
+                    quasis.push(chunk);
+                    let (expr, after) = self.parse_math_interp(i as u32);
+                    exprs.push(expr);
+                    i = after as usize;
+                    run_start = i;
+                }
+                _ => i += 1,
+            }
+        };
+        // Final raw chunk.
+        let chunk: &'a str = &self.source_text[run_start..close];
+        quasis.push(chunk);
+
+        let after = close as u32 + delim_len as u32;
+        let span = Span::new(dollar_off, after);
+        let raw_span = Span::new(content_start as u32, close as u32);
+        let raw_child = if exprs.is_empty() {
+            self.build_string_raw(raw_span, quasis[0])
+        } else {
+            self.build_string_raw_interp(raw_span, quasis, exprs)
+        };
+        let mut props = self.ast.vec();
+        if display {
+            let key = PropertyKey::StaticIdentifier(
+                self.ast.alloc_identifier_name(Span::empty(0), "display"),
+            );
+            let value = self.ast.expression_boolean_literal(Span::empty(0), true);
+            let prop = self.ast.alloc_object_property(
+                Span::empty(0),
+                PropertyKind::Init,
+                key,
+                value,
+                false,
+                false,
+                false,
+            );
+            props.push(ObjectPropertyKind::ObjectProperty(prop));
+        }
+        let element = self.build_raw_element(span, MATH, props, self.ast.vec1(raw_child));
+        items.push(BodyItem::Child(element));
+        Some(after)
+    }
+
+    /// Parse one math `@`-interpolation at raw offset `at_off` (the `@`) → `(expr, after)` where
+    /// `after` is the offset just past the interpolation. The interpolation is a *string value*
+    /// (notation.md §Math; `String.raw` coerces it at runtime — the reader just splices the expr).
+    ///
+    /// `@(expr)` delegates to the JS parser (the parens bound it). `@name` is scanned over the **raw
+    /// source** (NOT via the JS lexer) so the closing math `$` delimiter is not swallowed — `$` is a
+    /// valid JS identifier-continue byte, so letting the lexer read `@i$` would eat the close.
+    fn parse_math_interp(&mut self, at_off: u32) -> (Expression<'a>, u32) {
+        let bytes = self.source_text.as_bytes();
+        if bytes.get(at_off as usize + 1) == Some(&b'(') {
+            // `@(expr)` — bounded by parens; the lexer cannot run past the `)` into the `$`.
+            self.nota_seek_to(at_off);
+            self.bump_any(); // `@`
+            self.bump_any(); // `(`
+            let expr = self.parse_expr();
+            self.expect(Kind::RParen);
+            let after = self.prev_token_end;
+            (expr, after)
+        } else {
+            // `@name` — scan a JS-identifier run over the raw source, stopping at `$` (the delimiter).
+            let name_start = at_off as usize + 1;
+            let mut j = name_start;
+            // Identifier start/continue over ASCII (the realistic case); `$` is excluded so the math
+            // delimiter wins. (Unicode identifiers in math interpolation are out of scope.)
+            while j < bytes.len() {
+                let b = bytes[j];
+                let is_part = b.is_ascii_alphanumeric() || b == b'_';
+                if is_part {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j == name_start {
+                // `@` not followed by an identifier: emit `@` literally as raw text by returning an
+                // empty string expression? Simpler: treat `@` as literal — re-scan by returning a
+                // string literal of "@". But to keep the template well-formed, splice `@`.
+                let at_lit =
+                    self.ast.expression_string_literal(Span::new(at_off, at_off + 1), "@", None);
+                return (at_lit, at_off + 1);
+            }
+            let name: &'a str = &self.source_text[name_start..j];
+            let expr = self.ast.expression_identifier(Span::new(name_start as u32, j as u32), name);
+            (expr, j as u32)
         }
     }
 }
@@ -2172,6 +2827,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                                 self.push_literal_byte(items, m);
                                 self.nota_seek_markup(term_off + 1);
                             }
+                        }
+                        Some(b'\\') if term_off < end => {
+                            // General backslash escape (Phase F), inside an emphasis / colon body.
+                            let resume = self.push_escape(items, term_off);
+                            self.nota_seek_markup(resume);
+                        }
+                        Some(b'`') if term_off < end => self.parse_code_or_literal(items, term_off),
+                        Some(b'$') if term_off < end => self.parse_math_or_literal(items, term_off),
+                        Some(b'|') if term_off < end => {
+                            items.push(BodyItem::Text("|"));
+                            self.nota_seek_markup(term_off + 1);
                         }
                         _ => break,
                     }

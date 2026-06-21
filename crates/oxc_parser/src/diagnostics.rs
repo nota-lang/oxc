@@ -1372,3 +1372,10 @@ pub fn nota_control_expects_body(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("expected a `{ … }` body after `@if`/`@for`/`else`")
         .with_label(span.label("`{` expected here"))
 }
+
+/// An unterminated verbatim body `|{ … }|` (no closing `}|` before end of file) (Phase F).
+#[cold]
+pub fn nota_unterminated_verbatim(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("unterminated verbatim body (expected a closing `}|`)")
+        .with_label(span.label("this `|{` is never closed"))
+}

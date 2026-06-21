@@ -554,9 +554,10 @@ fn emphasis_unbalanced_is_literal() {
 
 #[test]
 fn escaped_emphasis_marker_is_literal() {
-    // `\*` suppresses the emphasis marker (the `\`-stripping itself is Phase F, so the `\` stays).
+    // `\*` suppresses the emphasis marker; Phase F drops the `\` so the literal `*` remains.
     let js = nota_expr_raw(r#"@p{\*not bold\*}"#);
     assert!(!js.contains(r#"h("strong""#), "no strong: {js}");
+    assert!(js.contains(r#""*not bold*""#), "literal stars, backslash dropped: {js}");
 }
 
 #[test]
@@ -791,4 +792,306 @@ fn doc_paragraph_break_is_double_newline() {
     let js = nota_doc("@p{one}\n\n@p{two}\n");
     // Between the two `h("p", …)` there must be at least two "\n" string children.
     assert!(js.contains(r#""\n", "\n""#), "expected adjacent newlines for the para break: {js}");
+}
+
+// ===============================================================================================
+// Phase F — verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), general
+// backslash escapes. All raw spans lower to `String.raw` tagged templates (contract §3 last rows;
+// notation.md §Verbatim/§Math/§Code). `CodeInline`/`CodeBlock`/`Math` are ambient prelude bindings.
+// ===============================================================================================
+
+// --- General backslash escape (step 1) --------------------------------------------------------
+
+#[test]
+fn escape_general_chars_literal_backslash_dropped() {
+    // `\<c>` → literal `<c>`, the backslash dropped. `@ { } * _ $ : [ ] | and \\` all escapable.
+    nota_expr(r"@p{\@}", r#"h("p", {}, ["@"])"#);
+    nota_expr(r"@p{\{}", r#"h("p", {}, ["{"])"#);
+    nota_expr(r"@p{\}}", r#"h("p", {}, ["}"])"#);
+    nota_expr(r"@p{\$}", r#"h("p", {}, ["$"])"#);
+    nota_expr(r"@p{\|}", r#"h("p", {}, ["|"])"#);
+    nota_expr(r"@p{a\\b}", r#"h("p", {}, ["a\\b"])"#); // `\\` → one literal backslash
+}
+
+#[test]
+fn escape_star_keeps_literal_no_marker() {
+    // `\*` is the literal `*` (NOT emphasis, and the backslash is dropped — the D/E `\*`-keeps-`\`
+    // bug is fixed). Two escaped markers → two literal stars, no `<strong>`.
+    nota_expr(r"@p{\*hi\*}", r#"h("p", {}, ["*hi*"])"#);
+    nota_expr(r"@p{a \_b\_ c}", r#"h("p", {}, ["a _b_ c"])"#);
+}
+
+#[test]
+fn escape_backtick_and_at_in_prose() {
+    // `\@`/`` \` `` keep their char literal, backslash dropped (so prose can mention `@foo` literally).
+    nota_expr(r"@p{see \@foo}", r#"h("p", {}, ["see @foo"])"#);
+    nota_expr(r"@p{a \` b}", r#"h("p", {}, ["a ` b"])"#);
+}
+
+// --- Verbatim `|{ … }|` (step 2) --------------------------------------------------------------
+
+#[test]
+fn verbatim_raw_body() {
+    // contract §3: `@code|{@foo{x}}|` → `h("code", {}, [String.raw`@foo{x}`])`. Sigils off, braces
+    // literal — `@foo{x}` is raw text, NOT a child.
+    nota_expr(r"@code|{@foo{x}}|", r#"h("code", {}, [String.raw`@foo{x}`])"#);
+}
+
+#[test]
+fn verbatim_keeps_backslash_and_braces() {
+    // Raw: backslashes and braces survive verbatim into the `String.raw`.
+    nota_expr(r"@code|{a\b {c} d}|", r#"h("code", {}, [String.raw`a\b {c} d`])"#);
+}
+
+#[test]
+fn verbatim_armed_reentry() {
+    // notation.md §Verbatim multi-line: `|@` splits a raw run and a Nota child. The newline right
+    // after `|{` and right before `}|` are dropped (the Scribble brace rule); the interior `\n` +
+    // 4-space indent survive raw.
+    let src = "@code|{\ndef f(x):\n    return |@hl{x}\n}|";
+    nota_expr(src, "h(\"code\", {}, [String.raw`def f(x):\n    return `, h(\"hl\", {}, [\"x\"])])");
+}
+
+#[test]
+fn verbatim_component_tag() {
+    // A verbatim body on a component tag.
+    nota_expr(r"@Pre|{x@y}|", r#"h(Pre, {}, [String.raw`x@y`])"#);
+}
+
+#[test]
+fn verbatim_braces_literal_not_close() {
+    // A bare `}` (not `}|`) is literal raw content; only `}|` closes.
+    nota_expr(r"@code|{ {a} {b} }|", r#"h("code", {}, [String.raw` {a} {b} `])"#);
+}
+
+#[test]
+fn verbatim_armed_interpolation() {
+    // `|@name` re-arms an *interpolation* (not just elements) as a sibling child.
+    nota_expr(r"@code|{a|@x b}|", r#"h("code", {}, [String.raw`a`, x, String.raw` b`])"#);
+}
+
+// --- Inline & fenced code (step 3) ------------------------------------------------------------
+
+#[test]
+fn code_inline() {
+    // contract §3: `` `@x` `` → `h(CodeInline, {}, [String.raw`@x`])`. Fully raw (the `@` is literal).
+    nota_expr("@p{`@x`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`@x`])])"#);
+    nota_expr("@p{`a + b`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`a + b`])])"#);
+}
+
+#[test]
+fn code_inline_keeps_backslash() {
+    nota_expr(r"@p{`a\n`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`a\n`])])"#);
+}
+
+#[test]
+fn code_inline_unterminated_is_literal() {
+    // A backtick with no close is literal text.
+    nota_expr("@p{a ` b}", r#"h("p", {}, ["a ` b"])"#);
+}
+
+#[test]
+fn code_fenced_with_lang() {
+    // contract §3: ```` ```python⏎f(x)⏎``` ```` → `h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])`.
+    let src = "@d{```python\nf(x)\n```}";
+    nota_expr(src, r#"h("d", {}, [h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])])"#);
+}
+
+#[test]
+fn code_fenced_no_lang() {
+    let src = "@d{```\nf(x)\n```}";
+    nota_expr(src, r#"h("d", {}, [h(CodeBlock, {}, [String.raw`f(x)`])])"#);
+}
+
+#[test]
+fn code_fenced_multiline_body() {
+    let src = "@d{```\nline 1\nline 2\n```}";
+    nota_expr(src, "h(\"d\", {}, [h(CodeBlock, {}, [String.raw`line 1\nline 2`])])");
+}
+
+// --- Math (step 4) ----------------------------------------------------------------------------
+
+#[test]
+fn math_inline_plain() {
+    nota_expr(r"@p{$x^2$}", r#"h("p", {}, [h(Math, {}, [String.raw`x^2`])])"#);
+}
+
+#[test]
+fn math_inline_interp() {
+    // contract §3: `$a_@i$` → `h(Math, {}, [String.raw`a_${i}`])`. `@i` interpolates a string value.
+    nota_expr(r"@p{$a_@i$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_${i}`])])"#);
+}
+
+#[test]
+fn math_keeps_latex_backslash() {
+    // `\$`/`\@` keep the backslash (LaTeX's own escape); `\sum` survives.
+    nota_expr(r"@p{$\sum x$}", r#"h("p", {}, [h(Math, {}, [String.raw`\sum x`])])"#);
+    nota_expr(r"@p{$a \$ b$}", r#"h("p", {}, [h(Math, {}, [String.raw`a \$ b`])])"#);
+    nota_expr(r"@p{$a \@ b$}", r#"h("p", {}, [h(Math, {}, [String.raw`a \@ b`])])"#);
+}
+
+#[test]
+fn math_display_interp() {
+    // `$$⏎\sum_@n x⏎$$` → `h(Math, { display: true }, [String.raw`\sum_${n} x`])`.
+    let src = "@p{$$\n\\sum_@n x\n$$}";
+    nota_expr(src, "h(\"p\", {}, [h(Math, { display: true }, [String.raw`\n\\sum_${n} x\n`])])");
+}
+
+#[test]
+fn math_display_plain() {
+    nota_expr(r"@p{$$x^2$$}", r#"h("p", {}, [h(Math, { display: true }, [String.raw`x^2`])])"#);
+}
+
+#[test]
+fn math_interp_paren_expr() {
+    nota_expr(r"@p{$a_@(i + 1)$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_${i + 1}`])])"#);
+}
+
+#[test]
+fn dollar_unterminated_is_literal() {
+    nota_expr(r"@p{costs $5 today}", r#"h("p", {}, ["costs $5 today"])"#);
+}
+
+#[test]
+fn escape_full_list() {
+    // The whole backslash-escape list (notation.md §Verbatim): `` \@ \{ \} \| \$ \* \_ \: \[ \] \` ``
+    // and `\\`. Each → its literal char, backslash dropped.
+    nota_expr(r"@p{\:}", r#"h("p", {}, [":"])"#);
+    nota_expr(r"@p{\[}", r#"h("p", {}, ["["])"#);
+    nota_expr(r"@p{\]}", r#"h("p", {}, ["]"])"#);
+    nota_expr(r"@p{\_}", r#"h("p", {}, ["_"])"#);
+}
+
+#[test]
+fn escape_colon_in_body_is_literal() {
+    // A `\:` in body text is a literal colon (backslash dropped). (The head-adjacent `@foo\:` form
+    // from notation.md §Colon — making `@foo` interpolate before a literal `:` — is a deferred
+    // Part-1 gap: the JS lexer eats the `\` right after a bare-identifier head; tracked separately
+    // from Phase F, which owns the *general body* escape. Body-position `\:` works.)
+    nota_expr(r"@p{a\: b}", r#"h("p", {}, ["a: b"])"#);
+}
+
+#[test]
+fn verbatim_validity_with_backtick_in_raw() {
+    // A literal backtick inside a verbatim raw body must not break the emitted template (validity
+    // invariant): codegen escapes it as `` \` `` (the only safe encoding; the `\` leaks at runtime,
+    // an accepted degeneracy). The point of this test is that the emitted JS re-parses under stock oxc.
+    let js = nota_expr_raw("@code|{a `b` c}|");
+    assert!(js.contains("String.raw"), "{js}");
+    // (assert_valid_js already ran inside nota_expr_raw — the emitted JS is valid.)
+}
+
+#[test]
+fn math_dollar_brace_validity() {
+    // A literal `${` in LaTeX would open a template substitution; codegen escapes it (`\${`) to keep
+    // the template valid JS. Validity invariant is the assertion (inside nota_expr_raw).
+    let js = nota_expr_raw(r"@p{$a ${b}$}");
+    assert!(js.contains("h(Math"), "{js}");
+}
+
+// --- Document-mode raw spans (the sugar machinery hooks the document body too) -----------------
+
+#[test]
+fn doc_fenced_code_block() {
+    // notation.md §Code: a fenced block at document level → `h(CodeBlock, { lang }, [String.raw`…`])`.
+    let js = nota_doc("```python\nf(x)\n```\n");
+    assert!(
+        js.contains(r#"h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])"#),
+        "fenced block at doc level: {js}"
+    );
+}
+
+#[test]
+fn doc_inline_code_and_math() {
+    let js = nota_doc("Use `f(x)` and $x^2$ here.\n");
+    assert!(js.contains(r#"h(CodeInline, {}, [String.raw`f(x)`])"#), "{js}");
+    assert!(js.contains(r#"h(Math, {}, [String.raw`x^2`])"#), "{js}");
+}
+
+#[test]
+fn doc_verbatim_block() {
+    let js = nota_doc("@code|{@raw{stuff}}|\n");
+    assert!(js.contains(r#"h("code", {}, [String.raw`@raw{stuff}`])"#), "{js}");
+}
+
+#[test]
+fn doc_escape_line_start_percent_and_hash() {
+    // `\%`/`\#` at line start: the `\` is dropped, the char is literal (no statement / no heading).
+    let js = nota_doc("\\% not a statement\n\\# not a heading\n");
+    assert!(!js.contains("export let") && !js.contains(r#"h("h1""#), "{js}");
+    assert!(js.contains(r#""% not a statement""#), "literal %: {js}");
+    assert!(js.contains(r##""# not a heading""##), "literal #: {js}");
+}
+
+#[test]
+fn code_and_math_nest_in_emphasis() {
+    // Raw spans nest inside emphasis bodies (the byte-peek arms are wired into all three collectors).
+    nota_expr(
+        "@p{*see `x`*}",
+        r#"h("p", {}, [h("strong", {}, ["see ", h(CodeInline, {}, [String.raw`x`])])])"#,
+    );
+}
+
+#[test]
+fn verbatim_in_list_item() {
+    // A verbatim/code span inside a list-item body (block-body collector).
+    let js = nota_doc("- item with `code`\n");
+    assert!(js.contains(r#"h(CodeInline, {}, [String.raw`code`])"#), "{js}");
+    assert!(js.contains(r#"h("ulli""#), "{js}");
+}
+
+#[test]
+fn unterminated_verbatim_is_an_error() {
+    // impl.md §1.6 layer 3: an unterminated `|{` (no `}|`) is a diagnostic.
+    nota_expr_err(r"@code|{ never closed");
+}
+
+#[test]
+fn emphasis_close_skips_raw_spans() {
+    // A `*`/`_` *inside* a raw span (code/math/verbatim) must NOT close the surrounding emphasis —
+    // `find_emphasis_close` steps over raw spans. Adversarial: spaces around the inner `*` make it a
+    // marker-valid candidate, which a naive scan would (wrongly) take as the close.
+    nota_expr(
+        "@p{*a `b * c` d*}",
+        r#"h("p", {}, [h("strong", {}, ["a ", h(CodeInline, {}, [String.raw`b * c`]), " d"])])"#,
+    );
+    // Math `$…$` containing a `_` (LaTeX subscript) inside `_emph_`.
+    nota_expr(
+        "@p{_x $a_b$ y_}",
+        r#"h("p", {}, [h("em", {}, ["x ", h(Math, {}, [String.raw`a_b`]), " y"])])"#,
+    );
+}
+
+#[test]
+fn verbatim_unicode_and_backtick_escape() {
+    // UTF-8 content survives raw; an embedded backtick is escaped for template validity. The
+    // assertion is the validity invariant (inside nota_expr_raw) plus the structural shape.
+    let js = nota_expr_raw("@code|{café `x` λ}|");
+    assert!(js.contains("café") && js.contains("λ"), "unicode preserved: {js}");
+    assert!(js.contains(r"\`x\`"), "backtick escaped: {js}");
+}
+
+#[test]
+fn phase_f_mixed_document_end_to_end() {
+    // A document mixing all of Phase F: a heading, prose with inline code + math + an escape, a
+    // fenced block, and a verbatim element — exercising the document-body collector + the validity
+    // invariant together (the whole emitted module re-parses under stock oxc).
+    let src = "\
+# Demo
+
+The fn `id` returns @em{x}; cost is \\$5 and $a_@i$.
+
+```rust
+fn id(x: i32) -> i32 { x }
+```
+
+@figure|{verbatim @keep{raw}}|
+";
+    let js = nota_doc(src);
+    assert!(js.contains(r#"h("h1", {}, ["Demo"])"#), "heading: {js}");
+    assert!(js.contains(r#"h(CodeInline, {}, [String.raw`id`])"#), "inline code: {js}");
+    assert!(js.contains(r#"h(Math, {}, [String.raw`a_${i}`])"#), "math interp: {js}");
+    assert!(js.contains("cost is $5 and"), "escaped dollar → literal `$` in prose: {js}");
+    assert!(js.contains(r#"h(CodeBlock, { lang: "rust" }"#), "fenced: {js}");
+    assert!(js.contains(r#"h("figure", {}, [String.raw`verbatim @keep{raw}`])"#), "verbatim: {js}");
 }
