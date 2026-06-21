@@ -323,6 +323,7 @@ pub(crate) enum AncestorType {
     TSInstantiationExpressionTypeArguments = 299,
     JSDocNullableTypeTypeAnnotation = 300,
     JSDocNonNullableTypeTypeAnnotation = 301,
+    NotaMarkupExpression = 302,
 }
 
 /// Ancestor type used in AST traversal.
@@ -907,6 +908,8 @@ pub enum Ancestor<'a, 't> {
         AncestorType::JSDocNullableTypeTypeAnnotation as u16,
     JSDocNonNullableTypeTypeAnnotation(JSDocNonNullableTypeWithoutTypeAnnotation<'a, 't>) =
         AncestorType::JSDocNonNullableTypeTypeAnnotation as u16,
+    NotaMarkupExpression(NotaMarkupWithoutExpression<'a, 't>) =
+        AncestorType::NotaMarkupExpression as u16,
 }
 
 impl<'a, 't> Ancestor<'a, 't> {
@@ -1906,6 +1909,11 @@ impl<'a, 't> Ancestor<'a, 't> {
     }
 
     #[inline]
+    pub fn is_nota_markup(self) -> bool {
+        matches!(self, Self::NotaMarkupExpression(_))
+    }
+
+    #[inline]
     pub fn is_parent_of_statement(self) -> bool {
         matches!(
             self,
@@ -2014,6 +2022,7 @@ impl<'a, 't> Ancestor<'a, 't> {
                 | Self::DecoratorExpression(_)
                 | Self::TSExportAssignmentExpression(_)
                 | Self::TSInstantiationExpressionExpression(_)
+                | Self::NotaMarkupExpression(_)
         )
     }
 
@@ -2559,6 +2568,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::TSInstantiationExpressionTypeArguments(a) => a.address(),
             Self::JSDocNullableTypeTypeAnnotation(a) => a.address(),
             Self::JSDocNonNullableTypeTypeAnnotation(a) => a.address(),
+            Self::NotaMarkupExpression(a) => a.address(),
         }
     }
 }
@@ -18564,6 +18574,36 @@ impl<'a, 't> JSDocNonNullableTypeWithoutTypeAnnotation<'a, 't> {
 }
 
 impl<'a, 't> GetAddress for JSDocNonNullableTypeWithoutTypeAnnotation<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_MARKUP_NODE_ID: usize = offset_of!(NotaMarkup, node_id);
+pub(crate) const OFFSET_NOTA_MARKUP_SPAN: usize = offset_of!(NotaMarkup, span);
+pub(crate) const OFFSET_NOTA_MARKUP_EXPRESSION: usize = offset_of!(NotaMarkup, expression);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaMarkupWithoutExpression<'a, 't>(
+    pub(crate) *const NotaMarkup<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaMarkupWithoutExpression<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MARKUP_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MARKUP_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaMarkupWithoutExpression<'a, 't> {
     #[inline]
     fn address(&self) -> Address {
         unsafe { Address::from_ptr(self.0) }

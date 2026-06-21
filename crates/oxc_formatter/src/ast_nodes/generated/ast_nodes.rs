@@ -214,6 +214,7 @@ pub enum AstNodes<'a> {
     JSDocNullableType(&'a AstNode<'a, JSDocNullableType<'a>>),
     JSDocNonNullableType(&'a AstNode<'a, JSDocNonNullableType<'a>>),
     JSDocUnknownType(&'a AstNode<'a, JSDocUnknownType>),
+    NotaMarkup(&'a AstNode<'a, NotaMarkup<'a>>),
 }
 impl AstNodes<'_> {
     #[inline]
@@ -408,6 +409,7 @@ impl AstNodes<'_> {
             Self::JSDocNullableType(n) => n.span(),
             Self::JSDocNonNullableType(n) => n.span(),
             Self::JSDocUnknownType(n) => n.span(),
+            Self::NotaMarkup(n) => n.span(),
         }
     }
     #[inline]
@@ -602,6 +604,7 @@ impl AstNodes<'_> {
             Self::JSDocNullableType(n) => n.parent(),
             Self::JSDocNonNullableType(n) => n.parent(),
             Self::JSDocUnknownType(n) => n.parent(),
+            Self::NotaMarkup(n) => n.parent(),
         }
     }
     #[inline]
@@ -796,6 +799,7 @@ impl AstNodes<'_> {
             Self::JSDocNullableType(_) => "JSDocNullableType",
             Self::JSDocNonNullableType(_) => "JSDocNonNullableType",
             Self::JSDocUnknownType(_) => "JSDocUnknownType",
+            Self::NotaMarkup(_) => "NotaMarkup",
         }
     }
 }
@@ -1192,6 +1196,12 @@ impl<'a> AstNode<'a, Expression<'a>> {
                     following_span_start: self.following_span_start,
                 }))
             }
+            Expression::NotaMarkup(s) => AstNodes::NotaMarkup(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
             it @ match_member_expression!(Expression) => {
                 return self
                     .allocator
@@ -10573,6 +10583,33 @@ impl<'a> AstNode<'a, JSDocUnknownType> {
     #[inline]
     pub fn node_id(&self) -> NodeId {
         self.inner.node_id()
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaMarkup<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn expression(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.expression,
+            allocator: self.allocator,
+            parent: AstNodes::NotaMarkup(transmute_self(self)),
+            following_span_start,
+        })
     }
 
     pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {

@@ -11,6 +11,7 @@ use crate::ast::comment::*;
 use crate::ast::js::*;
 use crate::ast::jsx::*;
 use crate::ast::literal::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl ESTree for Program<'_> {
@@ -62,6 +63,7 @@ impl ESTree for Expression<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -185,6 +187,7 @@ impl ESTree for ArrayExpressionElement<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -278,6 +281,7 @@ impl ESTree for PropertyKey<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -472,6 +476,7 @@ impl ESTree for Argument<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -1014,6 +1019,7 @@ impl ESTree for ForStatementInit<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -1764,6 +1770,7 @@ impl ESTree for ExportDefaultDeclarationKind<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -2062,6 +2069,7 @@ impl ESTree for JSXExpression<'_> {
             Self::TSNonNullExpression(it) => it.serialize(serializer),
             Self::TSInstantiationExpression(it) => it.serialize(serializer),
             Self::V8IntrinsicExpression(it) => it.serialize(serializer),
+            Self::NotaMarkup(it) => it.serialize(serializer),
             Self::ComputedMemberExpression(it) => it.serialize(serializer),
             Self::StaticMemberExpression(it) => it.serialize(serializer),
             Self::PrivateFieldExpression(it) => it.serialize(serializer),
@@ -3237,6 +3245,16 @@ impl ESTree for Comment {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &self.kind);
         state.serialize_field("value", &crate::serialize::CommentValue(self));
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaMarkup<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaMarkup"));
+        state.serialize_field("expression", &self.expression);
         state.serialize_span(self.span);
         state.end();
     }

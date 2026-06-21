@@ -1213,6 +1213,18 @@ impl<'a> AstBuilder<'a> {
         Expression::V8IntrinsicExpression(self.alloc_v8_intrinsic_expression(span, name, arguments))
     }
 
+    /// Build an [`Expression::NotaMarkup`].
+    ///
+    /// This node contains a [`NotaMarkup`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: Node location in source code.
+    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    #[inline]
+    pub fn expression_nota_markup(self, span: Span, expression: Expression<'a>) -> Expression<'a> {
+        Expression::NotaMarkup(self.alloc_nota_markup(span, expression))
+    }
+
     /// Build an [`IdentifierName`].
     ///
     /// If you want the built node to be allocated in the memory arena,
@@ -15531,6 +15543,36 @@ impl<'a> AstBuilder<'a> {
     #[inline]
     pub fn alloc_js_doc_unknown_type(self, span: Span) -> Box<'a, JSDocUnknownType> {
         Box::new_in(self.js_doc_unknown_type(span), self.allocator)
+    }
+
+    /// Build a [`NotaMarkup`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_markup`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: Node location in source code.
+    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    #[inline]
+    pub fn nota_markup(self, span: Span, expression: Expression<'a>) -> NotaMarkup<'a> {
+        NotaMarkup { node_id: Default::default(), span, expression }
+    }
+
+    /// Build a [`NotaMarkup`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_markup`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: Node location in source code.
+    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    #[inline]
+    pub fn alloc_nota_markup(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> Box<'a, NotaMarkup<'a>> {
+        Box::new_in(self.nota_markup(span, expression), self.allocator)
     }
 }
 

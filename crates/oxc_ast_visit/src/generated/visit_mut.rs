@@ -1192,6 +1192,11 @@ pub trait VisitMut<'a>: Sized {
     }
 
     #[inline]
+    fn visit_nota_markup(&mut self, it: &mut NotaMarkup<'a>) {
+        walk_nota_markup(self, it);
+    }
+
+    #[inline]
     fn visit_span(&mut self, it: &mut Span) {
         walk_span(self, it);
     }
@@ -1420,6 +1425,7 @@ pub mod walk_mut {
                 visitor.visit_ts_instantiation_expression(it)
             }
             Expression::V8IntrinsicExpression(it) => visitor.visit_v8_intrinsic_expression(it),
+            Expression::NotaMarkup(it) => visitor.visit_nota_markup(it),
             match_member_expression!(Expression) => {
                 visitor.visit_member_expression(it.to_member_expression_mut())
             }
@@ -4459,6 +4465,15 @@ pub mod walk_mut {
         let kind = AstType::JSDocUnknownType;
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_markup<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaMarkup<'a>) {
+        let kind = AstType::NotaMarkup;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_expression(&mut it.expression);
         visitor.leave_node(kind);
     }
 

@@ -164,6 +164,10 @@ pub enum Expression<'a> {
     /// See [`V8IntrinsicExpression`] for AST node details.
     V8IntrinsicExpression(Box<'a, V8IntrinsicExpression<'a>>) = 39,
 
+    /// Nota markup form (lowered to hyperscript by the Nota lowering pass).
+    /// See [`NotaMarkup`] for AST node details.
+    NotaMarkup(Box<'a, NotaMarkup<'a>>) = 40,
+
     // `MemberExpression` variants added here by `inherit_variants!` macro
     @inherit MemberExpression
 }
@@ -208,6 +212,7 @@ macro_rules! match_expression {
             | $ty::PrivateInExpression(_)
             | $ty::JSXElement(_)
             | $ty::JSXFragment(_)
+            | $ty::NotaMarkup(_)
             | $ty::TSAsExpression(_)
             | $ty::TSSatisfiesExpression(_)
             | $ty::TSTypeAssertion(_)

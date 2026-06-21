@@ -2482,6 +2482,11 @@ pub trait Traverse<'a> {
     }
 
     #[inline]
+    fn enter_nota_markup(&mut self, node: &mut NotaMarkup<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_markup(&mut self, node: &mut NotaMarkup<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
     fn enter_statements(&mut self, node: &mut Vec<'a, Statement<'a>>, ctx: &mut TraverseCtx<'a>) {}
     #[inline]
     fn exit_statements(&mut self, node: &mut Vec<'a, Statement<'a>>, ctx: &mut TraverseCtx<'a>) {}

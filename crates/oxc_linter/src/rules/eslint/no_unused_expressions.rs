@@ -162,7 +162,9 @@ impl NoUnusedExpressions {
             Expression::UnaryExpression(unary_expression) => {
                 !matches!(unary_expression.operator, UnaryOperator::Delete | UnaryOperator::Void)
             }
-            Expression::JSXElement(_) | Expression::JSXFragment(_) => self.0.enforce_for_jsx,
+            Expression::JSXElement(_) | Expression::JSXFragment(_) | Expression::NotaMarkup(_) => {
+                self.0.enforce_for_jsx
+            }
             Expression::TSAsExpression(ts_as_expression) => {
                 self.is_disallowed(&ts_as_expression.expression)
             }

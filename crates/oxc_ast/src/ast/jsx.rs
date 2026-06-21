@@ -13,7 +13,7 @@ use oxc_span::{ContentEq, GetSpan, GetSpanMut, Span};
 use oxc_str::Str;
 use oxc_syntax::node::NodeId;
 
-use super::{inherit_variants, js::*, literal::*, ts::*};
+use super::{inherit_variants, js::*, literal::*, nota::NotaMarkup, ts::*};
 
 // 1.2 JSX Elements
 

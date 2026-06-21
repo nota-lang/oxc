@@ -439,6 +439,16 @@ impl<'a> Format<'a> for AstNode<'a, Expression<'a>> {
                     })
                     .fmt(f);
             }
+            Expression::NotaMarkup(inner) => {
+                allocator
+                    .alloc(AstNode::<NotaMarkup> {
+                        inner,
+                        parent,
+                        allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .fmt(f);
+            }
             it @ match_member_expression!(Expression) => {
                 let inner = it.to_member_expression();
                 allocator
@@ -5702,6 +5712,29 @@ impl<'a> Format<'a> for AstNode<'a, JSDocUnknownType> {
             FormatSuppressedNode(self.span()).fmt(f);
         } else {
             self.write(f);
+        }
+        self.format_trailing_comments(f);
+    }
+}
+
+impl<'a> Format<'a> for AstNode<'a, NotaMarkup<'a>> {
+    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+        let is_suppressed = f.comments().is_suppressed(self.span().start);
+        if !is_suppressed && format_type_cast_comment_node(self, false, f) {
+            return;
+        }
+        self.format_leading_comments(f);
+        let needs_parentheses = self.needs_parentheses(f);
+        if needs_parentheses {
+            "(".fmt(f);
+        }
+        if is_suppressed {
+            FormatSuppressedNode(self.span()).fmt(f);
+        } else {
+            self.write(f);
+        }
+        if needs_parentheses {
+            ")".fmt(f);
         }
         self.format_trailing_comments(f);
     }

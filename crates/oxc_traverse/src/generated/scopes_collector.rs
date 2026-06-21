@@ -74,6 +74,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             Expression::TSNonNullExpression(it) => self.visit_ts_non_null_expression(it),
             Expression::TSInstantiationExpression(it) => self.visit_ts_instantiation_expression(it),
             Expression::V8IntrinsicExpression(it) => self.visit_v8_intrinsic_expression(it),
+            Expression::NotaMarkup(it) => self.visit_nota_markup(it),
             Expression::ComputedMemberExpression(it) => self.visit_computed_member_expression(it),
             Expression::StaticMemberExpression(it) => self.visit_static_member_expression(it),
             Expression::PrivateFieldExpression(it) => self.visit_private_field_expression(it),
@@ -177,6 +178,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             ArrayExpressionElement::V8IntrinsicExpression(it) => {
                 self.visit_v8_intrinsic_expression(it)
             }
+            ArrayExpressionElement::NotaMarkup(it) => self.visit_nota_markup(it),
             ArrayExpressionElement::ComputedMemberExpression(it) => {
                 self.visit_computed_member_expression(it)
             }
@@ -256,6 +258,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
                 self.visit_ts_instantiation_expression(it)
             }
             PropertyKey::V8IntrinsicExpression(it) => self.visit_v8_intrinsic_expression(it),
+            PropertyKey::NotaMarkup(it) => self.visit_nota_markup(it),
             PropertyKey::ComputedMemberExpression(it) => self.visit_computed_member_expression(it),
             PropertyKey::StaticMemberExpression(it) => self.visit_static_member_expression(it),
             PropertyKey::PrivateFieldExpression(it) => self.visit_private_field_expression(it),
@@ -376,6 +379,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             Argument::TSNonNullExpression(it) => self.visit_ts_non_null_expression(it),
             Argument::TSInstantiationExpression(it) => self.visit_ts_instantiation_expression(it),
             Argument::V8IntrinsicExpression(it) => self.visit_v8_intrinsic_expression(it),
+            Argument::NotaMarkup(it) => self.visit_nota_markup(it),
             Argument::ComputedMemberExpression(it) => self.visit_computed_member_expression(it),
             Argument::StaticMemberExpression(it) => self.visit_static_member_expression(it),
             Argument::PrivateFieldExpression(it) => self.visit_private_field_expression(it),
@@ -764,6 +768,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
                 self.visit_ts_instantiation_expression(it)
             }
             ForStatementInit::V8IntrinsicExpression(it) => self.visit_v8_intrinsic_expression(it),
+            ForStatementInit::NotaMarkup(it) => self.visit_nota_markup(it),
             ForStatementInit::ComputedMemberExpression(it) => {
                 self.visit_computed_member_expression(it)
             }
@@ -1207,6 +1212,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             ExportDefaultDeclarationKind::V8IntrinsicExpression(it) => {
                 self.visit_v8_intrinsic_expression(it)
             }
+            ExportDefaultDeclarationKind::NotaMarkup(it) => self.visit_nota_markup(it),
             ExportDefaultDeclarationKind::ComputedMemberExpression(it) => {
                 self.visit_computed_member_expression(it)
             }
@@ -1370,6 +1376,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
                 self.visit_ts_instantiation_expression(it)
             }
             JSXExpression::V8IntrinsicExpression(it) => self.visit_v8_intrinsic_expression(it),
+            JSXExpression::NotaMarkup(it) => self.visit_nota_markup(it),
             JSXExpression::ComputedMemberExpression(it) => {
                 self.visit_computed_member_expression(it)
             }
@@ -2018,6 +2025,11 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline(always)]
     fn visit_js_doc_unknown_type(&mut self, it: &JSDocUnknownType) {
         // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_markup(&mut self, it: &NotaMarkup<'a>) {
+        self.visit_expression(&it.expression);
     }
 
     #[inline(always)]

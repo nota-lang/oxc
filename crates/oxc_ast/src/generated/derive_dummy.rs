@@ -10,6 +10,7 @@ use oxc_allocator::{Allocator, Dummy};
 use crate::ast::js::*;
 use crate::ast::jsx::*;
 use crate::ast::literal::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl<'a> Dummy<'a> for Program<'a> {
@@ -3226,5 +3227,18 @@ impl<'a> Dummy<'a> for JSDocUnknownType {
     /// Does not allocate any data into arena.
     fn dummy(allocator: &'a Allocator) -> Self {
         Self { node_id: Dummy::dummy(allocator), span: Dummy::dummy(allocator) }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaMarkup<'a> {
+    /// Create a dummy [`NotaMarkup`].
+    ///
+    /// Has cost of making 1 allocation (16 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            expression: Dummy::dummy(allocator),
+        }
     }
 }

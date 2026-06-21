@@ -1127,4 +1127,10 @@ impl<'a> VisitMut<'a> for Utf8ToUtf16Converter<'_> {
         walk_mut::walk_js_doc_unknown_type(self, it);
         self.convert_offset(&mut it.span.end);
     }
+
+    fn visit_nota_markup(&mut self, it: &mut NotaMarkup<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_markup(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
 }

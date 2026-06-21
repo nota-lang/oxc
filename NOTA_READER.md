@@ -4,6 +4,30 @@ Internal design notes for the Nota reader built into this oxc fork (branch `nota
 cross-team spec is `/Users/will/Code/nota/design/contract.md`; this file is the **Part-1
 implementation memory** — read it before extending the reader. Updated per phase.
 
+## ⟳ Refactor in progress: parse → Nota AST → separate lowering (started 2026-06)
+
+The reader is being restructured from **parse-and-lower-in-one-pass** (the parser eagerly builds
+`h()`/`Fragment()`/`decode()` calls — see `BodyItem::Child(Expression)` = "already fully lowered") to
+**parse into a faithful Nota AST, then lower in a separate pass** — the shape oxc uses for JSX
+(`Expression::JSXElement` lowered by `oxc_transformer`). Locked decisions: (1) a **single umbrella
+`Expression::NotaMarkup`** variant (discriminant 40), rich tree in our own `#[ast]` types; (2)
+**faithful** sugar/raw-text nodes, Scribble runs in *lowering*; (3) **full-document deferral** — the
+parser emits a faithful `NotaDocument`; lowering builds the `Doc` skeleton, `%`-routing, F1 hoist+export,
+decode-wraps, await→async. Phases: **P0 AST integration spike ✓** · P1 full AST · P2 parser→tree lowered
+inline (120 fixtures as oracle) · P3 defer to a pass · P4 relocate to `oxc_transformer/src/nota/` · P5
+migrate H1/H2.
+
+**P0 done ✓** — added an unused `Expression::NotaMarkup` stub (`crates/oxc_ast/src/ast/nota.rs`) and got
+the whole workspace green (check: 0 errors; ~2470 tests incl. 122 codegen nota fixtures, 82 parser-lib, 11
+`oxc::nota` H1/H2 — all pass). The de-risk: the `ast_tools` generator + napi raw-transfer + estree all
+accept a new variant cleanly. The hand-edit set (~11 files) and the `just ast`/`oxfmt` gotcha are pinned
+in the personal memory `nota-oxc-add-expression-variant`. The **non-obvious** site: `inherit_variants!` in
+`ast/macros.rs` carries Expression's variant list in two places (typed splice + `shared_enum_variants!`
+names) — both need the new variant, else the inheriting enums (`Argument`, `PropertyKey`, `JSXExpression`,
+…) don't get it.
+
+---
+
 ## Status: Phases A, B, C, D, E, F complete ✓ — **the reader is feature-complete.** H1 (Volar CodeMappings) + H2 (type-preserving virtual emit) complete ✓ — **the compiler-feedback hooks Part 5 (Volar) needs are landed.**
 
 - **A** (spike): `@p{Hello}` → `h("p", {}, ["Hello"])`, round-tripped through `oxc_codegen`.

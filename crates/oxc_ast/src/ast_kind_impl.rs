@@ -284,6 +284,7 @@ impl<'a> AstKind<'a> {
             Expression::TSNonNullExpression(e) => Self::TSNonNullExpression(e),
             Expression::TSInstantiationExpression(e) => Self::TSInstantiationExpression(e),
             Expression::V8IntrinsicExpression(e) => Self::V8IntrinsicExpression(e),
+            Expression::NotaMarkup(e) => Self::NotaMarkup(e),
         }
     }
 
@@ -508,6 +509,7 @@ impl AstKind<'_> {
             Self::JSXClosingElement(_) => "JSXClosingElement".into(),
             Self::JSXElement(_) => "JSXElement".into(),
             Self::JSXFragment(_) => "JSXFragment".into(),
+            Self::NotaMarkup(_) => "NotaMarkup".into(),
             Self::JSXOpeningFragment(_) => "JSXOpeningFragment".into(),
             Self::JSXClosingFragment(_) => "JSXClosingFragment".into(),
             Self::JSXEmptyExpression(_) => "JSXEmptyExpression".into(),

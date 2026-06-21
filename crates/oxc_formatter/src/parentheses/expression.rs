@@ -838,6 +838,15 @@ impl NeedsParentheses<'_> for AstNode<'_, V8IntrinsicExpression<'_>> {
     }
 }
 
+// Nota markup is lowered to hyperscript before the JS formatter runs; this stub keeps the
+// generated per-node parentheses dispatch total.
+impl NeedsParentheses<'_> for AstNode<'_, NotaMarkup<'_>> {
+    #[inline]
+    fn needs_parentheses(&self, _f: &Formatter<'_, '_>) -> bool {
+        false
+    }
+}
+
 impl NeedsParentheses<'_> for AstNode<'_, JSXMemberExpression<'_>> {
     #[inline]
     fn needs_parentheses(&self, _f: &Formatter<'_, '_>) -> bool {

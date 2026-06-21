@@ -11,6 +11,7 @@ use crate::ast::comment::*;
 use crate::ast::js::*;
 use crate::ast::jsx::*;
 use crate::ast::literal::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl<'new_alloc> CloneIn<'new_alloc> for Program<'_> {
@@ -150,6 +151,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for Expression<'_> {
             Self::V8IntrinsicExpression(it) => {
                 Expression::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => Expression::NotaMarkup(CloneIn::clone_in(it, allocator)),
             Self::ComputedMemberExpression(it) => {
                 Expression::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -284,6 +286,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for Expression<'_> {
             Self::V8IntrinsicExpression(it) => Expression::V8IntrinsicExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
+            Self::NotaMarkup(it) => {
+                Expression::NotaMarkup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => Expression::ComputedMemberExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
@@ -546,6 +551,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for ArrayExpressionElement<'_> {
             Self::V8IntrinsicExpression(it) => {
                 ArrayExpressionElement::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => {
+                ArrayExpressionElement::NotaMarkup(CloneIn::clone_in(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => {
                 ArrayExpressionElement::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -686,6 +694,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for ArrayExpressionElement<'_> {
                 )
             }
             Self::V8IntrinsicExpression(it) => ArrayExpressionElement::V8IntrinsicExpression(
+                CloneIn::clone_in_with_semantic_ids(it, allocator),
+            ),
+            Self::NotaMarkup(it) => ArrayExpressionElement::NotaMarkup(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
             Self::ComputedMemberExpression(it) => ArrayExpressionElement::ComputedMemberExpression(
@@ -903,6 +914,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for PropertyKey<'_> {
             Self::V8IntrinsicExpression(it) => {
                 PropertyKey::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => PropertyKey::NotaMarkup(CloneIn::clone_in(it, allocator)),
             Self::ComputedMemberExpression(it) => {
                 PropertyKey::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -1043,6 +1055,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for PropertyKey<'_> {
             Self::V8IntrinsicExpression(it) => PropertyKey::V8IntrinsicExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
+            Self::NotaMarkup(it) => {
+                PropertyKey::NotaMarkup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => PropertyKey::ComputedMemberExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
@@ -1454,6 +1469,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for Argument<'_> {
             Self::V8IntrinsicExpression(it) => {
                 Argument::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => Argument::NotaMarkup(CloneIn::clone_in(it, allocator)),
             Self::ComputedMemberExpression(it) => {
                 Argument::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -1588,6 +1604,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for Argument<'_> {
             ),
             Self::V8IntrinsicExpression(it) => {
                 Argument::V8IntrinsicExpression(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::NotaMarkup(it) => {
+                Argument::NotaMarkup(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
             Self::ComputedMemberExpression(it) => Argument::ComputedMemberExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
@@ -2983,6 +3002,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for ForStatementInit<'_> {
             Self::V8IntrinsicExpression(it) => {
                 ForStatementInit::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => ForStatementInit::NotaMarkup(CloneIn::clone_in(it, allocator)),
             Self::ComputedMemberExpression(it) => {
                 ForStatementInit::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -3120,6 +3140,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for ForStatementInit<'_> {
             Self::V8IntrinsicExpression(it) => ForStatementInit::V8IntrinsicExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
+            Self::NotaMarkup(it) => {
+                ForStatementInit::NotaMarkup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => ForStatementInit::ComputedMemberExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
@@ -4792,6 +4815,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for ExportDefaultDeclarationKind<'_> {
             Self::V8IntrinsicExpression(it) => ExportDefaultDeclarationKind::V8IntrinsicExpression(
                 CloneIn::clone_in(it, allocator),
             ),
+            Self::NotaMarkup(it) => {
+                ExportDefaultDeclarationKind::NotaMarkup(CloneIn::clone_in(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => {
                 ExportDefaultDeclarationKind::ComputedMemberExpression(CloneIn::clone_in(
                     it, allocator,
@@ -4949,6 +4975,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for ExportDefaultDeclarationKind<'_> {
                 )
             }
             Self::V8IntrinsicExpression(it) => ExportDefaultDeclarationKind::V8IntrinsicExpression(
+                CloneIn::clone_in_with_semantic_ids(it, allocator),
+            ),
+            Self::NotaMarkup(it) => ExportDefaultDeclarationKind::NotaMarkup(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
             Self::ComputedMemberExpression(it) => {
@@ -5577,6 +5606,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for JSXExpression<'_> {
             Self::V8IntrinsicExpression(it) => {
                 JSXExpression::V8IntrinsicExpression(CloneIn::clone_in(it, allocator))
             }
+            Self::NotaMarkup(it) => JSXExpression::NotaMarkup(CloneIn::clone_in(it, allocator)),
             Self::ComputedMemberExpression(it) => {
                 JSXExpression::ComputedMemberExpression(CloneIn::clone_in(it, allocator))
             }
@@ -5714,6 +5744,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for JSXExpression<'_> {
             Self::V8IntrinsicExpression(it) => JSXExpression::V8IntrinsicExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
+            Self::NotaMarkup(it) => {
+                JSXExpression::NotaMarkup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
             Self::ComputedMemberExpression(it) => JSXExpression::ComputedMemberExpression(
                 CloneIn::clone_in_with_semantic_ids(it, allocator),
             ),
@@ -8476,6 +8509,26 @@ impl<'new_alloc> CloneIn<'new_alloc> for Comment {
             position: CloneIn::clone_in_with_semantic_ids(&self.position, allocator),
             newlines: CloneIn::clone_in_with_semantic_ids(&self.newlines, allocator),
             content: CloneIn::clone_in_with_semantic_ids(&self.content, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkup<'_> {
+    type Cloned = NotaMarkup<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaMarkup {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            expression: CloneIn::clone_in(&self.expression, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaMarkup {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            expression: CloneIn::clone_in_with_semantic_ids(&self.expression, allocator),
         }
     }
 }

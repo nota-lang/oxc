@@ -6,6 +6,7 @@ use oxc_allocator::UnstableAddress;
 use crate::ast::js::*;
 use crate::ast::jsx::*;
 use crate::ast::literal::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl UnstableAddress for Program<'_> {}
@@ -383,3 +384,5 @@ impl UnstableAddress for JSDocNullableType<'_> {}
 impl UnstableAddress for JSDocNonNullableType<'_> {}
 
 impl UnstableAddress for JSDocUnknownType {}
+
+impl UnstableAddress for NotaMarkup<'_> {}

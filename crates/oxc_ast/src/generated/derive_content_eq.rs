@@ -9,6 +9,7 @@ use crate::ast::comment::*;
 use crate::ast::js::*;
 use crate::ast::jsx::*;
 use crate::ast::literal::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl ContentEq for Program<'_> {
@@ -67,6 +68,7 @@ impl ContentEq for Expression<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -162,6 +164,7 @@ impl ContentEq for ArrayExpressionElement<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -254,6 +257,7 @@ impl ContentEq for PropertyKey<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -417,6 +421,7 @@ impl ContentEq for Argument<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -861,6 +866,7 @@ impl ContentEq for ForStatementInit<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -1436,6 +1442,7 @@ impl ContentEq for ExportDefaultDeclarationKind<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -1648,6 +1655,7 @@ impl ContentEq for JSXExpression<'_> {
                 a.content_eq(b)
             }
             (Self::V8IntrinsicExpression(a), Self::V8IntrinsicExpression(b)) => a.content_eq(b),
+            (Self::NotaMarkup(a), Self::NotaMarkup(b)) => a.content_eq(b),
             (Self::ComputedMemberExpression(a), Self::ComputedMemberExpression(b)) => {
                 a.content_eq(b)
             }
@@ -2528,5 +2536,11 @@ impl ContentEq for Comment {
             && ContentEq::content_eq(&self.position, &other.position)
             && ContentEq::content_eq(&self.newlines, &other.newlines)
             && ContentEq::content_eq(&self.content, &other.content)
+    }
+}
+
+impl ContentEq for NotaMarkup<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.expression, &other.expression)
     }
 }

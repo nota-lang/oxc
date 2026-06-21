@@ -199,7 +199,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// (top-level, prop values, `@(expr)` heads), where normal JS lexing resumes.
     pub(crate) fn parse_nota_form(&mut self, in_body: bool) -> Expression<'a> {
         let span_start = self.start_span();
-        assert!(self.eat(Kind::At), "parse_nota_form entered not at `@`"); // consume `@`; current token is now the head (Ident / `(` / `{`)
+        self.expect(Kind::At);
 
         match self.cur_kind() {
             Kind::If => self.parse_nota_if(span_start, in_body),
@@ -352,8 +352,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => self.bump_any(),
             // Boundary token stays current; the verbatim body is scanned by absolute offset.
             MarkupTrigger::Verbatim => {}
-            MarkupTrigger::None if in_body => self.advance_for_markup_text(),
-            MarkupTrigger::None => self.bump_any(),
+            MarkupTrigger::None => {
+                if in_body {
+                    self.advance_for_markup_text()
+                } else {
+                    self.bump_any()
+                }
+            }
         }
         trigger
     }

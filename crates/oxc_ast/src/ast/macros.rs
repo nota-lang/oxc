@@ -174,6 +174,9 @@ macro_rules! inherit_variants {
                 /// Inherited from [`Expression`]
                 V8IntrinsicExpression(Box<'a, V8IntrinsicExpression<'a>>) = 39,
 
+                /// Inherited from [`Expression`]
+                NotaMarkup(Box<'a, NotaMarkup<'a>>) = 40,
+
                 // Inherited from `MemberExpression`
                 @inherit MemberExpression
 
@@ -231,6 +234,7 @@ macro_rules! inherit_variants {
                 TSNonNullExpression,
                 TSInstantiationExpression,
                 V8IntrinsicExpression,
+                NotaMarkup,
                 ComputedMemberExpression,
                 StaticMemberExpression,
                 PrivateFieldExpression,
