@@ -1,0 +1,1839 @@
+//! Nota `@`-markup → oxc JS AST (the *reader*).
+//!
+//! Nota is a document language whose `@`-markup lowers to hyperscript `h(...)` / `Fragment(...)` /
+//! `decode(...)` call expressions (the cross-team contract, `design/contract.md` §1/§3). Per
+//! locked decision **D1**, lowering happens *at parse time*: this module builds the oxc
+//! [`Expression`] AST (`CallExpression`) directly while parsing, with no intermediate Nota
+//! AST/CST. Per **D2** it introduces *zero* new oxc AST nodes — an `@`-form is an ordinary
+//! `CallExpression`. Per **D3** all markup state lives in the parser (the `nota_markup` flag).
+//!
+//! Layering (this file):
+//! * **Phase B — element core**: host/component/dynamic tags, `[props]` (string→attr, expr→`{…}`,
+//!   shorthand, spread, markup-valued), bodies (recursive nesting), `@{…}` fragments,
+//!   `@name`/`@(expr)` interpolation. Embedded JS (prop values, `@(expr)` heads) delegates to
+//!   oxc's expression parser via the re-lex seam.
+//! * **Phase C — document mode + whitespace**: a whole file → `export default function Doc()`; the
+//!   Scribble whitespace algorithm (notation.md §Whitespace, contract §7); colon/block sugar;
+//!   `%`/`%%%` statements + module hoisting + F1 (`inlineComponent`/`blockComponent` hoist+export+
+//!   name) + `await`→`async`. Wraps returned markup in `decode(...)` (contract §2 stage-3).
+//!
+//! The re-lex seam (`advance_for_markup_text` / `expect_markup_text`) mirrors JSX's
+//! `advance_for_jsx_child`: after a markup delimiter we resume lexing in *markup-text* mode so
+//! significant whitespace is not skipped by the JS lexer.
+
+use oxc_allocator::Vec as ArenaVec;
+use oxc_ast::{NONE, ast::*};
+use oxc_diagnostics::OxcDiagnostic;
+use oxc_span::{SourceType, Span};
+
+use crate::{
+    ParserConfig as Config, ParserImpl, diagnostics, error_handler::FatalError, lexer::Kind,
+};
+
+/// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
+const H: &str = "h";
+const FRAGMENT: &str = "Fragment";
+const DECODE: &str = "decode";
+/// The fresh component-cased binding for a dynamic-tag IIFE (`@(getTag()){…}`).
+const DYNAMIC_TAG_BINDING: &str = "_Tag";
+/// The default-export document component name.
+const DOC: &str = "Doc";
+/// The F1 component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
+const INLINE_COMPONENT: &str = "inlineComponent";
+const BLOCK_COMPONENT: &str = "blockComponent";
+
+/// One piece of an element body, collected during the body-segment loop, *before* the Scribble
+/// whitespace pass turns it into the final child expressions.
+enum BodyItem<'a> {
+    /// A literal text run (raw source slice; whitespace not yet processed).
+    Text(&'a str),
+    /// A nested `@`-form (element / fragment / interpolation), already fully lowered.
+    Child(Expression<'a>),
+}
+
+/// How a markup-collection loop ([`ParserImpl::collect_markup`]) terminated.
+enum MarkupClose {
+    /// Closed by the body's `}` (depth 0); `end` is one byte past it.
+    Curly { end: u32 },
+    /// Reached end of file (the document body, or an unterminated element body).
+    Eof,
+    /// (Document mode) Stopped at the start of a line-start `%`/`%%%` statement at `offset`. The
+    /// driver parses the statement, routes it, then re-enters markup collection.
+    AtStatement { offset: u32 },
+}
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    // ===========================================================================================
+    // Entry points
+    // ===========================================================================================
+
+    /// Parse a whole source string as a single Nota *expression* (expression-mode test hook).
+    ///
+    /// Mirrors [`ParserImpl::parse_expression`]: enables Nota markup mode (so `@` routes to
+    /// markup, not decorators), primes the token stream, parses one `@`-form, and returns the
+    /// lowered [`Expression`] or the collected diagnostics. This is the bulk-fixture entry
+    /// (contract §3 expression-mode cases); document mode is [`Self::parse_nota_document`].
+    ///
+    /// # Errors
+    /// If the source is not a well-formed Nota expression.
+    pub(crate) fn parse_nota_expression(mut self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
+        self.nota_markup = true;
+        self.bump_any(); // prime `token` onto the first token
+        let expr = self.parse_nota_form(false);
+        self.finish_nota(expr)
+    }
+
+    /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`] (contract §2 stage-3).
+    ///
+    /// The file is markup at the top level (impl.md §1.1). We set `nota_markup`, parse the file as
+    /// a sequence of markup siblings (the body of an implicit fragment), and emit a module:
+    /// ```js
+    /// import { ... } from "@nota-lang/runtime";   // (imports added by the compiler shim, not here)
+    /// <hoisted import/export + F1 component bindings>
+    /// export default function Doc() { <top-level % prelude>; return decode(Fragment(...siblings)); }
+    /// ```
+    /// Top-level `%`/`%%%` statements prepend into `Doc` (no IIFE — contract R5); `import`/`export`
+    /// and F1 component bindings hoist to module scope (contract R4/§4). `await` makes `Doc` async.
+    ///
+    /// # Errors
+    /// If the file is not well-formed Nota.
+    pub(crate) fn parse_nota_document(mut self) -> Result<Program<'a>, Vec<OxcDiagnostic>> {
+        self.nota_markup = true;
+        // Do NOT prime with a JS `bump_any` here: the file starts as markup (or a `%` line), and a
+        // leading `\`/`%`/etc. would make the JS lexer choke. `parse_document_body` seeks the lexer
+        // into the right mode (markup, or a statement) from offset 0 itself.
+        // The whole file is the body of an implicit fragment; parse to EOF.
+        let mut module_items = self.ast.vec(); // hoisted to module scope
+        let mut doc_prelude = self.ast.vec(); // prepended into Doc's body
+        let mut is_async = false;
+        let items = self.parse_document_body(&mut module_items, &mut doc_prelude, &mut is_async);
+
+        let program = self.build_document(items, module_items, doc_prelude, is_async);
+        match self.finish_nota(()) {
+            Ok(()) => Ok(program),
+            Err(errors) => Err(errors),
+        }
+    }
+
+    /// Shared finalize for the Nota entries: collect fatal/lexer/parser diagnostics.
+    fn finish_nota<T>(mut self, value: T) -> Result<T, Vec<OxcDiagnostic>> {
+        if let Some(FatalError { error, .. }) = self.fatal_error.take() {
+            return Err(vec![error]);
+        }
+        self.check_unfinished_errors();
+        let errors = self.lexer.errors.into_iter().chain(self.errors).collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        Ok(value)
+    }
+
+    // ===========================================================================================
+    // Element / interpolation core (Phase B)
+    // ===========================================================================================
+
+    /// Parse one `@`-form: an element (`@tag…`/`@(expr)…`/`@{…}`) or an interpolation
+    /// (`@name`/`@(expr)`). Entered with the current token at [`Kind::At`].
+    ///
+    /// `in_body`: `true` when this form is a *child of a markup body*, so its trailing context is
+    /// re-lexed as markup text (the JSX `in_jsx_child` analog). `false` in JS expression position
+    /// (top-level, prop values, `@(expr)` heads), where normal JS lexing resumes.
+    pub(crate) fn parse_nota_form(&mut self, in_body: bool) -> Expression<'a> {
+        let span_start = self.start_span();
+        debug_assert!(self.at(Kind::At), "parse_nota_form entered not at `@`");
+        self.bump_any(); // consume `@`; current token is now the head (Ident / `(` / `{`)
+
+        // `@{…}` — a fragment (no head).
+        if self.at(Kind::LCurly) {
+            return self.parse_fragment(span_start, in_body);
+        }
+
+        // Determine the head and the byte immediately after it (the element/interpolation switch).
+        let head = self.parse_nota_head();
+        let head = match head {
+            Some(head) => head,
+            None => return self.unexpected(),
+        };
+
+        match self.byte_at(head.end) {
+            Some(b'{') | Some(b'[') => self.parse_element(span_start, head, in_body),
+            Some(b':') if !head.colon_escaped => {
+                self.parse_colon_element(span_start, head, in_body)
+            }
+            // No element trigger ⇒ interpolation: the head expression alone.
+            _ => self.finish_interpolation(head, in_body),
+        }
+    }
+
+    /// The parsed head of an `@`-form: the tag/interpolation expression plus classification needed
+    /// to decide element-vs-interpolation and host-vs-component-vs-dynamic.
+    fn parse_nota_head(&mut self) -> Option<NotaHead<'a>> {
+        if self.at(Kind::LParen) {
+            // `@(expr)` — dynamic head. Delegate the inside to oxc's expression parser.
+            self.bump_any(); // consume `(`
+            let expr = self.parse_expr();
+            // `self.token` is now `)` (parse_expr stops there). Like the bare-ident head, we do NOT
+            // consume it here: `commit_head` (element) or `finish_interpolation` consumes the `)`,
+            // keeping the lexer positioned for the element/interpolation switch and markup resume.
+            self.expect_without_advance(Kind::RParen);
+            let close_end = self.cur_token().end();
+            Some(NotaHead { kind: HeadKind::Dynamic(expr), end: close_end, colon_escaped: false })
+        } else if self.cur_kind().is_identifier_name() {
+            // Bare identifier head: host (lowercase) / component (Capitalized) / interpolation.
+            // `is_identifier_name` also admits keyword-spelled tags (`@section`, `@title`, …).
+            let token = self.cur_token();
+            let name = self.token_source(&token);
+            let span = token.span();
+            // Do NOT bump: keeps the lexer positioned right after the identifier so the
+            // element/interpolation switch (`byte_at`) and any markup-text resume are exact.
+            Some(NotaHead {
+                kind: HeadKind::Named { name, span },
+                end: span.end,
+                colon_escaped: false,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Finish an `@`-form that turned out to be an *interpolation* (no `{`/`[`/`:` trigger).
+    /// `@name` → `name`; `@(expr)` → `expr`. Resumes markup text if `in_body`.
+    fn finish_interpolation(&mut self, head: NotaHead<'a>, in_body: bool) -> Expression<'a> {
+        let was_named = head.kind_was_named();
+        let expr = match head.kind {
+            HeadKind::Named { name, span } => self.ast.expression_identifier(span, name),
+            HeadKind::Dynamic(expr) => expr,
+        };
+        match was_named {
+            // Bare-ident interpolation: identifier not yet consumed; resume text from its end.
+            true if in_body => self.advance_for_markup_text(),
+            true => self.bump_any(),
+            // `@(expr)`: `)` is the current token. Consume it (re-lexing text if in a body).
+            false if in_body => self.expect_markup_text(Kind::RParen),
+            false => self.bump_any(),
+        }
+        expr
+    }
+
+    /// Parse `@head { body }` and/or `@head [props] …`. `head.end` points at `{` or `[`.
+    fn parse_element(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        in_body: bool,
+    ) -> Expression<'a> {
+        // The head identifier (if bare) is not yet consumed; consume it now and lex the delimiter.
+        self.commit_head(&head);
+
+        // Accumulate one or more `[props]` groups (their object properties union together).
+        let mut props = self.ast.vec();
+        while self.at(Kind::LBrack) {
+            self.parse_props_group(&mut props);
+        }
+
+        // Body: `{ … }`, or self-closing (no body) → empty children.
+        let (children, end) = if self.at(Kind::LCurly) {
+            self.parse_body(in_body)
+        } else {
+            // Self-closing: consume trailing context as markup text if we are inside a body.
+            let end = self.prev_token_end;
+            if in_body {
+                // Re-lex from the current position (right after the last `]`).
+                self.advance_for_markup_text();
+            }
+            (self.ast.vec(), end)
+        };
+
+        let span = Span::new(span_start, end);
+        self.build_element(span, head.kind, props, children)
+    }
+
+    /// `@head:` colon/block sugar (Phase C). Handled in the document/colon module.
+    fn parse_colon_element(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        in_body: bool,
+    ) -> Expression<'a> {
+        self.parse_colon_body(span_start, head, in_body)
+    }
+
+    /// `@{ body }` → `Fragment(...children)` (variadic, not an array). `@` already consumed.
+    fn parse_fragment(&mut self, span_start: u32, in_body: bool) -> Expression<'a> {
+        let (children, end) = self.parse_body(in_body);
+        let span = Span::new(span_start, end);
+        self.build_fragment(span, children)
+    }
+
+    /// Consume the head's final token — the bare identifier, or the `@(expr)` head's `)` — and lex
+    /// the following `{`/`[`/`:` delimiter. Both leave that delimiter as the current token (no
+    /// whitespace between, guaranteed by the `byte_at` element/interpolation switch).
+    fn commit_head(&mut self, _head: &NotaHead<'a>) {
+        // For a bare-ident head the current token is the identifier; for a dynamic head it is `)`.
+        // In both cases `parse_nota_head` left it un-consumed, so a single bump lexes the delimiter.
+        self.bump_any();
+    }
+
+    // ===========================================================================================
+    // Body segment loop + Scribble whitespace
+    // ===========================================================================================
+
+    /// Parse a `{ … }` markup body into final child expressions + the end offset (past `}`).
+    ///
+    /// Entered with the current token at the body-open `{`. Collects raw text segments and nested
+    /// `@`-forms (tracking balanced `{…}` as literal text — Scribble `@foo{f{o}o}` → `"f{o}o"`),
+    /// then applies the Scribble whitespace algorithm. `in_body` governs how the body's *closing*
+    /// `}` resumes lexing (markup text if this element is itself a body child).
+    fn parse_body(&mut self, in_body: bool) -> (ArenaVec<'a, Expression<'a>>, u32) {
+        let open = self.cur_token().span();
+        debug_assert!(self.at(Kind::LCurly), "parse_body entered not at `{{`");
+        self.advance_for_markup_text(); // switch the lexer into markup-body mode
+
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+        let mut depth = 0u32; // balanced-brace depth inside the body
+        let close = self.collect_markup(&mut items, &mut depth, /* document */ false);
+        match close {
+            MarkupClose::Curly { end } => {
+                // Body close `}`. Consume it, resuming markup text iff this element is a child.
+                if in_body {
+                    self.advance_for_markup_text();
+                } else {
+                    self.bump_any();
+                }
+                (self.apply_whitespace(items), end)
+            }
+            MarkupClose::Eof => {
+                self.expect_markup_body_close(open);
+                (self.apply_whitespace(items), self.prev_token_end)
+            }
+            MarkupClose::AtStatement { .. } => {
+                // Unreachable for element bodies (`document=false`).
+                (self.apply_whitespace(items), self.prev_token_end)
+            }
+        }
+    }
+
+    /// The core markup-collection loop, shared by element bodies and (with `document=true`) the
+    /// whole-file body. Collects [`BodyItem`]s (text runs / nested `@`-forms), tracking balanced
+    /// `{…}` braces as literal text and emitting `\n` runs verbatim into the text buffer (the
+    /// Scribble whitespace pass owns line handling). Entered with the current token already lexed
+    /// as the first markup-text run.
+    ///
+    /// Returns how the body terminated. `document=true` collects to EOF (`}` at depth 0 is literal,
+    /// not a close); otherwise a depth-0 `}` closes the body.
+    fn collect_markup(
+        &mut self,
+        items: &mut Vec<BodyItem<'a>>,
+        depth: &mut u32,
+        document: bool,
+    ) -> MarkupClose {
+        loop {
+            if self.has_fatal_error() {
+                return MarkupClose::Eof;
+            }
+            match self.cur_kind() {
+                Kind::MarkupText => {
+                    let token = self.cur_token();
+                    let text = self.token_source(&token);
+                    if !text.is_empty() {
+                        items.push(BodyItem::Text(text));
+                    }
+                    // The run stopped *at* (unconsumed) the terminator: peek it via the raw source.
+                    let term_off = token.end();
+                    match self.byte_at(term_off) {
+                        Some(b'\n') => {
+                            // Line boundary. Keep the `\n` as literal text; resume on the next line.
+                            items.push(BodyItem::Text("\n"));
+                            let next_line = term_off + 1;
+                            if self.is_statement_line(next_line) {
+                                if document {
+                                    // Top-level: hand back to the driver (no IIFE — contract R5).
+                                    return MarkupClose::AtStatement { offset: next_line };
+                                }
+                                // Nested in an element body: a `%` statement scopes the REMAINING
+                                // siblings, which become the body of an IIFE (notation.md §Statements).
+                                let (iife, close) = self.nested_statement_iife(next_line, *depth);
+                                items.push(BodyItem::Child(iife));
+                                return close;
+                            }
+                            self.nota_seek_markup(next_line);
+                        }
+                        Some(b'{') => {
+                            *depth += 1;
+                            items.push(BodyItem::Text("{"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') if *depth > 0 => {
+                            *depth -= 1;
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') if !document => {
+                            // Body close. Lex the `}` as a JS token so the caller can consume it;
+                            // leave it as the current token and report its end (one past `}`).
+                            self.bump_any();
+                            return MarkupClose::Curly { end: self.cur_token().end() };
+                        }
+                        Some(b'}') => {
+                            // Document mode: a depth-0 `}` is literal text.
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'@') => {
+                            self.bump_any(); // lex `@`
+                            let child = self.parse_nota_form(true);
+                            items.push(BodyItem::Child(child));
+                        }
+                        _ => {
+                            // EOF.
+                            return MarkupClose::Eof;
+                        }
+                    }
+                }
+                Kind::At => {
+                    let child = self.parse_nota_form(true);
+                    items.push(BodyItem::Child(child));
+                }
+                Kind::RCurly if *depth == 0 && !document => {
+                    return MarkupClose::Curly { end: self.cur_token().end() };
+                }
+                Kind::Eof => return MarkupClose::Eof,
+                _ => {
+                    // Any non-markup token here means lexing resumed in JS mode (after an `@`-form
+                    // whose trailing context was not markup, e.g. in expression position). Re-enter
+                    // markup from the current position.
+                    self.advance_for_markup_text();
+                }
+            }
+        }
+    }
+
+    /// Apply the Scribble whitespace algorithm (notation.md §Whitespace, contract §7) to the
+    /// collected body items, producing the final child expressions.
+    ///
+    /// Hard contract (§7): one `"\n"` child per interior newline, never pre-coalesced — so a blank
+    /// source line surfaces as ≥2 adjacent `"\n"` (the runtime paragraph-break marker). Empty /
+    /// whitespace-only-without-newline body → `[]`; body that is only newlines → N × `"\n"`.
+    fn apply_whitespace(&self, items: Vec<BodyItem<'a>>) -> ArenaVec<'a, Expression<'a>> {
+        // Split into Copy-able segments (text slices / element indices) + the owned elements, so the
+        // pure whitespace algorithm can re-walk lines without cloning `Expression`s; emit moves each
+        // element out exactly once.
+        let mut segs: Vec<scribble::Seg<'a>> = Vec::with_capacity(items.len());
+        let mut elems: Vec<Option<Expression<'a>>> = Vec::new();
+        for item in items {
+            match item {
+                BodyItem::Text(t) => segs.push(scribble::Seg::Text(t)),
+                BodyItem::Child(e) => {
+                    segs.push(scribble::Seg::Elem(elems.len()));
+                    elems.push(Some(e));
+                }
+            }
+        }
+        let spec = scribble::lower(&segs);
+        let mut out = self.ast.vec_with_capacity(spec.len());
+        for child in spec {
+            out.push(match child {
+                scribble::ChildSpec::Text(s) => {
+                    let value: &'a str = self.ast.allocator.alloc_str(&s);
+                    self.ast.expression_string_literal(Span::empty(0), value, None)
+                }
+                scribble::ChildSpec::Elem(idx) => {
+                    elems[idx].take().expect("each element emitted exactly once")
+                }
+            });
+        }
+        out
+    }
+
+    // ===========================================================================================
+    // Props (Phase B)
+    // ===========================================================================================
+
+    /// Parse one `[ k:v, bare, ...spread, k:@markup ]` group, pushing each into `props`.
+    ///
+    /// Hyperscript collapses notation.md's "string→attr vs expr→{…}" into object properties:
+    /// `[href:"/x"]`→`{href:"/x"}`, `[href:url]`→`{href:url}`, bare `disabled`→shorthand,
+    /// `...rest`→spread, markup value `cap:@em{hi}`→`{cap: h("em",{},["hi"])}`. Multiple groups
+    /// accumulate (union). Entered with the current token at `[`.
+    fn parse_props_group(&mut self, props: &mut ArenaVec<'a, ObjectPropertyKind<'a>>) {
+        let open = self.cur_token().span();
+        self.bump_any(); // consume `[`
+        while !self.at(Kind::RBrack) && !self.at(Kind::Eof) && !self.has_fatal_error() {
+            if self.at(Kind::Dot3) {
+                // `...spread`
+                let span_start = self.start_span();
+                self.bump_any();
+                let argument = self.parse_assignment_expression_or_higher();
+                let span = self.end_span(span_start);
+                let spread = self.ast.spread_element(span, argument);
+                props.push(ObjectPropertyKind::SpreadProperty(self.ast.alloc(spread)));
+            } else {
+                let prop = self.parse_prop_entry();
+                props.push(prop);
+            }
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        self.expect_closing(Kind::RBrack, open);
+    }
+
+    /// Parse a single `key:value` or bare `key` property entry inside a `[…]` group.
+    fn parse_prop_entry(&mut self) -> ObjectPropertyKind<'a> {
+        let span_start = self.start_span();
+        let key_token = self.cur_token();
+        // Key: an identifier name (also accept string-literal keys, e.g. `["data-x": v]`).
+        let key = if self.at(Kind::Str) {
+            let s = self.cur_string();
+            let key_span = key_token.span();
+            self.bump_any();
+            PropertyKey::StringLiteral(self.ast.alloc_string_literal(key_span, s, None))
+        } else {
+            let name = self.token_source(&key_token);
+            let key_span = key_token.span();
+            self.bump_any();
+            PropertyKey::StaticIdentifier(self.ast.alloc_identifier_name(key_span, name))
+        };
+
+        if self.eat(Kind::Colon) {
+            // `key: value` — value may be embedded JS or markup (`@`-form).
+            let value = if self.at(Kind::At) {
+                // Markup-valued prop: an `@`-form as a JS expression (in_body = false).
+                self.parse_nota_form(false)
+            } else {
+                self.parse_assignment_expression_or_higher()
+            };
+            let span = self.end_span(span_start);
+            ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
+                span,
+                PropertyKind::Init,
+                key,
+                value,
+                false,
+                false,
+                false,
+            ))
+        } else {
+            // Bare key → shorthand `{ key }`. Value is an identifier reference of the same name.
+            let (name, key_span) = match &key {
+                PropertyKey::StaticIdentifier(id) => (id.name, id.span),
+                _ => {
+                    // A string-literal key with no value is malformed.
+                    let error = diagnostics::expect_token(
+                        Kind::Colon.to_str(),
+                        self.cur_kind().to_str(),
+                        self.cur_token().span(),
+                    );
+                    return self.fatal_error(error);
+                }
+            };
+            let value = self.ast.expression_identifier(key_span, name);
+            let span = self.end_span(span_start);
+            ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
+                span,
+                PropertyKind::Init,
+                key,
+                value,
+                false,
+                true, // shorthand
+                false,
+            ))
+        }
+    }
+
+    // ===========================================================================================
+    // AST builders
+    // ===========================================================================================
+
+    /// Build `h(tag, { props }, [children])`, dispatching on the head kind (contract §3):
+    /// host (lowercase) → string tag; component (Capitalized) → identifier tag; dynamic `@(expr)`
+    /// → either the expression directly (if a valid tag: Capitalized ident / member expr) or an
+    /// IIFE introducing a fresh `_Tag` binding.
+    fn build_element(
+        &self,
+        span: Span,
+        head: HeadKind<'a>,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        match head {
+            HeadKind::Named { name, span: tag_span } => {
+                let tag = if is_component_name(name) {
+                    self.ast.expression_identifier(tag_span, name)
+                } else {
+                    self.ast.expression_string_literal(tag_span, name, None)
+                };
+                self.build_h(span, tag, props, children)
+            }
+            HeadKind::Dynamic(expr) => {
+                if is_valid_tag_expr(&expr) {
+                    // `@(Box){…}` / `@(ui.Card){…}` — emit the expression directly as the tag.
+                    self.build_h(span, expr, props, children)
+                } else {
+                    // `@(getTag()){…}` — IIFE: `(() => { const _Tag = expr; return h(_Tag, …); })()`
+                    self.build_dynamic_iife(span, expr, props, children)
+                }
+            }
+        }
+    }
+
+    /// `h(tag, { props }, [children])`.
+    fn build_h(
+        &self,
+        span: Span,
+        tag: Expression<'a>,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let ast = self.ast;
+        let callee = ast.expression_identifier(Span::empty(span.start), H);
+        let props_obj = ast.expression_object(Span::empty(span.start), props);
+        let children_arr = self.children_array(span, children);
+        let mut arguments = ast.vec_with_capacity(3);
+        arguments.push(Argument::from(tag));
+        arguments.push(Argument::from(props_obj));
+        arguments.push(Argument::from(children_arr));
+        ast.expression_call(span, callee, NONE, arguments, false)
+    }
+
+    /// `Fragment(...children)` — variadic call (no props, no array wrap), per contract §3.
+    fn build_fragment(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
+        let ast = self.ast;
+        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
+        let mut arguments = ast.vec_with_capacity(children.len());
+        for child in children {
+            arguments.push(Argument::from(child));
+        }
+        ast.expression_call(span, callee, NONE, arguments, false)
+    }
+
+    /// `[children]` array-expression for the third `h(...)` argument.
+    fn children_array(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
+        let ast = self.ast;
+        let mut elements = ast.vec_with_capacity(children.len());
+        for child in children {
+            elements.push(ArrayExpressionElement::from(child));
+        }
+        ast.expression_array(Span::empty(span.end), elements)
+    }
+
+    /// `(() => { const _Tag = <expr>; return h(_Tag, { props }, [children]); })()` — dynamic tag.
+    fn build_dynamic_iife(
+        &self,
+        span: Span,
+        tag_expr: Expression<'a>,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let ast = self.ast;
+        let empty = Span::empty(span.start);
+
+        // `const _Tag = <expr>;`
+        let binding = ast.binding_pattern_binding_identifier(empty, DYNAMIC_TAG_BINDING);
+        let declarator = ast.variable_declarator(
+            empty,
+            VariableDeclarationKind::Const,
+            binding,
+            NONE,
+            Some(tag_expr),
+            false,
+        );
+        let decl = ast.declaration_variable(
+            empty,
+            VariableDeclarationKind::Const,
+            ast.vec1(declarator),
+            false,
+        );
+        let const_stmt = Statement::from(decl);
+
+        // `return h(_Tag, { props }, [children]);`
+        let tag_ref = ast.expression_identifier(empty, DYNAMIC_TAG_BINDING);
+        let h_call = self.build_h(span, tag_ref, props, children);
+        let return_stmt = ast.statement_return(empty, Some(h_call));
+
+        // `() => { … }`
+        let body = ast.function_body(empty, ast.vec(), {
+            let mut stmts = ast.vec_with_capacity(2);
+            stmts.push(const_stmt);
+            stmts.push(return_stmt);
+            stmts
+        });
+        let arrow = ast.expression_arrow_function(
+            empty,
+            false, // not an expression body
+            false, // not async
+            NONE,
+            ast.formal_parameters(
+                empty,
+                FormalParameterKind::ArrowFormalParameters,
+                ast.vec(),
+                NONE,
+            ),
+            NONE,
+            body,
+        );
+
+        // `(<arrow>)()`
+        let iife = ast.expression_call(span, arrow, NONE, ast.vec(), false);
+        iife
+    }
+
+    // ===========================================================================================
+    // Document mode + statements + colon sugar (Phase C) — implemented below this point.
+    // ===========================================================================================
+    // (see the `// Phase C` impl block further down)
+
+    // ===========================================================================================
+    // Diagnostics
+    // ===========================================================================================
+
+    #[cold]
+    fn expect_markup_body_close(&mut self, opening_span: Span) {
+        let error = diagnostics::expect_closing(
+            Kind::RCurly.to_str(),
+            self.cur_kind().to_str(),
+            self.cur_token().span(),
+            opening_span,
+        );
+        self.set_fatal_error(error);
+    }
+}
+
+// ===============================================================================================
+// Phase C — document mode, `%`/`%%%` statements, F1 hoisting, await→async, colon/block sugar.
+// ===============================================================================================
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    /// Parse the whole file body: top-level markup siblings interleaved with `%`/`%%%` statements.
+    ///
+    /// Statements are routed: `import`/`export` and F1 component bindings (`%const/%let X =
+    /// inlineComponent(...)|blockComponent(...)`) hoist to `module_items` (module scope, exported
+    /// for F1); other top-level `%` statements prepend into `doc_prelude` (contract R5, no IIFE).
+    /// `await` anywhere in a top-level statement makes `Doc` async. Returns the markup siblings.
+    fn parse_document_body(
+        &mut self,
+        module_items: &mut ArenaVec<'a, Statement<'a>>,
+        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
+        is_async: &mut bool,
+    ) -> ArenaVec<'a, Expression<'a>> {
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+
+        // The file may *open* with statement lines (before any markup). Handle them first.
+        if self.is_statement_line(0) {
+            self.consume_statements_at(0, module_items, doc_prelude, is_async);
+        } else {
+            // Re-enter markup from the start (the priming `bump_any` lexed a JS token, not markup).
+            self.nota_seek_markup(0);
+        }
+
+        loop {
+            if self.has_fatal_error() {
+                break;
+            }
+            let mut depth = 0u32;
+            match self.collect_markup(&mut items, &mut depth, /* document */ true) {
+                MarkupClose::Eof => break,
+                MarkupClose::Curly { .. } => break, // not produced in document mode
+                MarkupClose::AtStatement { offset } => {
+                    self.consume_statements_at(offset, module_items, doc_prelude, is_async);
+                    if self.at(Kind::Eof) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.apply_whitespace(items)
+    }
+
+    /// Parse a run of consecutive `%`/`%%%` statement lines starting at `offset`, routing each, and
+    /// leave the lexer re-entered in markup mode at the first non-statement line (or EOF).
+    fn consume_statements_at(
+        &mut self,
+        offset: u32,
+        module_items: &mut ArenaVec<'a, Statement<'a>>,
+        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
+        is_async: &mut bool,
+    ) {
+        let mut at = offset;
+        loop {
+            let line_start = at;
+            let (content, is_fence) = match self.statement_kind(line_start) {
+                Some(v) => v,
+                None => break,
+            };
+            // Track await-context: a top-level statement using `await` makes `Doc` async. The
+            // simplest sound signal is whether the statement's source contains `await`.
+            let end = if is_fence {
+                self.parse_fence_statements(
+                    content,
+                    line_start,
+                    module_items,
+                    doc_prelude,
+                    is_async,
+                )
+            } else {
+                self.parse_percent_statement(content, module_items, doc_prelude, is_async)
+            };
+            // Advance `at` to the next line start.
+            at = self.next_line_start(end);
+            if !self.is_statement_line(at) {
+                break;
+            }
+        }
+        // Resume markup at the first non-statement line.
+        self.nota_seek_markup(at);
+    }
+
+    /// Parse one `%` statement: `parse_statement_list_item` from `content` (the offset just past
+    /// `%`), route it (hoist or prelude), and return the source offset where parsing stopped.
+    fn parse_percent_statement(
+        &mut self,
+        content: u32,
+        module_items: &mut ArenaVec<'a, Statement<'a>>,
+        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
+        is_async: &mut bool,
+    ) -> u32 {
+        self.nota_seek_to(content);
+        let stmt = self.parse_statement_list_item(crate::context::StatementContext::StatementList);
+        let end = self.prev_token_end;
+        self.route_statement(stmt, module_items, doc_prelude, is_async);
+        end
+    }
+
+    /// Parse a `%%%` … `%%%` fence: the inner lines are raw JS statements. `inner_start` is the
+    /// offset of the first line after the opening fence. Returns the offset past the closing fence.
+    fn parse_fence_statements(
+        &mut self,
+        inner_start: u32,
+        _open_line: u32,
+        module_items: &mut ArenaVec<'a, Statement<'a>>,
+        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
+        is_async: &mut bool,
+    ) -> u32 {
+        // Find the closing `%%%` line.
+        let (inner_end, after_fence) = self.find_fence_close(inner_start);
+        // Parse statements within [inner_start, inner_end).
+        self.nota_seek_to(inner_start);
+        while self.prev_token_end < inner_end && !self.at(Kind::Eof) && !self.has_fatal_error() {
+            if self.cur_token().start() >= inner_end {
+                break;
+            }
+            let stmt =
+                self.parse_statement_list_item(crate::context::StatementContext::StatementList);
+            self.route_statement(stmt, module_items, doc_prelude, is_async);
+        }
+        after_fence
+    }
+
+    /// Route a parsed top-level statement: `import`/`export`/F1 component bindings hoist to module
+    /// scope (F1 adds `export` + the name argument); everything else prepends into `Doc`. Sets
+    /// `is_async` if the statement uses `await`.
+    fn route_statement(
+        &mut self,
+        stmt: Statement<'a>,
+        module_items: &mut ArenaVec<'a, Statement<'a>>,
+        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
+        is_async: &mut bool,
+    ) {
+        if statement_uses_await(&stmt) {
+            *is_async = true;
+        }
+        match stmt {
+            // `import …` / `export …` hoist to module scope unchanged.
+            Statement::ImportDeclaration(_)
+            | Statement::ExportNamedDeclaration(_)
+            | Statement::ExportDefaultDeclaration(_)
+            | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
+            // F1: a `let/const X = inlineComponent(...)|blockComponent(...)` binding → hoist+export,
+            // and pass `X` as the constructor's 2nd argument (the manifest `comp` name).
+            Statement::VariableDeclaration(mut decl) if self.is_f1_component_decl(&decl) => {
+                self.attach_f1_name(&mut decl);
+                let export = self.make_export_named_decl(Declaration::VariableDeclaration(decl));
+                module_items.push(export);
+            }
+            // Everything else: prepend into Doc's body.
+            other => doc_prelude.push(other),
+        }
+    }
+
+    /// Build the `export default function Doc() { …prelude…; return decode(Fragment(...)); }` module.
+    fn build_document(
+        &self,
+        siblings: ArenaVec<'a, Expression<'a>>,
+        module_items: ArenaVec<'a, Statement<'a>>,
+        doc_prelude: ArenaVec<'a, Statement<'a>>,
+        is_async: bool,
+    ) -> Program<'a> {
+        let ast = self.ast;
+        let empty = Span::empty(0);
+
+        // `Fragment(...siblings)` → `decode(Fragment(...))`.
+        let fragment = self.build_fragment(empty, siblings);
+        let decoded = self.build_decode(empty, fragment);
+        let return_stmt = ast.statement_return(empty, Some(decoded));
+
+        // Doc body = prelude statements ++ [return decode(Fragment(...))].
+        let mut body_stmts = doc_prelude;
+        body_stmts.push(return_stmt);
+        let body = ast.function_body(empty, ast.vec(), body_stmts);
+
+        // `export default function Doc() { … }`
+        let func = ast.function(
+            empty,
+            FunctionType::FunctionDeclaration,
+            Some(ast.binding_identifier(empty, DOC)),
+            false,
+            is_async,
+            false,
+            NONE,
+            NONE,
+            ast.formal_parameters(empty, FormalParameterKind::FormalParameter, ast.vec(), NONE),
+            NONE,
+            Some(body),
+        );
+        let default_decl = ast.module_declaration_export_default_declaration(
+            empty,
+            ExportDefaultDeclarationKind::FunctionDeclaration(ast.alloc(func)),
+        );
+        let doc_stmt = Statement::from(default_decl);
+
+        // Module body = hoisted module items ++ [export default function Doc].
+        let mut program_body = module_items;
+        program_body.push(doc_stmt);
+
+        ast.program(
+            empty,
+            SourceType::default().with_module(true),
+            self.source_text,
+            ast.vec(),
+            None,
+            ast.vec(),
+            program_body,
+        )
+    }
+
+    /// A `%` statement nested in an element body scopes the *remaining* siblings: parse the
+    /// statement(s) at `stmt_line`, collect the rest of the body, and wrap them in an IIFE
+    /// `(() => { …stmts…; return Fragment(...rest); })()` (notation.md §Statements). `await` in a
+    /// statement makes the IIFE `async`. Returns the IIFE expression and how the body closed.
+    fn nested_statement_iife(
+        &mut self,
+        stmt_line: u32,
+        depth: u32,
+    ) -> (Expression<'a>, MarkupClose) {
+        let ast = self.ast;
+
+        // 1. Parse the run of consecutive statement lines.
+        let mut stmts = ast.vec();
+        let mut is_async = false;
+        let mut at = stmt_line;
+        loop {
+            let line_start = at;
+            let Some((content, is_fence)) = self.statement_kind(line_start) else { break };
+            let end = if is_fence {
+                // Collect a fence's inner statements.
+                let (inner_end, after) = self.find_fence_close(content);
+                self.nota_seek_to(content);
+                while self.prev_token_end < inner_end
+                    && !self.at(Kind::Eof)
+                    && !self.has_fatal_error()
+                    && self.cur_token().start() < inner_end
+                {
+                    let s = self
+                        .parse_statement_list_item(crate::context::StatementContext::StatementList);
+                    if statement_uses_await(&s) {
+                        is_async = true;
+                    }
+                    stmts.push(s);
+                }
+                after
+            } else {
+                self.nota_seek_to(content);
+                let s =
+                    self.parse_statement_list_item(crate::context::StatementContext::StatementList);
+                if statement_uses_await(&s) {
+                    is_async = true;
+                }
+                let e = self.prev_token_end;
+                stmts.push(s);
+                e
+            };
+            at = self.next_line_start(end);
+            if !self.is_statement_line(at) {
+                break;
+            }
+        }
+
+        // 2. Collect the remaining body siblings (continuing the current brace depth).
+        self.nota_seek_markup(at);
+        let mut rest_items: Vec<BodyItem<'a>> = Vec::new();
+        let mut rest_depth = depth;
+        let close =
+            self.collect_markup(&mut rest_items, &mut rest_depth, /* document */ false);
+        let rest_children = self.apply_whitespace(rest_items);
+
+        // 3. `return Fragment(...rest);`
+        let fragment = self.build_fragment(Span::empty(0), rest_children);
+        let return_stmt = ast.statement_return(Span::empty(0), Some(fragment));
+        stmts.push(return_stmt);
+
+        // 4. `(() => { …stmts… })()` (async iff a statement used `await`).
+        let body = ast.function_body(Span::empty(0), ast.vec(), stmts);
+        let arrow = ast.expression_arrow_function(
+            Span::empty(0),
+            false,
+            is_async,
+            NONE,
+            ast.formal_parameters(
+                Span::empty(0),
+                FormalParameterKind::ArrowFormalParameters,
+                ast.vec(),
+                NONE,
+            ),
+            NONE,
+            body,
+        );
+        let iife = ast.expression_call(Span::empty(0), arrow, NONE, ast.vec(), false);
+        (iife, close)
+    }
+
+    /// `decode(<expr>)`.
+    fn build_decode(&self, span: Span, expr: Expression<'a>) -> Expression<'a> {
+        let ast = self.ast;
+        let callee = ast.expression_identifier(Span::empty(span.start), DECODE);
+        let mut args = ast.vec_with_capacity(1);
+        args.push(Argument::from(expr));
+        ast.expression_call(span, callee, NONE, args, false)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Colon / block sugar
+    // ------------------------------------------------------------------------------------------
+
+    /// `@head:` colon/block sugar → an element whose body is the rest of the line plus following
+    /// lines indented past the `@head:` line (common indent stripped). Leading `|` lines of the
+    /// body supply `[…]` props (accumulate). The `:` is the current head delimiter.
+    ///
+    /// Implementation: locate the sugar's source range (rest-of-line + indented continuation),
+    /// synthesize an equivalent `{ … }` body by re-parsing that range as a markup body via the
+    /// offset seam, and build the element. `|`-prop lines are parsed as `[…]` groups.
+    fn parse_colon_body(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        in_body: bool,
+    ) -> Expression<'a> {
+        self.commit_head(&head); // consume the head ident / the `:` delimiter context
+        // After `commit_head`, the `:` is the current token (for a bare head) — its end is the body
+        // start. For a dynamic head, `parse_nota_head` consumed `)`, and `:` is current.
+        debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
+        let colon_end = self.cur_token().end();
+        let head_line_indent = self.line_indent_of(span_start);
+
+        // Determine the sugar's source extent: rest of the `@head:` line + lines indented strictly
+        // past `head_line_indent` (notation.md §Colon & block sugar).
+        let (body_src_start, body_src_end) = self.colon_block_extent(colon_end, head_line_indent);
+
+        // Collect props from leading `|` lines, and the markup body (text + `@`-forms).
+        let mut props = self.ast.vec();
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+        self.collect_colon_body(
+            body_src_start,
+            body_src_end,
+            head_line_indent,
+            &mut props,
+            &mut items,
+        );
+
+        let children = self.apply_whitespace(items);
+        let span = Span::new(span_start, body_src_end);
+
+        // Resume the outer context after the consumed block.
+        if in_body {
+            self.nota_seek_markup(body_src_end);
+        } else {
+            self.nota_seek_to(body_src_end);
+        }
+        self.build_element(span, head.kind, props, children)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Line / statement / fence scanning (over the raw source)
+    // ------------------------------------------------------------------------------------------
+
+    /// Is the line beginning at `line_start` a `%`/`%%%` statement line? (first non-whitespace is
+    /// `%`, not an escaped `\%`).
+    fn is_statement_line(&self, line_start: u32) -> bool {
+        let bytes = self.source_text.as_bytes();
+        let mut i = line_start as usize;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        i < bytes.len() && bytes[i] == b'%'
+    }
+
+    /// Classify the statement line at `line_start`. Returns `(content_or_inner_start, is_fence)`:
+    /// for a fence (`%%%`), the offset of the line *after* the opening fence; for a `%` statement,
+    /// the offset just past the `%`. `None` if the line is not a statement line.
+    fn statement_kind(&self, line_start: u32) -> Option<(u32, bool)> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = line_start as usize;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] != b'%' {
+            return None;
+        }
+        // Count the run of `%`.
+        let run_start = i;
+        while i < bytes.len() && bytes[i] == b'%' {
+            i += 1;
+        }
+        let run_len = i - run_start;
+        // `%%%` (a run of >= 3 with nothing else on the line, modulo trailing ws) → fence.
+        if run_len >= 3 {
+            // Confirm rest of line is whitespace (an opening fence on its own line).
+            let mut j = i;
+            while j < bytes.len() && bytes[j] != b'\n' {
+                if bytes[j] != b' ' && bytes[j] != b'\t' && bytes[j] != b'\r' {
+                    // Not a bare fence line; treat the first `%` as a statement (rare).
+                    return Some((run_start as u32 + 1, false));
+                }
+                j += 1;
+            }
+            let inner_start = if j < bytes.len() { j as u32 + 1 } else { j as u32 };
+            return Some((inner_start, true));
+        }
+        // A single `%` statement: content starts right after it.
+        Some((run_start as u32 + 1, false))
+    }
+
+    /// Find the `%%%` fence close at/after `inner_start`. Returns `(inner_end, after_fence)` where
+    /// `inner_end` is the offset of the closing-fence line start and `after_fence` is past the
+    /// closing fence's line (the resume point).
+    fn find_fence_close(&self, inner_start: u32) -> (u32, u32) {
+        let bytes = self.source_text.as_bytes();
+        let mut line_start = inner_start as usize;
+        while line_start < bytes.len() {
+            // Examine this line.
+            let mut i = line_start;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            let run_start = i;
+            while i < bytes.len() && bytes[i] == b'%' {
+                i += 1;
+            }
+            if i - run_start >= 3 {
+                // Closing fence. `inner_end` = this line's start; `after_fence` = next line start.
+                let mut j = i;
+                while j < bytes.len() && bytes[j] != b'\n' {
+                    j += 1;
+                }
+                let after = if j < bytes.len() { j + 1 } else { j };
+                return (line_start as u32, after as u32);
+            }
+            // Advance to next line.
+            let mut j = line_start;
+            while j < bytes.len() && bytes[j] != b'\n' {
+                j += 1;
+            }
+            line_start = if j < bytes.len() { j + 1 } else { j };
+        }
+        // Unterminated fence: treat the rest of the file as the inner body.
+        (bytes.len() as u32, bytes.len() as u32)
+    }
+
+    /// The offset of the line start following the line containing `offset`.
+    fn next_line_start(&self, offset: u32) -> u32 {
+        let bytes = self.source_text.as_bytes();
+        let mut i = offset as usize;
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        if i < bytes.len() { i as u32 + 1 } else { i as u32 }
+    }
+
+    /// The indentation (leading-space count) of the line containing byte `offset`.
+    fn line_indent_of(&self, offset: u32) -> usize {
+        let bytes = self.source_text.as_bytes();
+        // Find this line's start.
+        let mut start = offset as usize;
+        while start > 0 && bytes[start - 1] != b'\n' {
+            start -= 1;
+        }
+        let mut i = start;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        i - start
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Colon / block sugar extent + collection
+    // ------------------------------------------------------------------------------------------
+
+    /// Compute the source extent `[start, end)` of a `@head:` sugar body: the rest of the `@head:`
+    /// line (from `colon_end`) plus subsequent lines indented strictly past `head_indent`.
+    fn colon_block_extent(&self, colon_end: u32, head_indent: usize) -> (u32, u32) {
+        let bytes = self.source_text.as_bytes();
+        // The `:` consumes the immediately-following horizontal whitespace (separator), so
+        // `@foo: hello` → body `hello`, not ` hello`. Newlines are NOT skipped (they delimit lines).
+        let mut start = colon_end as usize;
+        while start < bytes.len() && (bytes[start] == b' ' || bytes[start] == b'\t') {
+            start += 1;
+        }
+        let start = start as u32;
+        // The first line: up to and including its newline (if any).
+        let mut end = self.next_line_start(colon_end);
+        // Include subsequent lines indented strictly past `head_indent`, OR blank lines.
+        loop {
+            if end as usize >= bytes.len() {
+                break;
+            }
+            let line_start = end as usize;
+            // Compute indentation; detect blank line.
+            let mut i = line_start;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            let is_blank = i >= bytes.len() || bytes[i] == b'\n';
+            let indent = i - line_start;
+            if is_blank || indent > head_indent {
+                end = self.next_line_start(end);
+            } else {
+                break;
+            }
+        }
+        (start, end)
+    }
+
+    /// Collect the colon-sugar body over `[start, end)`: leading `|` lines → `[…]` prop groups; the
+    /// remaining lines → markup body items.
+    fn collect_colon_body(
+        &mut self,
+        start: u32,
+        end: u32,
+        head_indent: usize,
+        props: &mut ArenaVec<'a, ObjectPropertyKind<'a>>,
+        items: &mut Vec<BodyItem<'a>>,
+    ) {
+        let bytes = self.source_text.as_bytes();
+
+        // Walk leading `|` prop lines (a line whose first non-ws char is `|`, indented past head).
+        let mut body_start = start;
+        // Props lines only apply to the *continuation* lines (not the rest-of-`@head:`-line).
+        // Find the first continuation line.
+        let first_cont = self.next_line_start(start);
+        let mut scan = first_cont;
+        while scan < end {
+            let line_start = scan as usize;
+            let mut i = line_start;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'|' {
+                // A `| k: v` prop line. Parse `[k: v]`-style entries from after `|` to line end.
+                let content_start = i as u32 + 1;
+                let line_end = self.next_line_start(scan);
+                self.parse_pipe_prop_line(content_start, line_end, props);
+                scan = line_end;
+                body_start = scan; // props consume the prefix; body starts after them
+            } else {
+                break;
+            }
+        }
+        // Hmm: if there are `|` lines, the rest-of-line content of `@head:` is dropped only if the
+        // first line had no inline content. We keep it simple: inline content + non-`|` lines form
+        // the body. Re-collect the body markup over [body_start_effective, end).
+        let body_range_start = if body_start > start { body_start } else { start };
+        self.collect_markup_range(body_range_start, end, head_indent, items);
+    }
+
+    /// Parse `| k: v, …` prop entries from `[content_start, line_end)` into `props`.
+    fn parse_pipe_prop_line(
+        &mut self,
+        content_start: u32,
+        line_end: u32,
+        props: &mut ArenaVec<'a, ObjectPropertyKind<'a>>,
+    ) {
+        self.nota_seek_to(content_start);
+        while self.cur_token().start() < line_end && !self.at(Kind::Eof) && !self.has_fatal_error()
+        {
+            if self.at(Kind::Dot3) {
+                let span_start = self.start_span();
+                self.bump_any();
+                let argument = self.parse_assignment_expression_or_higher();
+                let span = self.end_span(span_start);
+                let spread = self.ast.spread_element(span, argument);
+                props.push(ObjectPropertyKind::SpreadProperty(self.ast.alloc(spread)));
+            } else {
+                let prop = self.parse_prop_entry();
+                props.push(prop);
+            }
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+    }
+
+    /// Collect markup over a raw source range `[start, end)` (colon-sugar body), seeking the lexer
+    /// to `start` and collecting until `end`. Leading common indentation past `head_indent` is left
+    /// to the whitespace pass; here we strip the block's base indentation by treating the range as a
+    /// standalone body.
+    fn collect_markup_range(
+        &mut self,
+        start: u32,
+        end: u32,
+        _head_indent: usize,
+        items: &mut Vec<BodyItem<'a>>,
+    ) {
+        self.nota_seek_markup(start);
+        let mut depth = 0u32;
+        loop {
+            if self.has_fatal_error() {
+                break;
+            }
+            // Stop once we've consumed up to `end`.
+            if self.cur_token().start() >= end {
+                break;
+            }
+            match self.cur_kind() {
+                Kind::MarkupText => {
+                    let token = self.cur_token();
+                    // Clip the text to `end`.
+                    let text_end = token.end().min(end);
+                    let text = &self.source_text[token.start() as usize..text_end as usize];
+                    if !text.is_empty() {
+                        items.push(BodyItem::Text(text));
+                    }
+                    let term_off = token.end();
+                    if term_off >= end {
+                        break;
+                    }
+                    match self.byte_at(term_off) {
+                        Some(b'\n') => {
+                            items.push(BodyItem::Text("\n"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'{') => {
+                            depth += 1;
+                            items.push(BodyItem::Text("{"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') if depth > 0 => {
+                            depth -= 1;
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') => {
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'@') => {
+                            self.bump_any();
+                            let child = self.parse_nota_form(true);
+                            items.push(BodyItem::Child(child));
+                        }
+                        _ => break,
+                    }
+                }
+                Kind::At => {
+                    let child = self.parse_nota_form(true);
+                    items.push(BodyItem::Child(child));
+                }
+                Kind::Eof => break,
+                _ => self.advance_for_markup_text(),
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // F1 (component hoist + export + name) and module helpers
+    // ------------------------------------------------------------------------------------------
+
+    /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding? (F1)
+    fn is_f1_component_decl(&self, decl: &VariableDeclaration<'a>) -> bool {
+        decl.declarations.len() == 1
+            && decl.declarations[0].id.get_binding_identifier().is_some()
+            && decl.declarations[0]
+                .init
+                .as_ref()
+                .is_some_and(|init| f1_constructor_name(init).is_some())
+    }
+
+    /// F1: pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`),
+    /// and wrap the component body's returned markup in `decode(...)` (contract §2 stage-3 (b)).
+    fn attach_f1_name(&self, decl: &mut VariableDeclaration<'a>) {
+        let declarator = &mut decl.declarations[0];
+        let Some(name) = declarator.id.get_binding_identifier().map(|id| id.name) else {
+            return; // not a simple identifier binding (guarded by `is_f1_component_decl`)
+        };
+        if let Some(Expression::CallExpression(call)) = declarator.init.as_mut() {
+            // Wrap the constructor's function-arg returned markup in `decode(...)`.
+            if let Some(arg0) = call.arguments.first_mut() {
+                self.wrap_component_returns(arg0);
+            }
+            // Append the F1 name (idempotent).
+            if call.arguments.len() < 2 {
+                let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
+                call.arguments.push(Argument::from(name_lit));
+            }
+        }
+    }
+
+    /// Wrap a component-constructor function argument's returned markup in `decode(...)`.
+    ///
+    /// `inlineComponent((c) => @span{…})` → arrow expression body wrapped; `inlineComponent((c) => {
+    /// …; return @span{…}; })` → the `return` argument wrapped. Only markup (`h(...)`/`Fragment(...)`)
+    /// is wrapped, and never double-wrapped (`decode(...)` is left alone). (Contract §2 stage-3 (b);
+    /// `decode` with the runtime `▸=true` inside a component is identity, so this is the seam.)
+    fn wrap_component_returns(&self, arg: &mut Argument<'a>) {
+        let Some(expr) = arg.as_expression_mut() else { return };
+        match expr {
+            Expression::ArrowFunctionExpression(arrow) => {
+                if arrow.expression {
+                    // Expression body: a single return statement holding the markup.
+                    if let Some(Statement::ExpressionStatement(es)) =
+                        arrow.body.statements.first_mut()
+                    {
+                        self.wrap_expr_in_decode(&mut es.expression);
+                    }
+                } else {
+                    self.wrap_return_statements(&mut arrow.body.statements);
+                }
+            }
+            Expression::FunctionExpression(func) => {
+                if let Some(body) = func.body.as_mut() {
+                    self.wrap_return_statements(&mut body.statements);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Wrap the argument of each top-level `return <markup>;` in `decode(...)`.
+    fn wrap_return_statements(&self, stmts: &mut ArenaVec<'a, Statement<'a>>) {
+        for stmt in stmts.iter_mut() {
+            if let Statement::ReturnStatement(ret) = stmt
+                && let Some(arg) = ret.argument.as_mut()
+            {
+                self.wrap_expr_in_decode(arg);
+            }
+        }
+    }
+
+    /// Replace `expr` with `decode(expr)` iff it is unwrapped markup (`h(...)`/`Fragment(...)`).
+    fn wrap_expr_in_decode(&self, expr: &mut Expression<'a>) {
+        if !is_markup_call(expr) {
+            return;
+        }
+        // Move out the current expression and wrap it. (Use a cheap placeholder swap.)
+        let taken = std::mem::replace(expr, self.ast.expression_null_literal(Span::empty(0)));
+        *expr = self.build_decode(Span::empty(0), taken);
+    }
+
+    /// `export <decl>;` (named export of a declaration).
+    fn make_export_named_decl(&self, decl: Declaration<'a>) -> Statement<'a> {
+        let ast = self.ast;
+        let export = ast.module_declaration_export_named_declaration(
+            Span::empty(0),
+            Some(decl),
+            ast.vec(),
+            None,
+            ImportOrExportKind::Value,
+            NONE,
+        );
+        Statement::from(export)
+    }
+}
+
+/// A parsed `@`-form head, with the classification needed to branch element-vs-interpolation and
+/// host-vs-component-vs-dynamic.
+struct NotaHead<'a> {
+    kind: HeadKind<'a>,
+    /// Byte offset immediately after the head (the element/interpolation switch position).
+    end: u32,
+    /// `true` if the head was written with an escaped trailing colon (`@foo\:`) — not an element.
+    colon_escaped: bool,
+}
+
+impl<'a> NotaHead<'a> {
+    fn kind_was_named(&self) -> bool {
+        matches!(self.kind, HeadKind::Named { .. })
+    }
+}
+
+enum HeadKind<'a> {
+    /// A bare identifier head: host (lowercase string tag) or component (Capitalized identifier).
+    Named { name: &'a str, span: Span },
+    /// `@(expr)` — a dynamic head; the inner expression.
+    Dynamic(Expression<'a>),
+}
+
+/// A tag name is a *component* (identifier) iff it starts with an uppercase ASCII letter;
+/// otherwise it is a *host* element (string tag). (notation.md §Host vs. component.)
+fn is_component_name(name: &str) -> bool {
+    name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+}
+
+/// A dynamic-tag head expression is "already a valid tag" (emit directly, no `_Tag` binding) iff it
+/// is a Capitalized identifier or a *static* member expression — i.e. a name JSX would also accept
+/// as a tag (contract §3: `@(Box)` → `h(Box,…)`, `@(ui.Card)` → `h(ui.Card,…)`). A *computed*
+/// member (`@(comps[k])`) or any other expression goes through the `_Tag` IIFE.
+fn is_valid_tag_expr(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(id) => is_component_name(&id.name),
+        // Static member chains only (`a.b.c`); the object side may be anything name-like.
+        Expression::StaticMemberExpression(_) => true,
+        _ => false,
+    }
+}
+
+/// Is `expr` an *unwrapped* markup call — `h(...)` or `Fragment(...)` (NOT already `decode(...)`)?
+/// Used to decide whether a component body's return value needs a `decode(...)` wrap.
+fn is_markup_call(expr: &Expression) -> bool {
+    let Expression::CallExpression(call) = expr else { return false };
+    let Expression::Identifier(callee) = &call.callee else { return false };
+    matches!(callee.name.as_str(), H | FRAGMENT)
+}
+
+/// The F1 constructor name if `init` is a call to `inlineComponent`/`blockComponent`, else `None`.
+fn f1_constructor_name<'a>(init: &Expression<'a>) -> Option<&'a str> {
+    let Expression::CallExpression(call) = init else { return None };
+    let Expression::Identifier(callee) = &call.callee else { return None };
+    match callee.name.as_str() {
+        INLINE_COMPONENT => Some(INLINE_COMPONENT),
+        BLOCK_COMPONENT => Some(BLOCK_COMPONENT),
+        _ => None,
+    }
+}
+
+/// Does a top-level statement use top-level `await` (so its host `Doc` must be `async`)? Checked by
+/// inspecting the parsed statement shape: the common Nota form is `%const x = await …`. We look for
+/// an `AwaitExpression` in a variable-declaration initializer or an expression statement, without
+/// descending into nested function/arrow bodies (whose `await` belongs to that function).
+fn statement_uses_await(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            decl.declarations.iter().any(|d| d.init.as_ref().is_some_and(expr_has_top_await))
+        }
+        Statement::ExpressionStatement(es) => expr_has_top_await(&es.expression),
+        _ => false,
+    }
+}
+
+/// Recursively check an expression for an `await` not under a nested function/arrow boundary.
+fn expr_has_top_await(expr: &Expression) -> bool {
+    match expr {
+        Expression::AwaitExpression(_) => true,
+        Expression::ParenthesizedExpression(p) => expr_has_top_await(&p.expression),
+        Expression::CallExpression(c) => {
+            expr_has_top_await(&c.callee) || c.arguments.iter().any(arg_has_top_await)
+        }
+        Expression::SequenceExpression(s) => s.expressions.iter().any(expr_has_top_await),
+        Expression::BinaryExpression(b) => {
+            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
+        }
+        Expression::LogicalExpression(b) => {
+            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
+        }
+        Expression::ConditionalExpression(c) => {
+            expr_has_top_await(&c.test)
+                || expr_has_top_await(&c.consequent)
+                || expr_has_top_await(&c.alternate)
+        }
+        Expression::AssignmentExpression(a) => expr_has_top_await(&a.right),
+        // Do NOT descend into function/arrow bodies (their await is theirs).
+        _ => false,
+    }
+}
+
+fn arg_has_top_await(arg: &Argument) -> bool {
+    match arg {
+        Argument::SpreadElement(s) => expr_has_top_await(&s.argument),
+        _ => arg.as_expression().is_some_and(expr_has_top_await),
+    }
+}
+
+// ===============================================================================================
+// The Scribble whitespace algorithm (pure; unit-tested against the reference reader table).
+// ===============================================================================================
+
+mod scribble {
+    /// A body segment fed to the whitespace algorithm. Both variants are `Copy` (no `Expression`
+    /// is held here — elements are referenced by index), so lines can be re-walked without clones.
+    #[derive(Clone, Copy)]
+    pub(super) enum Seg<'a> {
+        /// A literal text run (raw source slice).
+        Text(&'a str),
+        /// A (whitespace-opaque) element, by index into the caller's element vec.
+        Elem(usize),
+    }
+
+    /// A final body child spec: processed text, or an element index (the caller moves it out).
+    pub(super) enum ChildSpec {
+        Text(String),
+        Elem(usize),
+    }
+
+    /// One piece within a logical body line.
+    #[derive(Clone, Copy)]
+    enum Piece<'a> {
+        Text(&'a str),
+        Elem(usize),
+    }
+
+    /// Lower body segments to final child specs via the Scribble algorithm (notation.md
+    /// §Whitespace; verified against `references/scribble/.../reader.rkt`):
+    /// 1. Split into logical lines (`\n` in text splits lines; elements are non-ws content).
+    /// 2. Whitespace-only body: no newline → `[]`; else → one `"\n"` per newline.
+    /// 3. Drop the single newline right after `{` (leading all-ws line) and before `}` (trailing
+    ///    all-ws line) — *unless* the body is only newlines (step 2).
+    /// 4. Strip the common indentation of the indent lines, keeping the leftover indent as its own
+    ///    text child; trim each interior line's trailing whitespace (keep the `}`-line's).
+    /// 5. Emit one `"\n"` per inter-line newline — never coalesced (contract §7).
+    pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
+        // --- Step 1: split into lines of pieces, counting newlines. ---
+        let mut lines: Vec<Vec<Piece<'a>>> = vec![Vec::new()];
+        let mut newline_count = 0usize;
+        let mut has_nonws = false;
+        for seg in segs {
+            match *seg {
+                Seg::Text(text) => {
+                    for (k, part) in text.split('\n').enumerate() {
+                        if k > 0 {
+                            lines.push(Vec::new());
+                            newline_count += 1;
+                        }
+                        if !part.is_empty() {
+                            if part.bytes().any(|b| !b.is_ascii_whitespace()) {
+                                has_nonws = true;
+                            }
+                            lines.last_mut().unwrap().push(Piece::Text(part));
+                        }
+                    }
+                }
+                Seg::Elem(idx) => {
+                    has_nonws = true;
+                    lines.last_mut().unwrap().push(Piece::Elem(idx));
+                }
+            }
+        }
+
+        // --- Step 2: whitespace-only body. ---
+        if !has_nonws {
+            if newline_count == 0 {
+                return Vec::new(); // `@p{}` / `@p{   }` → []
+            }
+            return (0..newline_count).map(|_| ChildSpec::Text("\n".to_string())).collect();
+        }
+
+        // --- Step 3: drop `{`-newline / `}`-newline. ---
+        // `first_line_is_indent`: did the body open with a newline (so the new first line is an
+        // indentation line that participates in common-indent)? Set on dropping a leading all-ws line.
+        let mut first_line_is_indent = false;
+        if lines.len() >= 2 && line_is_blank(&lines[0]) {
+            lines.remove(0);
+            first_line_is_indent = true;
+        }
+        if lines.len() >= 2 && line_is_blank(lines.last().unwrap()) {
+            lines.pop();
+        }
+
+        // --- Step 4: common indentation over the indent lines. ---
+        let indent_from = usize::from(!first_line_is_indent); // skip the `{`-line if it is content
+        let common = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, line)| *i >= indent_from && !line_is_blank(line))
+            .map(|(_, line)| leading_ws_len(line))
+            .min()
+            .unwrap_or(0);
+
+        // --- Step 5: emit. ---
+        let mut out = Vec::new();
+        let last_idx = lines.len() - 1;
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                out.push(ChildSpec::Text("\n".to_string())); // one "\n" per inter-line newline (§7)
+            }
+            let is_indent_line = i >= indent_from;
+            emit_line(
+                &mut out,
+                line,
+                if is_indent_line { common } else { 0 },
+                is_indent_line,
+                i == last_idx,
+            );
+        }
+        out
+    }
+
+    /// Emit one line.
+    ///
+    /// Consecutive text pieces are first merged into a single run (balanced braces split text into
+    /// `f`/`{`/`o`/… pieces — `@code{f{o}o}` must surface as one `"f{o}o"` child). Then:
+    /// * For an *indent line*: strip `strip` leading whitespace bytes (the common indent), emitting
+    ///   any *leftover* indent (past the common amount) as its own text child, then the content. For
+    ///   the `{`-line (not an indent line), leading whitespace is content (between `{` and text), kept.
+    /// * Trim the line-final text run's trailing whitespace unless `is_last` (text&`}` keeps it).
+    fn emit_line<'a>(
+        out: &mut Vec<ChildSpec>,
+        line: &[Piece<'a>],
+        strip: usize,
+        is_indent_line: bool,
+        is_last: bool,
+    ) {
+        // --- Merge consecutive text into runs. ---
+        enum Run {
+            Text(String),
+            Elem(usize),
+        }
+        let mut runs: Vec<Run> = Vec::new();
+        for piece in line {
+            match *piece {
+                Piece::Text(s) => {
+                    if let Some(Run::Text(buf)) = runs.last_mut() {
+                        buf.push_str(s);
+                    } else {
+                        runs.push(Run::Text(s.to_string()));
+                    }
+                }
+                Piece::Elem(idx) => runs.push(Run::Elem(idx)),
+            }
+        }
+        if runs.is_empty() {
+            return;
+        }
+        let last = runs.len() - 1;
+
+        // --- Leading common-indent strip (indent lines only), emitting leftover indent separately. ---
+        for (i, run) in runs.into_iter().enumerate() {
+            match run {
+                Run::Text(mut s) => {
+                    if i == 0 && is_indent_line {
+                        let lead = s.bytes().take_while(|b| *b == b' ' || *b == b'\t').count();
+                        let drop = strip.min(lead);
+                        let leftover = s[drop..lead].to_string();
+                        if !leftover.is_empty() {
+                            out.push(ChildSpec::Text(leftover));
+                        }
+                        s = s[lead..].to_string();
+                    }
+                    // Trailing-trim the line-final text run of a non-`}` line.
+                    if i == last && !is_last {
+                        let trimmed = s.trim_end_matches([' ', '\t']);
+                        s.truncate(trimmed.len());
+                    }
+                    if !s.is_empty() {
+                        out.push(ChildSpec::Text(s));
+                    }
+                }
+                Run::Elem(idx) => out.push(ChildSpec::Elem(idx)),
+            }
+        }
+    }
+
+    /// True if a line has no content (no elements; all text whitespace/empty).
+    fn line_is_blank(line: &[Piece]) -> bool {
+        line.iter().all(|p| match p {
+            Piece::Text(s) => s.bytes().all(|b| b.is_ascii_whitespace()),
+            Piece::Elem(_) => false,
+        })
+    }
+
+    /// Leading whitespace length (bytes) before the first content piece of a line.
+    fn leading_ws_len(line: &[Piece]) -> usize {
+        let mut n = 0;
+        for p in line {
+            match p {
+                Piece::Text(s) => {
+                    let lead = s.bytes().take_while(|b| b.is_ascii_whitespace()).count();
+                    n += lead;
+                    if lead < s.len() {
+                        return n;
+                    }
+                }
+                Piece::Elem(_) => return n,
+            }
+        }
+        n
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{ChildSpec, Seg, lower};
+
+        /// Render the whitespace algorithm's output in Scribble's `(foo …)` notation for assertion:
+        /// text children quoted, element children as `E`. Mirrors `references/.../reader.rkt`.
+        fn render(segs: &[Seg]) -> String {
+            let mut parts: Vec<String> = Vec::new();
+            for child in lower(segs) {
+                match child {
+                    ChildSpec::Text(s) => parts.push(format!("{s:?}")),
+                    ChildSpec::Elem(_) => parts.push("E".to_string()),
+                }
+            }
+            parts.join(" ")
+        }
+
+        const E: Seg<'static> = Seg::Elem(0);
+        fn t(s: &str) -> Seg<'_> {
+            Seg::Text(s)
+        }
+
+        #[test]
+        fn empty_and_ws_only() {
+            assert_eq!(render(&[]), "");
+            assert_eq!(render(&[t("   ")]), ""); // ws-only, no newline → []
+            assert_eq!(render(&[t("\n")]), r#""\n""#); // only newline → one "\n"
+            assert_eq!(render(&[t("\n\n\n")]), r#""\n" "\n" "\n""#);
+        }
+
+        #[test]
+        fn single_line_spaces_kept() {
+            assert_eq!(render(&[t(" bar ")]), r#"" bar ""#);
+        }
+
+        #[test]
+        fn drop_open_close_newline_strip_indent() {
+            // `@foo{⏎  bar⏎}` → "bar"
+            assert_eq!(render(&[t("\n  bar\n")]), r#""bar""#);
+            // `@foo{⏎  begin⏎    x⏎  end}` → "begin","⏎","  ","x","⏎","end"
+            assert_eq!(
+                render(&[t("\n  begin\n    x\n  end")]),
+                r#""begin" "\n" "  " "x" "\n" "end""#
+            );
+        }
+
+        #[test]
+        fn blank_line_is_two_newlines() {
+            // contract §7: a blank line surfaces as ≥2 adjacent "\n".
+            assert_eq!(render(&[t("\n  bar\n\n  baz\n")]), r#""bar" "\n" "\n" "baz""#);
+            // leading + trailing blank → "⏎","bar","⏎"
+            assert_eq!(render(&[t("\n\n  bar\n\n")]), r#""\n" "bar" "\n""#);
+        }
+
+        #[test]
+        fn common_indent_keeps_leftover() {
+            assert_eq!(
+                render(&[t("bar\n       baz\n     bbb")]),
+                r#""bar" "\n" "  " "baz" "\n" "bbb""#
+            );
+        }
+
+        #[test]
+        fn balanced_braces_merge_to_one_text() {
+            // `@code{f{o}o}` → "f{o}o" (balanced braces arrive as separate Text segs, must merge).
+            assert_eq!(render(&[t("f"), t("{"), t("o"), t("}"), t("o")]), r#""f{o}o""#);
+        }
+
+        #[test]
+        fn element_keeps_preceding_space() {
+            // `@foo{bar @baz …⏎     blah}` line: "bar " <E> ; trailing space before E kept.
+            assert_eq!(render(&[t("bar "), E, t("\n     blah")]), r#""bar " E "\n" "blah""#);
+        }
+    }
+}

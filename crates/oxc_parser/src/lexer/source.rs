@@ -306,6 +306,19 @@ impl<'a> Source<'a> {
         self.offset_of(self.position())
     }
 
+    /// Move the current position to byte `offset` (relative to start of source).
+    ///
+    /// Used by the Nota reader to resume lexing at a known offset (e.g. the body of a `%`
+    /// statement, after the raw markup-text scan located the line). `offset` must be `<=` source
+    /// length and on a UTF-8 char boundary (the inner `set_position` `debug_assert`s the latter).
+    #[inline]
+    pub(super) fn set_offset(&mut self, offset: u32) {
+        debug_assert!(offset as usize <= self.offset_of_usize(self.end()));
+        // SAFETY: `offset <= source length`, so `start + offset` is in bounds (or at EOF).
+        let pos = unsafe { self.start().add(offset as usize) };
+        self.set_position(pos);
+    }
+
     /// Get current position in source, relative to start of source, as `usize`.
     #[inline]
     pub(super) fn offset_usize(&self) -> usize {

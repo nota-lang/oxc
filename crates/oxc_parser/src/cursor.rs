@@ -112,6 +112,51 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = self.lexer.next_jsx_child();
     }
 
+    /// Move to the next Nota markup-text run (see [`crate::lexer`] `next_markup_text`).
+    /// Re-lexes the upcoming source as a literal markup-body text run rather than a JS token.
+    pub(crate) fn advance_for_markup_text(&mut self) {
+        self.prev_token_end = self.token.end();
+        self.token = self.lexer.next_markup_text();
+    }
+
+    /// Assert the current token is `kind`, then re-lex the *next* token as Nota markup body text.
+    ///
+    /// The Nota analog of [`Self::expect_jsx_child`]: used when a markup-body delimiter (a closing
+    /// `}` of a nested element, or a head delimiter) must be followed by literal body text, so the
+    /// lexer resumes in markup mode rather than lexing the following characters as JS. (Whitespace
+    /// after the delimiter is significant in markup, so we must not let the JS lexer skip it.)
+    pub(crate) fn expect_markup_text(&mut self, kind: Kind) {
+        self.expect_without_advance(kind);
+        self.advance_for_markup_text();
+    }
+
+    /// Reposition the lexer to byte `offset` and lex the token there (Nota reader).
+    ///
+    /// Used after a raw markup-text scan to resume normal JS lexing at a known offset — e.g. the
+    /// content of a `%`/`%%%` statement. `prev_token_end` is set to `offset` so spans of nodes
+    /// parsed afterward start there.
+    pub(crate) fn nota_seek_to(&mut self, offset: u32) {
+        self.prev_token_end = offset;
+        self.token = self.lexer.seek_and_lex(offset);
+    }
+
+    /// Reposition the lexer to byte `offset` and lex a markup-text run there (Nota reader).
+    /// Resumes body text right after a peeked markup delimiter (`{`/`}`/`\n`).
+    pub(crate) fn nota_seek_markup(&mut self, offset: u32) {
+        self.prev_token_end = offset;
+        self.token = self.lexer.seek_and_lex_markup(offset);
+    }
+
+    /// Peek the raw source byte at `offset`, or `None` if at/after end of source.
+    ///
+    /// Used by the Nota reader to decide element-vs-interpolation by the byte immediately after a
+    /// head (`@name{`/`@name[`/`@name:` are elements; `@name ` interpolates) without letting the JS
+    /// lexer skip significant whitespace. A cheap, side-effect-free lookahead into `source_text`.
+    #[inline]
+    pub(crate) fn byte_at(&self, offset: u32) -> Option<u8> {
+        self.source_text.as_bytes().get(offset as usize).copied()
+    }
+
     /// Advance and return true if we are at `Kind`, return false otherwise
     #[inline]
     #[must_use = "Use `bump` instead of `eat` if you are ignoring the return value"]

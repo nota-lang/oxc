@@ -2,6 +2,7 @@
 pub mod comments;
 pub mod esbuild;
 pub mod js;
+pub mod nota;
 #[cfg(feature = "sourcemap")]
 pub mod sourcemap;
 pub mod ts;

@@ -21,6 +21,7 @@ mod comment;
 mod identifier;
 mod jsx;
 mod kind;
+mod markup;
 mod number;
 mod numeric;
 mod punctuation;
@@ -179,6 +180,27 @@ impl<'a, C: Config> Lexer<'a, C> {
     /// Remaining string from `Source`
     pub fn remaining(&self) -> &'a str {
         self.source.remaining()
+    }
+
+    /// Move the lexer's source cursor to byte `offset` and lex one token there (Nota reader).
+    ///
+    /// Resets the in-progress token to start at `offset`, repositions the source, and returns the
+    /// next token lexed from that point. Used to parse the JS body of a `%`/`%%%` statement after
+    /// the raw markup scan located its source range — keeping `%`-body spans byte-exact.
+    pub(crate) fn seek_and_lex(&mut self, offset: u32) -> Token {
+        self.source.set_offset(offset);
+        self.token = Token::default();
+        self.token.set_start(offset);
+        self.next_token()
+    }
+
+    /// Reposition the lexer to byte `offset` and lex a Nota markup-text run there (Nota reader).
+    /// Used to resume body text right after a markup delimiter (`{`/`}`/`\n`) was peeked.
+    pub(crate) fn seek_and_lex_markup(&mut self, offset: u32) -> Token {
+        self.source.set_offset(offset);
+        self.token = Token::default();
+        self.token.set_start(offset);
+        self.next_markup_text()
     }
 
     /// Creates a checkpoint storing the current lexer state.

@@ -25,6 +25,11 @@ name = "compiler"
 path = "examples/compiler.rs"
 required-features = ["full"]
 
+[[example]]
+name = "nota_compile"
+path = "examples/nota_compile.rs"
+required-features = ["codegen"]
+
 [dependencies]
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }
@@ -38,6 +43,7 @@ oxc_minifier = { workspace = true, optional = true }
 oxc_parser = { workspace = true, features = [] }
 oxc_regular_expression = { workspace = true, optional = true }
 oxc_semantic = { workspace = true, optional = true }
+oxc_sourcemap = { workspace = true, optional = true }
 oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 oxc_transformer = { workspace = true, optional = true }
@@ -60,7 +66,7 @@ full = [
 semantic = ["oxc_semantic"]
 transformer = ["oxc_transformer", "oxc_transformer_plugins"]
 minifier = ["oxc_mangler", "oxc_minifier"]
-codegen = ["oxc_codegen", "oxc_codegen/sourcemap"]
+codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap"]
 mangler = ["oxc_mangler"]
 cfg = ["oxc_cfg", "oxc_semantic/cfg"]
 isolated_declarations = ["oxc_isolated_declarations"]

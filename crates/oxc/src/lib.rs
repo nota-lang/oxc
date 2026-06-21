@@ -114,6 +114,9 @@ pub mod codegen {
     pub use oxc_codegen::*;
 }
 
+#[cfg(feature = "codegen")]
+pub mod nota;
+
 #[cfg(feature = "isolated_declarations")]
 pub mod isolated_declarations {
     //! `.d.ts` emit for Isolated Declarations.

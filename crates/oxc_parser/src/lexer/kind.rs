@@ -203,6 +203,8 @@ fieldless_enum! {
         PrivateIdentifier,
         // JSX
         JSXText,
+        // Nota markup body text (the literal-text run inside `@tag{ ... }`); see `lexer/markup.rs`.
+        MarkupText,
         // Decorator
         At,
     }
@@ -698,6 +700,7 @@ impl Kind {
             TemplateTail => "}",
             PrivateIdentifier => "#identifier",
             JSXText => "jsx",
+            MarkupText => "markup text",
             At => "@",
             Assert => "assert",
             Any => "any",
