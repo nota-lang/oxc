@@ -1,0 +1,63 @@
+# The Nota wasm compiler backend — the reader (`oxc::nota`) compiled to wasm so it runs in-browser.
+#
+# Built with `wasm-pack` (NOT napi), so it does not use the `napi`/`napi-derive` stack the sibling
+# `napi/*` crates use; it is here only because the workspace `members = [... "napi/*" ...]` glob
+# auto-includes it (contract §6: agents never edit shared `Cargo.toml`). It exposes the three
+# `oxc::nota` entries — `compile` / `compile_with_mappings` / `compile_virtual` — to JS via
+# `wasm-bindgen`, returning `serde-wasm-bindgen`-serialized plain JS objects (`{ code }`,
+# `{ code, mappings }`). The Part-4 playground imports the `pkg/` this produces.
+#
+# Build:  wasm-pack build napi/nota_wasm --target web --out-dir pkg   (see README.md)
+[package]
+name = "nota_wasm"
+version = "0.0.1"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include = ["/src", "README.md"]
+keywords.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+description = "Nota reader compiled to WebAssembly for the in-browser playground."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[dependencies]
+# Only the `codegen` feature of the umbrella crate is needed: it pulls in `oxc_parser` (the Nota
+# reader) + `oxc_codegen` + `oxc_sourcemap`, which is exactly what `oxc::nota` requires. No
+# `transformer`/`minifier`/`semantic`/`linter` → keeps the wasm binary small and avoids dragging in
+# deps that may not be wasm-friendly. (oxc ships a wasm playground, so parser+codegen compile to wasm.)
+oxc = { workspace = true, features = ["codegen"] }
+
+# wasm-bindgen 0.2.89 — pinned to match the `wasm-bindgen` CLI installed in this environment
+# (`wasm-bindgen --version` → 0.2.89). wasm-pack regenerates glue with the matching CLI, but pinning
+# keeps `cargo check --target wasm32-unknown-unknown` and the wasm-pack build on the same ABI.
+wasm-bindgen = "=0.2.89"
+serde = { workspace = true, features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+
+# Nicer panics in the browser console (maps a Rust panic to `console.error` instead of an opaque
+# `unreachable`). Tiny; only wired in `start()`.
+console_error_panic_hook = "0.1"
+
+[package.metadata.cargo-shear]
+# `console_error_panic_hook` is referenced only behind `#[cfg(feature = ...)]`-free `start()`; keep it.
+ignored = ["console_error_panic_hook"]
+
+[package.metadata.wasm-pack.profile.release]
+# Disable wasm-pack's bundled `wasm-opt` pass. The Rust 1.95 toolchain emits bulk-memory ops
+# (`memory.fill`/`memory.copy`) by default, but an older `wasm-opt` on PATH rejects them without
+# `--enable-bulk-memory-opt` ("memory.copy operations require bulk memory operations"), failing the
+# build at the optimize step (the .wasm itself compiled + bindgen'd fine). The playground's bundler
+# (Vite) ships its own wasm handling; size-optimization can be re-enabled later with a newer wasm-opt
+# (`wasm-opt = ["-O", "--enable-bulk-memory"]`). Disabling it keeps `wasm-pack build` green here.
+wasm-opt = false
