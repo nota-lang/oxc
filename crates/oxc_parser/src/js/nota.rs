@@ -24,10 +24,13 @@
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_span::{SourceType, Span};
+use oxc_span::{GetSpan, SourceType, Span};
 
 use crate::{
-    ParserConfig as Config, ParserImpl, diagnostics, error_handler::FatalError, lexer::Kind,
+    ParserConfig as Config, ParserImpl, diagnostics,
+    error_handler::FatalError,
+    js::nota_mapping::{NotaMappingKind, NotaMappingMark},
+    lexer::Kind,
 };
 
 /// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
@@ -121,6 +124,45 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         match self.finish_nota(()) {
             Ok(()) => Ok(program),
             Err(errors) => Err(errors),
+        }
+    }
+
+    /// Parse a `.nota` file in document mode AND collect Volar `CodeMapping` marks (H1).
+    ///
+    /// Same lowering as [`Self::parse_nota_document`] with `nota_collect_mappings` on, so the
+    /// embedded-JS splice sites and component tags push [`NotaMappingMark`]s into `nota_mappings`.
+    /// Returns the lowered `Program` plus the (source-ordered) marks; the generated offsets are
+    /// paired downstream (codegen's offset log). See `js/nota_mapping.rs`.
+    pub(crate) fn parse_nota_document_collecting_mappings(
+        mut self,
+    ) -> Result<(Program<'a>, Vec<NotaMappingMark>), Vec<OxcDiagnostic>> {
+        self.nota_markup = true;
+        self.nota_collect_mappings = true;
+        let mut module_items = self.ast.vec();
+        let mut doc_prelude = self.ast.vec();
+        let mut is_async = false;
+        let items = self.parse_document_body(&mut module_items, &mut doc_prelude, &mut is_async);
+
+        let program = self.build_document(items, module_items, doc_prelude, is_async);
+        // Take the marks out before `finish_nota` consumes `self`.
+        let mut marks = std::mem::take(&mut self.nota_mappings);
+        // Source-order the marks (the parse visits children before some siblings; downstream Volar
+        // wants ascending source offsets for a stable binary search).
+        marks.sort_by_key(|m| (m.span.start, m.span.end));
+        match self.finish_nota(()) {
+            Ok(()) => Ok((program, marks)),
+            Err(errors) => Err(errors),
+        }
+    }
+
+    /// Record a Nota source→generated mapping mark (H1), iff mapping collection is enabled.
+    ///
+    /// A no-op (and zero-cost) on the build / expression entries (`nota_collect_mappings == false`).
+    /// Empty spans are dropped — they carry no source and would alias generated boilerplate.
+    #[inline]
+    pub(crate) fn record_nota_mapping(&mut self, span: Span, kind: NotaMappingKind) {
+        if self.nota_collect_mappings && !span.is_empty() {
+            self.nota_mappings.push(NotaMappingMark::new(span, kind));
         }
     }
 
@@ -230,6 +272,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             HeadKind::Named { name, span } => self.ast.expression_identifier(span, name),
             HeadKind::Dynamic(expr) => expr,
         };
+        // H1: `@name` / `@(expr)` interpolation is embedded JS spliced verbatim (full caps).
+        self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
         match was_named {
             // Bare-ident interpolation: identifier not yet consumed; resume text from its end.
             true if in_body => self.advance_for_markup_text(),
@@ -536,6 +580,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 let span_start = self.start_span();
                 self.bump_any();
                 let argument = self.parse_assignment_expression_or_higher();
+                // H1: the spread argument is embedded JS (full caps).
+                self.record_nota_mapping(argument.span(), NotaMappingKind::EmbeddedJs);
                 let span = self.end_span(span_start);
                 let spread = self.ast.spread_element(span, argument);
                 props.push(ObjectPropertyKind::SpreadProperty(self.ast.alloc(spread)));
@@ -570,10 +616,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if self.eat(Kind::Colon) {
             // `key: value` — value may be embedded JS or markup (`@`-form).
             let value = if self.at(Kind::At) {
-                // Markup-valued prop: an `@`-form as a JS expression (in_body = false).
+                // Markup-valued prop: an `@`-form as a JS expression (in_body = false). The form
+                // records its own mappings (component tag / nested embedded JS).
                 self.parse_nota_form(false)
             } else {
-                self.parse_assignment_expression_or_higher()
+                // Embedded-JS prop value (`[href: url]`, `[style: {color}]`, …) — full caps (H1).
+                let value = self.parse_assignment_expression_or_higher();
+                self.record_nota_mapping(value.span(), NotaMappingKind::EmbeddedJs);
+                value
             };
             let span = self.end_span(span_start);
             ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
@@ -598,6 +648,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 );
                 return self.fatal_error(error);
             };
+            // H1: the shorthand value is an identifier reference (embedded JS, full caps). Map the
+            // key span — the shorthand emits the same name byte-for-byte at that source location.
+            self.record_nota_mapping(key_span, NotaMappingKind::EmbeddedJs);
             let value = self.ast.expression_identifier(key_span, name);
             let span = self.end_span(span_start);
             ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
@@ -621,7 +674,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// → either the expression directly (if a valid tag: Capitalized ident / member expr) or an
     /// IIFE introducing a fresh `_Tag` binding.
     fn build_element(
-        &self,
+        &mut self,
         span: Span,
         head: HeadKind<'a>,
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
@@ -630,6 +683,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         match head {
             HeadKind::Named { name, span: tag_span } => {
                 let tag = if is_component_name(name) {
+                    // H1: a component tag (`@Aside` → `h(Aside, …)`) is a navigation/hover range. A
+                    // host tag (`@p` → `h("p", …)`) is NOT a TS symbol — leave it unmapped.
+                    self.record_nota_mapping(tag_span, NotaMappingKind::ComponentIdentifier);
                     self.ast.expression_identifier(tag_span, name)
                 } else {
                     self.ast.expression_string_literal(tag_span, name, None)
@@ -638,10 +694,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             HeadKind::Dynamic(expr) => {
                 if is_valid_tag_expr(&expr) {
-                    // `@(Box){…}` / `@(ui.Card){…}` — emit the expression directly as the tag.
+                    // `@(Box){…}` / `@(ui.Card){…}` — emit the expression directly as the tag. The
+                    // expr is a tag reference (H1: navigation/hover, like a component identifier).
+                    self.record_nota_mapping(expr.span(), NotaMappingKind::ComponentIdentifier);
                     self.build_h(span, expr, props, children)
                 } else {
-                    // `@(getTag()){…}` — IIFE: `(() => { const _Tag = expr; return h(_Tag, …); })()`
+                    // `@(getTag()){…}` — IIFE: `(() => { const _Tag = expr; return h(_Tag, …); })()`.
+                    // The head is arbitrary embedded JS (full caps).
+                    self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
                     self.build_dynamic_iife(span, expr, props, children)
                 }
             }
@@ -793,6 +853,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // current token: the `if` keyword. Parse the `(cond)` test (JS expression).
         self.bump_any(); // → `(`
         let cond = self.parse_paren_expression();
+        // H1: the `@if` condition is embedded JS (full caps).
+        self.record_nota_mapping(cond.span(), NotaMappingKind::EmbeddedJs);
         // After `)` the next JS token is the branch-body `{` (whitespace skipped by the JS lexer).
         let cons = self.parse_branch_fragment(span_start);
         if self.has_fatal_error() {
@@ -857,6 +919,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
         self.bump_any(); // consume `of`
         let iter = self.parse_assignment_expression_or_higher();
+        // H1: the `@for` binding pattern + iterable are embedded JS (full caps).
+        self.record_nota_mapping(bind.span(), NotaMappingKind::EmbeddedJs);
+        self.record_nota_mapping(iter.span(), NotaMappingKind::EmbeddedJs);
         self.expect_closing(Kind::RParen, open);
         // Body `{ … }`: the next JS token is `{` (whitespace skipped).
         let (children, body_end) = self.parse_control_branch();
@@ -1768,7 +1833,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let body_start = head.end + 2;
         let (children, after) = self.collect_verbatim_body(body_start);
         let span = Span::new(span_start, after);
-        let element = self.build_element(span, head.kind, self.ast.vec(), children);
+        let empty_props = self.ast.vec();
+        let element = self.build_element(span, head.kind, empty_props, children);
         // Resume the outer context past the closing `}|`.
         if in_body {
             self.nota_seek_markup(after);
@@ -2140,6 +2206,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let expr = self.parse_expr();
             self.expect(Kind::RParen);
             let after = self.prev_token_end;
+            // H1: a math `@(expr)` interpolation is embedded JS (full caps).
+            self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
             (expr, after)
         } else {
             // `@name` — scan a JS-identifier run over the raw source, stopping at `$` (the delimiter).
@@ -2165,7 +2233,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 return (at_lit, at_off + 1);
             }
             let name: &'a str = &self.source_text[name_start..j];
-            let expr = self.ast.expression_identifier(Span::new(name_start as u32, j as u32), name);
+            let name_span = Span::new(name_start as u32, j as u32);
+            // H1: a math `@name` interpolation is an identifier reference (embedded JS, full caps).
+            self.record_nota_mapping(name_span, NotaMappingKind::EmbeddedJs);
+            let expr = self.ast.expression_identifier(name_span, name);
             (expr, j as u32)
         }
     }
@@ -2322,6 +2393,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if statement_uses_await(&stmt) {
             *is_async = true;
         }
+        // H1: a `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full caps). Map the
+        // whole statement span — the language server runs TS over its leaf nodes (each carrying its
+        // own source span), and the statement-level mark anchors the embedded region for Volar.
+        self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
         match stmt {
             // `import …` / `export …` hoist to module scope unchanged.
             Statement::ImportDeclaration(_)
@@ -3338,5 +3413,91 @@ mod scribble {
             // `@foo{bar @baz …⏎     blah}` line: "bar " <E> ; trailing space before E kept.
             assert_eq!(render(&[t("bar "), E, t("\n     blah")]), r#""bar " E "\n" "blah""#);
         }
+    }
+}
+
+// ===============================================================================================
+// H1 — `NotaMappingMark` collection (the reader side of the Volar CodeMappings). Verifies the
+// reader records the right *source* spans + kinds; the source→generated join + capability mapping
+// lives in `oxc::nota` (tested there, where codegen is available).
+// ===============================================================================================
+#[cfg(test)]
+mod mapping_collection_tests {
+    use oxc_allocator::Allocator;
+    use oxc_span::SourceType;
+
+    use super::{NotaMappingKind, NotaMappingMark};
+    use crate::Parser;
+
+    /// Parse `src` in document mode collecting marks; return them (source-ordered).
+    fn marks(src: &str) -> Vec<NotaMappingMark> {
+        let allocator = Allocator::default();
+        let (_program, marks) = Parser::new(&allocator, src, SourceType::tsx())
+            .parse_nota_document_collecting_mappings()
+            .unwrap_or_else(|e| panic!("parse failed for {src:?}: {e:?}"));
+        marks
+    }
+
+    /// The byte offset of the unique substring `needle` in `src`.
+    fn off(src: &str, needle: &str) -> u32 {
+        u32::try_from(src.find(needle).expect("needle present")).unwrap()
+    }
+
+    fn kind_at(marks: &[NotaMappingMark], start: u32) -> Option<NotaMappingKind> {
+        marks.iter().find(|m| m.span.start == start).map(|m| m.kind)
+    }
+
+    #[test]
+    fn component_tag_is_component_identifier() {
+        let src = "@Aside{hi}\n";
+        let m = marks(src);
+        assert_eq!(kind_at(&m, off(src, "Aside")), Some(NotaMappingKind::ComponentIdentifier));
+    }
+
+    #[test]
+    fn host_tag_is_not_marked() {
+        let src = "@p{hi}\n";
+        let m = marks(src);
+        // `@p` host tag → no mark (offset 1 is the `p`).
+        assert!(kind_at(&m, 1).is_none(), "host tag must not be marked: {m:?}");
+    }
+
+    #[test]
+    fn interpolation_and_prop_and_statement_are_embedded_js() {
+        let src = "% const n: number = x;\n@p[id: theId]{@(user)}\n";
+        let m = marks(src);
+        // `@(user)` interpolation.
+        assert_eq!(kind_at(&m, off(src, "user")), Some(NotaMappingKind::EmbeddedJs));
+        // prop value `theId`.
+        assert_eq!(kind_at(&m, off(src, "theId")), Some(NotaMappingKind::EmbeddedJs));
+        // the `%` statement (its span starts at `const`).
+        assert_eq!(kind_at(&m, off(src, "const")), Some(NotaMappingKind::EmbeddedJs));
+    }
+
+    #[test]
+    fn for_head_binding_and_iterable_are_embedded_js() {
+        let src = "@for (item of items) {@item}\n";
+        let m = marks(src);
+        assert_eq!(kind_at(&m, off(src, "item of")), Some(NotaMappingKind::EmbeddedJs)); // binding
+        assert_eq!(kind_at(&m, off(src, "items")), Some(NotaMappingKind::EmbeddedJs)); // iterable
+    }
+
+    #[test]
+    fn marks_are_source_ordered() {
+        let src = "@p[a: x][b: y]{@(z)}\n";
+        let m = marks(src);
+        let starts: Vec<u32> = m.iter().map(|mk| mk.span.start).collect();
+        let mut sorted = starts.clone();
+        sorted.sort_unstable();
+        assert_eq!(starts, sorted, "marks must be source-ordered: {starts:?}");
+    }
+
+    #[test]
+    fn non_mapping_entry_collects_nothing() {
+        // The plain `parse_nota_document` entry must NOT collect (allocation-free build path).
+        let allocator = Allocator::default();
+        let prog = Parser::new(&allocator, "@p{@(x)}\n", SourceType::tsx()).parse_nota_document();
+        assert!(prog.is_ok());
+        // (No marks are returned by this entry; the collecting entry is a distinct method.)
     }
 }

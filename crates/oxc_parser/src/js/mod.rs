@@ -10,6 +10,7 @@ mod expression;
 mod function;
 mod module;
 mod nota;
+pub mod nota_mapping;
 mod object;
 mod operator;
 mod statement;

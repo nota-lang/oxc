@@ -4,7 +4,7 @@ Internal design notes for the Nota reader built into this oxc fork (branch `nota
 cross-team spec is `/Users/will/Code/nota/design/contract.md`; this file is the **Part-1
 implementation memory** — read it before extending the reader. Updated per phase.
 
-## Status: Phases A, B, C, D, E, F complete ✓ — **the reader is feature-complete.**
+## Status: Phases A, B, C, D, E, F complete ✓ — **the reader is feature-complete.** H1 (Volar CodeMappings) + H2 (type-preserving virtual emit) complete ✓ — **the compiler-feedback hooks Part 5 (Volar) needs are landed.**
 
 - **A** (spike): `@p{Hello}` → `h("p", {}, ["Hello"])`, round-tripped through `oxc_codegen`.
 - **B** (element core): host/component/dynamic tags, `[props]` (string/expr/shorthand/spread/
@@ -216,6 +216,19 @@ the cleaner fit (the closers `}|`/fence/`$$` are multi-byte and context-dependen
 **Public entry** · `crates/oxc_parser/src/lib.rs`: field `nota_markup: bool` on `ParserImpl`
 (init `false`) + public `Parser::parse_nota_expression() -> Result<Expression, Vec<OxcDiagnostic>>`.
 
+**H1/H2 additions to the seam (small, mostly side-channels — the shallow fork holds):**
+- `crates/oxc_parser/src/js/nota_mapping.rs` (NEW, `pub mod`): the `NotaMappingMark`/`NotaMappingKind`
+  types (re-exported from `oxc_parser`). Two new `ParserImpl` fields (`nota_collect_mappings: bool`,
+  `nota_mappings: Vec<NotaMappingMark>`, both default-empty/off) + `record_nota_mapping` +
+  `Parser::parse_nota_document_collecting_mappings`. The marks are pushed at the already-existing
+  `&mut self` splice sites in `js/nota.rs` (no new control flow; `build_element` went `&self`→`&mut self`).
+- `crates/oxc_codegen/src/lib.rs`: opt-in `Codegen::with_nota_offset_log()` +
+  `CodegenReturn.nota_offset_log` (a `Vec<(u32,u32,u32)>` appended at the **existing**
+  `add_source_mapping*` hooks; `#[cfg(feature="sourcemap")]`, `None`/empty when unused). No new codegen
+  walk — it rides the sourcemap hook.
+- `crates/oxc/src/nota.rs`: the `CodeMapping`/`MappingCapabilities` types + `build_code_mappings`
+  (the join) + `compile_with_mappings`/`compile_virtual`. This is the only place with reader + codegen.
+
 ## The `@` disambiguation rule (LOAD-BEARING — do not break)
 
 A single parser-owned bool **`ParserImpl.nota_markup`** (D3: markup state in the parser, not the
@@ -311,35 +324,122 @@ original guidance, recorded for future readers:
 - **One deferred gap** (out of Phase-F scope): head-adjacent `@foo\:` (the JS lexer eats the `\` after
   a bare-ident head before classification). See the "New sites added in F" §. Body-position `\:` works.
 
-## Blockers for H1/H2 (Part 5 — CodeMappings + virtual emit; the LSP's deps)
+## H1 (Volar CodeMappings) + H2 (type-preserving virtual emit) — DONE ✓
 
-These are the cross-cutting compiler-feedback requirements Part 5 places back on the reader (contract
-§4 H1/H2). NOT yet started; the spans needed already exist.
+The cross-cutting compiler-feedback hooks Part 5 (the Volar LSP) places back on the reader (contract
+§4 H1/H2; impl.md §5.1/§5.3). Both landed. **Public API (`@nota-lang/compiler` shim + Part 5 V call
+these):**
 
-- **H1 — Volar `CodeMappings`.** The reader already keeps embedded-JS spans byte-exact (the §1.6
-  span-fidelity invariant: `@(expr)`/`[props]`/`%`-body nodes carry their *source* spans because they
-  are spliced, not reformatted). H1 is **exposing** that as per-range `(sourceOffset, generatedOffset,
-  length, capabilities)` tuples, not new analysis. **The gap:** generated boilerplate currently uses
-  `Span::empty(start)` / synthetic spans (every `build_h`/`build_fragment`/`build_decode`/`build_for_map`
-  node), and codegen owns the generated offsets — so H1 needs a codegen pass (or a post-walk) that
-  pairs each *source-spanned* node with its emitted offset and marks boilerplate unmapped. Component-
-  identifier tags (`h(Aside, …)`) and `@(expr)` heads are the navigation/hover ranges; the keyed
-  `Fragment({key:_i},…)` / `.map((x,_i)=>…)` wrappers D/E synthesize are **generated-only** (unmapped).
-  - **Phase-F status for H1:** the math `@(expr)`/`@name` interpolations are spliced oxc nodes that
-    *do* carry source spans (the substitution exprs in `build_string_raw_interp`), and `parse_math_interp`
-    builds the `@name` identifier with a real `Span::new(name_start, j)` — so they are H1-mappable like
-    any `@(expr)`. But the **`String.raw` scaffolding is generated-only** (the `String.raw` member, the
-    `h(CodeInline|…)` wrapper, the `TaggedTemplateExpression`/`TemplateLiteral` nodes all use synthetic
-    spans) and stays unmapped. One nuance H1 must respect: a raw quasi's source ≠ its emitted text when
-    `raw_quasi` injected an escaping `\` before a backtick/`${` — those quasis are not byte-identical to
-    source, so they cannot be 1:1 mapped (mark unmapped); the common (un-escaped) raw quasi *is*
-    byte-identical to its `[from,to)` source slice and could be mapped if a raw-content hover is ever
-    wanted (low priority — raw spans are opaque to TS).
-- **H2 — type-preserving virtual emit.** "Same parse, two codegen tails" (contract §4 H2). The reader
-  is already codegen-agnostic (it builds an oxc `Program`/`Expression`; the build emit vs the virtual
-  `.tsx` emit differ only in the codegen call + TS-stripping). Embedded TS in `[props]`/`%`/`@(expr)`
-  is parsed by oxc's TS-aware `parse_expr`/`parse_statement` already, so the types are *in the AST*;
-  H2 just needs the virtual tail to NOT strip them and to print `.tsx`. No reader change expected.
+```rust
+// crates/oxc/src/nota.rs  (the `oxc` umbrella crate — the only place with reader + codegen)
+compile(src, source_map_path?)                 -> NotaCompiled            { code, map }            // build (unchanged; mjs)
+compile_with_mappings(src, source_map_path?)   -> NotaCompiledWithMappings{ code, map, mappings }  // build + H1, parses TSX
+compile_virtual(src)                           -> NotaVirtualCompiled     { code /*.tsx*/, mappings } // H2 + H1, parses TSX
+// mappings: Vec<CodeMapping { source_offsets[], generated_offsets[], lengths[], generated_lengths?, data } >
+// data: MappingCapabilities { completion, format, navigation, semantic, structure, verification }  (Volar CodeInformation)
+//   ::full()            → embedded JS/TS (all six true)
+//   ::navigation_hover() → component identifier (navigation+semantic+verification; NOT completion/format/structure)
+```
+
+### The mechanism — reader marks × codegen offset-log, joined + byte-exact-filtered
+
+H1 is **exposing existing data** (§1.6: embedded-JS spans are spliced verbatim, so they carry *source*
+spans), not new analysis. Three pieces:
+
+1. **Reader-side marks** (`crates/oxc_parser/src/js/nota_mapping.rs`: `NotaMappingMark { span, kind }`,
+   `NotaMappingKind::{EmbeddedJs, ComponentIdentifier}`; re-exported from `oxc_parser`). A
+   `nota_mappings: Vec<NotaMappingMark>` accumulator on `ParserImpl`, gated by `nota_collect_mappings`
+   (off for the build/expression entries → zero-cost). `record_nota_mapping(span, kind)` is pushed at
+   each embedded-JS splice / component tag — all `&mut self` parse sites (no `&self` build-fn churn):
+   - **`build_element`** (made `&mut self`): a Capitalized tag → `ComponentIdentifier` (the `tag_span`);
+     a host tag (`@p`) → **not marked** (it lowers to the string `"p"`, not a TS symbol). A dynamic head
+     `@(Box)`/`@(ui.Card)` used directly as a tag → `ComponentIdentifier`; an IIFE head `@(getTag())` →
+     `EmbeddedJs`.
+   - **`finish_interpolation`** (`@name`/`@(expr)`), **`parse_prop_entry`** (the embedded-JS value branch
+     + the shorthand-value identifier), **`parse_props_group`** (`...spread` arg), **`route_statement`**
+     (`%`/`%%%` body — the whole statement span), **`parse_math_interp`** (`@(expr)`/`@name`),
+     **`parse_nota_if`** (cond), **`parse_nota_for`** (binding + iterable) → all `EmbeddedJs`.
+   - New entry `Parser::parse_nota_document_collecting_mappings() -> (Program, Vec<NotaMappingMark>)`
+     (marks source-sorted before return).
+2. **Codegen offset-log** (`crates/oxc_codegen/src/lib.rs`). Opt-in `Codegen::with_nota_offset_log()`;
+   `CodegenReturn.nota_offset_log: Vec<(source_start, source_end, generated_start)>`. Recorded at the
+   **existing** `add_source_mapping` / `add_source_mapping_for_name` hooks (the same spots that feed the
+   sourcemap), where `code.len()` is exactly the generated byte offset the node's text begins at. This
+   is "leverage the sourcemap mechanism" literally — every source-spanned node logs; the `Span::empty`
+   boilerplate (`h`/`{}`/`[`/`Fragment`/`decode`/`.map`/`String.raw`) is `is_empty()`-skipped, so it
+   never logs (→ unmapped, as required). Gated behind the `sourcemap` feature; `None` ⇒ no cost.
+3. **The join** (`build_code_mappings` in `oxc::nota`). (a) Keep only **innermost leaves** of the log
+   (drop any entry that strictly contains another — those are composite nodes codegen *reformats*:
+   `a+b`→`a + b`, `const   x`→`const x`, so they are not byte-exact). (b) For each mark `[s,e)`, emit one
+   segment per leaf inside it, with the mark's capability. (c) **Byte-exact filter** — drop any segment
+   whose source slice ≠ generated slice. This is the load-bearing safety net: a `%` statement mark on a
+   component body (`%let X = inlineComponent(()=>@span…)`) sweeps in the lowered-markup leaves; the
+   host-tag string `"span"` (source `span`, no quotes → generated `"span"`) is **not** byte-exact and is
+   correctly dropped, while the real embedded leaves (`useState`, `setColor`, `"red"`, `color`) survive.
+   Result: **every emitted segment round-trips byte-for-byte**, so `generated_lengths` is always `None`
+   (source length == generated length for an identifier/atom).
+
+**Granularity is per-leaf, not per-region** — and that is the *correct* Volar model: a `CodeMapping`
+segment requires equal source/generated length, so a reformatted region can't be one segment, but each
+identifier maps exactly. Interior navigation (go-to-def/hover on `count` *inside* `@(user.count())`)
+works because `count` is its own byte-exact leaf. Operators/keywords/whitespace between leaves are
+unmapped (they are not navigable symbols; TS needs no mapping for them). (If region-spanning diagnostics
+ever need coarsening, add a region segment with `generated_lengths` — deferred; leaves suffice for V/W.)
+
+### H2 strip-vs-preserve — **the finding: there is NO strip step; codegen preserves types.**
+
+`oxc_codegen` **prints** TS type annotations (`gen.rs` `type_annotation.print(p, ctx)` everywhere) —
+it emits whatever is in the AST. Type *stripping* lives in `oxc_transformer`, a separate crate the
+reader never invokes. So H2's "two codegen tails" collapses to a **parse-mode choice, not a codegen
+choice**: parse with `SourceType::tsx()` so embedded TS is in the AST, and the types are preserved for
+free. `compile_virtual` does exactly this (verified: `% const n: number = count()` → emitted
+`const n: number = count();`, type kept; `@for (x of xs as string[])` → `as string[]` kept). The "frame
+`.tsx`" part is the Part-5 plugin declaring the virtual file as `.tsx` — nothing to add to the code
+string (it is already valid TSX). **`compile_virtual` does NOT prepend the runtime import / ambient
+`CodeInline`/`CodeBlock`/`Math` decls** (contract §1: the shim/plugin owns that). When Part 5 V prepends
+the typing preamble it MUST shift every `generated_offsets` by the prefix length (`source_offsets`
+unchanged).
+
+**Parse-mode inconsistency (flagged for the orchestrator):** the existing `compile` (build path) still
+parses `SourceType::default()` = **mjs** (so it *rejects* embedded TS — `% const n: number` fails),
+while `compile_with_mappings`/`compile_virtual` parse **tsx**. Left `compile` as-is per "keep the
+existing `compile`", but the all-JS fixtures are byte-identical under tsx (verified), so switching
+`compile` to `SourceType::tsx()` is a safe one-line fix to make the build path TS-capable and
+consistent — an orchestrator call (it feeds the runtime integration loop).
+
+### What Part 5 V (the Volar `LanguagePlugin`) now consumes
+
+`compile_virtual(source) -> { code, mappings }`: `code` is the virtual `.tsx` (TS types preserved);
+`mappings: Vec<CodeMapping>` are the byte-exact `.nota`↔`.tsx` ranges with Volar capability flags. V:
+(1) prepends the runtime-typing preamble to `code` and shifts `generated_offsets`; (2) hands the snapshot
++ mappings to `@volar/typescript`; (3) maps TS results back through `mappings` to `.nota` positions.
+Embedded JS → full caps (diagnostics/hover/completion/def/rename); `@Aside` → navigation+hover (incl. the
+`@Unknown{}` "Cannot find name" scope error via `verification`); host tags + `h(`/`{}`/`[`/`Fragment`/
+`decode`/`String.raw` boilerplate → unmapped.
+
+### Phase-F nuances H1 respects (recorded)
+
+The math `@(expr)`/`@name` interps are spliced source-spanned nodes (marked `EmbeddedJs` in
+`parse_math_interp`). The **`String.raw` scaffolding stays unmapped** (the `String.raw` member, the
+`h(CodeInline|…)` wrapper, the `TaggedTemplateExpression`/`TemplateLiteral` use synthetic spans → never
+logged). A raw quasi where `raw_quasi` injected an escaping `\` before a backtick/`${` is **not**
+byte-identical to source — the byte-exact filter (join step (c)) drops it automatically, so no special
+case is needed (raw content is opaque to TS anyway).
+
+### Tests (feature→test→green)
+
+- **Parser-side** (`crates/oxc_parser/src/js/nota.rs` `mod mapping_collection_tests`, 6 tests): marks
+  carry the right kind (`@Aside`→ComponentIdentifier; host `@p`→unmarked; `@(expr)`/prop/`%`/`@for`
+  head→EmbeddedJs) and are source-ordered.
+- **End-to-end** (`crates/oxc/src/nota.rs` `mod h1_h2`, 8 tests): a source offset inside embedded JS
+  round-trips to the correct generated offset with full caps; prop expr + `@(user)` map; component
+  identifier → navigation+hover; host tag + boilerplate unmapped; **every segment byte-exact**; the
+  virtual emit preserves `: number` + `as string[]`; build and virtual map the same source ranges; the
+  contract §2 canonical golden maps byte-exact (F1 binding, `@Colorized` tag ref, `@for` iterable).
+- 82 parser-lib · 229 codegen-integration (120 nota fixtures unchanged) · 11 `oxc::nota` green.
+  `cargo fmt --check` clean. **Parser conformance unchanged vs the A–F baseline** (test262 100%, babel
+  99.37%/98.26%, typescript 99.86%/59.22%, misc 100%; the pre-existing `semantic_babel` tail
+  stack-overflow is identical before/after).
 
 ## Phase B–F sequencing notes (history, for context)
 
