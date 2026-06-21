@@ -3473,6 +3473,342 @@ impl NotaMarkup<'_> {
     }
 }
 
+impl NotaDocument<'_> {
+    /// Get [`NodeId`] of [`NotaDocument`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaDocument`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaText<'_> {
+    /// Get [`NodeId`] of [`NotaText`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaText`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaStatement<'_> {
+    /// Get [`NodeId`] of [`NotaStatement`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaStatement`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaElement<'_> {
+    /// Get [`NodeId`] of [`NotaElement`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaElement`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaHostName<'_> {
+    /// Get [`NodeId`] of [`NotaHostName`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaHostName`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaDynamicTag<'_> {
+    /// Get [`NodeId`] of [`NotaDynamicTag`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaDynamicTag`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaFieldProp<'_> {
+    /// Get [`NodeId`] of [`NotaFieldProp`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaFieldProp`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaPropName<'_> {
+    /// Get [`NodeId`] of [`NotaPropName`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaPropName`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaPropExpr<'_> {
+    /// Get [`NodeId`] of [`NotaPropExpr`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaPropExpr`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaShorthandProp<'_> {
+    /// Get [`NodeId`] of [`NotaShorthandProp`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaShorthandProp`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaSpreadProp<'_> {
+    /// Get [`NodeId`] of [`NotaSpreadProp`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaSpreadProp`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaFragment<'_> {
+    /// Get [`NodeId`] of [`NotaFragment`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaFragment`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaInterpolation<'_> {
+    /// Get [`NodeId`] of [`NotaInterpolation`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaInterpolation`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaIf<'_> {
+    /// Get [`NodeId`] of [`NotaIf`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaIf`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaFor<'_> {
+    /// Get [`NodeId`] of [`NotaFor`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaFor`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaCode<'_> {
+    /// Get [`NodeId`] of [`NotaCode`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaCode`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaMath<'_> {
+    /// Get [`NodeId`] of [`NotaMath`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaMath`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaVerbatim<'_> {
+    /// Get [`NodeId`] of [`NotaVerbatim`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaVerbatim`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaEmphasis<'_> {
+    /// Get [`NodeId`] of [`NotaEmphasis`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaEmphasis`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaHeading<'_> {
+    /// Get [`NodeId`] of [`NotaHeading`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaHeading`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
+impl NotaListItem<'_> {
+    /// Get [`NodeId`] of [`NotaListItem`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaListItem`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
 impl Expression<'_> {
     /// Get [`NodeId`] of [`Expression`].
     // `#[inline(always)]` because this should boil down to a single instruction.
@@ -4456,6 +4792,122 @@ impl TSModuleReference<'_> {
             Self::ExternalModuleReference(it) => it.node_id(),
             Self::IdentifierReference(it) => it.node_id(),
             Self::QualifiedName(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaMarkupKind<'_> {
+    /// Get [`NodeId`] of [`NotaMarkupKind`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Document(it) => it.node_id(),
+            Self::Element(it) => it.node_id(),
+            Self::Fragment(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+            Self::If(it) => it.node_id(),
+            Self::For(it) => it.node_id(),
+            Self::Code(it) => it.node_id(),
+            Self::Math(it) => it.node_id(),
+            Self::Verbatim(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaChild<'_> {
+    /// Get [`NodeId`] of [`NotaChild`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Text(it) => it.node_id(),
+            Self::Statement(it) => it.node_id(),
+            Self::Element(it) => it.node_id(),
+            Self::Fragment(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+            Self::If(it) => it.node_id(),
+            Self::For(it) => it.node_id(),
+            Self::Code(it) => it.node_id(),
+            Self::Math(it) => it.node_id(),
+            Self::Verbatim(it) => it.node_id(),
+            Self::Emphasis(it) => it.node_id(),
+            Self::Heading(it) => it.node_id(),
+            Self::ListItem(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaTag<'_> {
+    /// Get [`NodeId`] of [`NotaTag`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Host(it) => it.node_id(),
+            Self::Component(it) => it.node_id(),
+            Self::Dynamic(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaProp<'_> {
+    /// Get [`NodeId`] of [`NotaProp`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Field(it) => it.node_id(),
+            Self::Shorthand(it) => it.node_id(),
+            Self::Spread(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaPropValue<'_> {
+    /// Get [`NodeId`] of [`NotaPropValue`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Expression(it) => it.node_id(),
+            Self::Markup(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaElse<'_> {
+    /// Get [`NodeId`] of [`NotaElse`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::ElseIf(it) => it.node_id(),
+            Self::Else(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaMathPart<'_> {
+    /// Get [`NodeId`] of [`NotaMathPart`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Raw(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+        }
+    }
+}
+
+impl NotaVerbatimPart<'_> {
+    /// Get [`NodeId`] of [`NotaVerbatimPart`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Raw(it) => it.node_id(),
+            Self::Child(it) => it.node_id(),
         }
     }
 }

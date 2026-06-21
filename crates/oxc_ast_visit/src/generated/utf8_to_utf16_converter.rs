@@ -1133,4 +1133,130 @@ impl<'a> VisitMut<'a> for Utf8ToUtf16Converter<'_> {
         walk_mut::walk_nota_markup(self, it);
         self.convert_offset(&mut it.span.end);
     }
+
+    fn visit_nota_document(&mut self, it: &mut NotaDocument<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_document(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_text(&mut self, it: &mut NotaText<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_text(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_statement(&mut self, it: &mut NotaStatement<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_statement(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_element(&mut self, it: &mut NotaElement<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_element(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_host_name(&mut self, it: &mut NotaHostName<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_host_name(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_dynamic_tag(&mut self, it: &mut NotaDynamicTag<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_dynamic_tag(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_field_prop(&mut self, it: &mut NotaFieldProp<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_field_prop(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_prop_name(&mut self, it: &mut NotaPropName<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_prop_name(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_prop_expr(&mut self, it: &mut NotaPropExpr<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_prop_expr(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_shorthand_prop(&mut self, it: &mut NotaShorthandProp<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_shorthand_prop(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_spread_prop(&mut self, it: &mut NotaSpreadProp<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_spread_prop(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_fragment(&mut self, it: &mut NotaFragment<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_fragment(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_interpolation(&mut self, it: &mut NotaInterpolation<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_interpolation(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_if(&mut self, it: &mut NotaIf<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_if(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_for(&mut self, it: &mut NotaFor<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_for(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_code(&mut self, it: &mut NotaCode<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_code(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_math(&mut self, it: &mut NotaMath<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_math(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_verbatim(&mut self, it: &mut NotaVerbatim<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_verbatim(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_emphasis(&mut self, it: &mut NotaEmphasis<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_emphasis(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_heading(&mut self, it: &mut NotaHeading<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_heading(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_list_item(&mut self, it: &mut NotaListItem<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_list_item(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
 }

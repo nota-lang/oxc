@@ -975,14 +975,26 @@ impl<'a> FormatWrite<'a> for AstNode<'a, V8IntrinsicExpression<'a>> {
     }
 }
 
-impl<'a> FormatWrite<'a> for AstNode<'a, NotaMarkup<'a>> {
-    fn write(&self, _f: &mut Formatter<'_, 'a>) {
-        // Nota markup is lowered to hyperscript before the JS formatter runs; the JS/TS formatter
-        // (oxfmt) never encounters a `NotaMarkup` node. Stub to keep the generated per-node Format
-        // dispatch total. Phase 4 may give Nota nodes real formatting for a `.nota` formatter.
-        unreachable!("NotaMarkup reached the JS formatter; it must be lowered to hyperscript first")
-    }
+// Nota nodes are lowered to hyperscript before the JS formatter runs; the JS/TS formatter (oxfmt)
+// never encounters them. These stubs keep the generated per-node `Format` dispatch total. Phase 4
+// may give Nota nodes real formatting for a dedicated `.nota` formatter.
+macro_rules! nota_format_unreachable {
+    ($($ty:ident),+ $(,)?) => {
+        $(
+            impl<'a> FormatWrite<'a> for AstNode<'a, $ty<'a>> {
+                fn write(&self, _f: &mut Formatter<'_, 'a>) {
+                    unreachable!(concat!(stringify!($ty), " must be lowered before the JS formatter"))
+                }
+            }
+        )+
+    };
 }
+nota_format_unreachable!(
+    NotaMarkup, NotaDocument, NotaText, NotaStatement, NotaElement, NotaHostName, NotaDynamicTag,
+    NotaFieldProp, NotaPropName, NotaPropExpr, NotaShorthandProp, NotaSpreadProp, NotaFragment,
+    NotaInterpolation, NotaIf, NotaFor, NotaCode, NotaMath, NotaVerbatim, NotaEmphasis, NotaHeading,
+    NotaListItem,
+);
 
 impl<'a> FormatWrite<'a> for AstNode<'a, BooleanLiteral> {
     fn write(&self, f: &mut Formatter<'_, 'a>) {

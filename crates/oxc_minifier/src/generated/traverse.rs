@@ -2487,6 +2487,184 @@ pub trait Traverse<'a> {
     fn exit_nota_markup(&mut self, node: &mut NotaMarkup<'a>, ctx: &mut TraverseCtx<'a>) {}
 
     #[inline]
+    fn enter_nota_markup_kind(&mut self, node: &mut NotaMarkupKind<'a>, ctx: &mut TraverseCtx<'a>) {
+    }
+    #[inline]
+    fn exit_nota_markup_kind(&mut self, node: &mut NotaMarkupKind<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_document(&mut self, node: &mut NotaDocument<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_document(&mut self, node: &mut NotaDocument<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_child(&mut self, node: &mut NotaChild<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_child(&mut self, node: &mut NotaChild<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_text(&mut self, node: &mut NotaText<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_text(&mut self, node: &mut NotaText<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_statement(&mut self, node: &mut NotaStatement<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_statement(&mut self, node: &mut NotaStatement<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_element(&mut self, node: &mut NotaElement<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_element(&mut self, node: &mut NotaElement<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_tag(&mut self, node: &mut NotaTag<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_tag(&mut self, node: &mut NotaTag<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_host_name(&mut self, node: &mut NotaHostName<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_host_name(&mut self, node: &mut NotaHostName<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_dynamic_tag(&mut self, node: &mut NotaDynamicTag<'a>, ctx: &mut TraverseCtx<'a>) {
+    }
+    #[inline]
+    fn exit_nota_dynamic_tag(&mut self, node: &mut NotaDynamicTag<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_prop(&mut self, node: &mut NotaProp<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_prop(&mut self, node: &mut NotaProp<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_field_prop(&mut self, node: &mut NotaFieldProp<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_field_prop(&mut self, node: &mut NotaFieldProp<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_prop_name(&mut self, node: &mut NotaPropName<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_prop_name(&mut self, node: &mut NotaPropName<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_prop_value(&mut self, node: &mut NotaPropValue<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_prop_value(&mut self, node: &mut NotaPropValue<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_prop_expr(&mut self, node: &mut NotaPropExpr<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_prop_expr(&mut self, node: &mut NotaPropExpr<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_shorthand_prop(
+        &mut self,
+        node: &mut NotaShorthandProp<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+    #[inline]
+    fn exit_nota_shorthand_prop(
+        &mut self,
+        node: &mut NotaShorthandProp<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+
+    #[inline]
+    fn enter_nota_spread_prop(&mut self, node: &mut NotaSpreadProp<'a>, ctx: &mut TraverseCtx<'a>) {
+    }
+    #[inline]
+    fn exit_nota_spread_prop(&mut self, node: &mut NotaSpreadProp<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_fragment(&mut self, node: &mut NotaFragment<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_fragment(&mut self, node: &mut NotaFragment<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_interpolation(
+        &mut self,
+        node: &mut NotaInterpolation<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+    #[inline]
+    fn exit_nota_interpolation(
+        &mut self,
+        node: &mut NotaInterpolation<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+
+    #[inline]
+    fn enter_nota_if(&mut self, node: &mut NotaIf<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_if(&mut self, node: &mut NotaIf<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_else(&mut self, node: &mut NotaElse<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_else(&mut self, node: &mut NotaElse<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_for(&mut self, node: &mut NotaFor<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_for(&mut self, node: &mut NotaFor<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_code(&mut self, node: &mut NotaCode<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_code(&mut self, node: &mut NotaCode<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_math(&mut self, node: &mut NotaMath<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_math(&mut self, node: &mut NotaMath<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_math_part(&mut self, node: &mut NotaMathPart<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_math_part(&mut self, node: &mut NotaMathPart<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_verbatim(&mut self, node: &mut NotaVerbatim<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_verbatim(&mut self, node: &mut NotaVerbatim<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_verbatim_part(
+        &mut self,
+        node: &mut NotaVerbatimPart<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+    #[inline]
+    fn exit_nota_verbatim_part(
+        &mut self,
+        node: &mut NotaVerbatimPart<'a>,
+        ctx: &mut TraverseCtx<'a>,
+    ) {
+    }
+
+    #[inline]
+    fn enter_nota_emphasis(&mut self, node: &mut NotaEmphasis<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_emphasis(&mut self, node: &mut NotaEmphasis<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_heading(&mut self, node: &mut NotaHeading<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_heading(&mut self, node: &mut NotaHeading<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
+    fn enter_nota_list_item(&mut self, node: &mut NotaListItem<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_list_item(&mut self, node: &mut NotaListItem<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
     fn enter_statements(&mut self, node: &mut Vec<'a, Statement<'a>>, ctx: &mut TraverseCtx<'a>) {}
     #[inline]
     fn exit_statements(&mut self, node: &mut Vec<'a, Statement<'a>>, ctx: &mut TraverseCtx<'a>) {}

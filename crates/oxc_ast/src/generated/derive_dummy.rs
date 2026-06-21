@@ -3233,6 +3233,113 @@ impl<'a> Dummy<'a> for JSDocUnknownType {
 impl<'a> Dummy<'a> for NotaMarkup<'a> {
     /// Create a dummy [`NotaMarkup`].
     ///
+    /// Has cost of making 1 allocation (40 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            kind: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaMarkupKind<'a> {
+    /// Create a dummy [`NotaMarkupKind`].
+    ///
+    /// Has cost of making 1 allocation (40 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Document(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaDocument<'a> {
+    /// Create a dummy [`NotaDocument`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            items: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaChild<'a> {
+    /// Create a dummy [`NotaChild`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Text(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaText<'a> {
+    /// Create a dummy [`NotaText`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            value: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaStatement<'a> {
+    /// Create a dummy [`NotaStatement`].
+    ///
+    /// Has cost of making 1 allocation (16 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            statement: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaElement<'a> {
+    /// Create a dummy [`NotaElement`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            tag: Dummy::dummy(allocator),
+            props: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaTag<'a> {
+    /// Create a dummy [`NotaTag`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Host(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaHostName<'a> {
+    /// Create a dummy [`NotaHostName`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            name: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaDynamicTag<'a> {
+    /// Create a dummy [`NotaDynamicTag`].
+    ///
     /// Has cost of making 1 allocation (16 bytes).
     fn dummy(allocator: &'a Allocator) -> Self {
         Self {
@@ -3240,5 +3347,277 @@ impl<'a> Dummy<'a> for NotaMarkup<'a> {
             span: Dummy::dummy(allocator),
             expression: Dummy::dummy(allocator),
         }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaProp<'a> {
+    /// Create a dummy [`NotaProp`].
+    ///
+    /// Has cost of making 2 allocations (48 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Spread(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaFieldProp<'a> {
+    /// Create a dummy [`NotaFieldProp`].
+    ///
+    /// Has cost of making 2 allocations (48 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            name: Dummy::dummy(allocator),
+            value: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaPropName<'a> {
+    /// Create a dummy [`NotaPropName`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            name: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaPropValue<'a> {
+    /// Create a dummy [`NotaPropValue`].
+    ///
+    /// Has cost of making 2 allocations (48 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Expression(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaPropExpr<'a> {
+    /// Create a dummy [`NotaPropExpr`].
+    ///
+    /// Has cost of making 1 allocation (16 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            expression: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaShorthandProp<'a> {
+    /// Create a dummy [`NotaShorthandProp`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            name: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaSpreadProp<'a> {
+    /// Create a dummy [`NotaSpreadProp`].
+    ///
+    /// Has cost of making 1 allocation (16 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            argument: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaFragment<'a> {
+    /// Create a dummy [`NotaFragment`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaInterpolation<'a> {
+    /// Create a dummy [`NotaInterpolation`].
+    ///
+    /// Has cost of making 1 allocation (16 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            expression: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaIf<'a> {
+    /// Create a dummy [`NotaIf`].
+    ///
+    /// Has cost of making 2 allocations (56 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            test: Dummy::dummy(allocator),
+            consequent: Dummy::dummy(allocator),
+            alternate: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaElse<'a> {
+    /// Create a dummy [`NotaElse`].
+    ///
+    /// Has cost of making 1 allocation (40 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Else(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaFor<'a> {
+    /// Create a dummy [`NotaFor`].
+    ///
+    /// Has cost of making 3 allocations (88 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            binding: Dummy::dummy(allocator),
+            iterable: Dummy::dummy(allocator),
+            body: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaCode<'a> {
+    /// Create a dummy [`NotaCode`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            language: Dummy::dummy(allocator),
+            value: Dummy::dummy(allocator),
+            block: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaMath<'a> {
+    /// Create a dummy [`NotaMath`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            display: Dummy::dummy(allocator),
+            parts: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaMathPart<'a> {
+    /// Create a dummy [`NotaMathPart`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Raw(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaVerbatim<'a> {
+    /// Create a dummy [`NotaVerbatim`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            tag: Dummy::dummy(allocator),
+            parts: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaVerbatimPart<'a> {
+    /// Create a dummy [`NotaVerbatimPart`].
+    ///
+    /// Has cost of making 1 allocation (32 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Raw(Dummy::dummy(allocator))
+    }
+}
+
+impl<'a> Dummy<'a> for NotaEmphasis<'a> {
+    /// Create a dummy [`NotaEmphasis`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            marker: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaEmphasisMarker {
+    /// Create a dummy [`NotaEmphasisMarker`].
+    ///
+    /// Does not allocate any data into arena.
+    #[inline(always)]
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Strong
+    }
+}
+
+impl<'a> Dummy<'a> for NotaHeading<'a> {
+    /// Create a dummy [`NotaHeading`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            level: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaListItem<'a> {
+    /// Create a dummy [`NotaListItem`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            kind: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaListKind {
+    /// Create a dummy [`NotaListKind`].
+    ///
+    /// Does not allocate any data into arena.
+    #[inline(always)]
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Unordered
     }
 }

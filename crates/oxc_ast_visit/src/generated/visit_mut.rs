@@ -1197,6 +1197,151 @@ pub trait VisitMut<'a>: Sized {
     }
 
     #[inline]
+    fn visit_nota_markup_kind(&mut self, it: &mut NotaMarkupKind<'a>) {
+        walk_nota_markup_kind(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_document(&mut self, it: &mut NotaDocument<'a>) {
+        walk_nota_document(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_child(&mut self, it: &mut NotaChild<'a>) {
+        walk_nota_child(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_text(&mut self, it: &mut NotaText<'a>) {
+        walk_nota_text(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_statement(&mut self, it: &mut NotaStatement<'a>) {
+        walk_nota_statement(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_element(&mut self, it: &mut NotaElement<'a>) {
+        walk_nota_element(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_tag(&mut self, it: &mut NotaTag<'a>) {
+        walk_nota_tag(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_host_name(&mut self, it: &mut NotaHostName<'a>) {
+        walk_nota_host_name(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_dynamic_tag(&mut self, it: &mut NotaDynamicTag<'a>) {
+        walk_nota_dynamic_tag(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_prop(&mut self, it: &mut NotaProp<'a>) {
+        walk_nota_prop(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_field_prop(&mut self, it: &mut NotaFieldProp<'a>) {
+        walk_nota_field_prop(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_prop_name(&mut self, it: &mut NotaPropName<'a>) {
+        walk_nota_prop_name(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_prop_value(&mut self, it: &mut NotaPropValue<'a>) {
+        walk_nota_prop_value(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_prop_expr(&mut self, it: &mut NotaPropExpr<'a>) {
+        walk_nota_prop_expr(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_shorthand_prop(&mut self, it: &mut NotaShorthandProp<'a>) {
+        walk_nota_shorthand_prop(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_spread_prop(&mut self, it: &mut NotaSpreadProp<'a>) {
+        walk_nota_spread_prop(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_fragment(&mut self, it: &mut NotaFragment<'a>) {
+        walk_nota_fragment(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_interpolation(&mut self, it: &mut NotaInterpolation<'a>) {
+        walk_nota_interpolation(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_if(&mut self, it: &mut NotaIf<'a>) {
+        walk_nota_if(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_else(&mut self, it: &mut NotaElse<'a>) {
+        walk_nota_else(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_for(&mut self, it: &mut NotaFor<'a>) {
+        walk_nota_for(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_code(&mut self, it: &mut NotaCode<'a>) {
+        walk_nota_code(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_math(&mut self, it: &mut NotaMath<'a>) {
+        walk_nota_math(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_math_part(&mut self, it: &mut NotaMathPart<'a>) {
+        walk_nota_math_part(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_verbatim(&mut self, it: &mut NotaVerbatim<'a>) {
+        walk_nota_verbatim(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_verbatim_part(&mut self, it: &mut NotaVerbatimPart<'a>) {
+        walk_nota_verbatim_part(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_emphasis(&mut self, it: &mut NotaEmphasis<'a>) {
+        walk_nota_emphasis(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_heading(&mut self, it: &mut NotaHeading<'a>) {
+        walk_nota_heading(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_list_item(&mut self, it: &mut NotaListItem<'a>) {
+        walk_nota_list_item(self, it);
+    }
+
+    #[inline]
     fn visit_span(&mut self, it: &mut Span) {
         walk_span(self, it);
     }
@@ -1340,6 +1485,26 @@ pub trait VisitMut<'a>: Sized {
     #[inline]
     fn visit_ts_index_signature_names(&mut self, it: &mut Vec<'a, TSIndexSignatureName<'a>>) {
         walk_ts_index_signature_names(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_children(&mut self, it: &mut Vec<'a, NotaChild<'a>>) {
+        walk_nota_children(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_props(&mut self, it: &mut Vec<'a, NotaProp<'a>>) {
+        walk_nota_props(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_math_parts(&mut self, it: &mut Vec<'a, NotaMathPart<'a>>) {
+        walk_nota_math_parts(self, it);
+    }
+
+    #[inline]
+    fn visit_nota_verbatim_parts(&mut self, it: &mut Vec<'a, NotaVerbatimPart<'a>>) {
+        walk_nota_verbatim_parts(self, it);
     }
 
     #[inline]
@@ -4473,7 +4638,310 @@ pub mod walk_mut {
         let kind = AstType::NotaMarkup;
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
+        visitor.visit_nota_markup_kind(&mut it.kind);
+        visitor.leave_node(kind);
+    }
+
+    pub fn walk_nota_markup_kind<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaMarkupKind<'a>,
+    ) {
+        // No `AstType` for this type
+        match it {
+            NotaMarkupKind::Document(it) => visitor.visit_nota_document(it),
+            NotaMarkupKind::Element(it) => visitor.visit_nota_element(it),
+            NotaMarkupKind::Fragment(it) => visitor.visit_nota_fragment(it),
+            NotaMarkupKind::Interpolation(it) => visitor.visit_nota_interpolation(it),
+            NotaMarkupKind::If(it) => visitor.visit_nota_if(it),
+            NotaMarkupKind::For(it) => visitor.visit_nota_for(it),
+            NotaMarkupKind::Code(it) => visitor.visit_nota_code(it),
+            NotaMarkupKind::Math(it) => visitor.visit_nota_math(it),
+            NotaMarkupKind::Verbatim(it) => visitor.visit_nota_verbatim(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_document<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaDocument<'a>) {
+        let kind = AstType::NotaDocument;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_children(&mut it.items);
+        visitor.leave_node(kind);
+    }
+
+    pub fn walk_nota_child<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaChild<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaChild::Text(it) => visitor.visit_nota_text(it),
+            NotaChild::Statement(it) => visitor.visit_nota_statement(it),
+            NotaChild::Element(it) => visitor.visit_nota_element(it),
+            NotaChild::Fragment(it) => visitor.visit_nota_fragment(it),
+            NotaChild::Interpolation(it) => visitor.visit_nota_interpolation(it),
+            NotaChild::If(it) => visitor.visit_nota_if(it),
+            NotaChild::For(it) => visitor.visit_nota_for(it),
+            NotaChild::Code(it) => visitor.visit_nota_code(it),
+            NotaChild::Math(it) => visitor.visit_nota_math(it),
+            NotaChild::Verbatim(it) => visitor.visit_nota_verbatim(it),
+            NotaChild::Emphasis(it) => visitor.visit_nota_emphasis(it),
+            NotaChild::Heading(it) => visitor.visit_nota_heading(it),
+            NotaChild::ListItem(it) => visitor.visit_nota_list_item(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_text<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaText<'a>) {
+        let kind = AstType::NotaText;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_statement<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaStatement<'a>) {
+        let kind = AstType::NotaStatement;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_statement(&mut it.statement);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_element<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaElement<'a>) {
+        let kind = AstType::NotaElement;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_tag(&mut it.tag);
+        visitor.visit_nota_props(&mut it.props);
+        visitor.visit_nota_children(&mut it.children);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_tag<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaTag<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaTag::Host(it) => visitor.visit_nota_host_name(it),
+            NotaTag::Component(it) => visitor.visit_identifier_reference(it),
+            NotaTag::Dynamic(it) => visitor.visit_nota_dynamic_tag(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_host_name<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaHostName<'a>) {
+        let kind = AstType::NotaHostName;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_dynamic_tag<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaDynamicTag<'a>,
+    ) {
+        let kind = AstType::NotaDynamicTag;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
         visitor.visit_expression(&mut it.expression);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_prop<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaProp<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaProp::Field(it) => visitor.visit_nota_field_prop(it),
+            NotaProp::Shorthand(it) => visitor.visit_nota_shorthand_prop(it),
+            NotaProp::Spread(it) => visitor.visit_nota_spread_prop(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_field_prop<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaFieldProp<'a>) {
+        let kind = AstType::NotaFieldProp;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_prop_name(&mut it.name);
+        visitor.visit_nota_prop_value(&mut it.value);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_prop_name<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaPropName<'a>) {
+        let kind = AstType::NotaPropName;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_prop_value<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaPropValue<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaPropValue::Expression(it) => visitor.visit_nota_prop_expr(it),
+            NotaPropValue::Markup(it) => visitor.visit_nota_markup(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_prop_expr<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaPropExpr<'a>) {
+        let kind = AstType::NotaPropExpr;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_expression(&mut it.expression);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_shorthand_prop<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaShorthandProp<'a>,
+    ) {
+        let kind = AstType::NotaShorthandProp;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_identifier_reference(&mut it.name);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_spread_prop<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaSpreadProp<'a>,
+    ) {
+        let kind = AstType::NotaSpreadProp;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_expression(&mut it.argument);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_fragment<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaFragment<'a>) {
+        let kind = AstType::NotaFragment;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_children(&mut it.children);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_interpolation<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaInterpolation<'a>,
+    ) {
+        let kind = AstType::NotaInterpolation;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_expression(&mut it.expression);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_if<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaIf<'a>) {
+        let kind = AstType::NotaIf;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_expression(&mut it.test);
+        visitor.visit_nota_fragment(&mut it.consequent);
+        if let Some(alternate) = &mut it.alternate {
+            visitor.visit_nota_else(alternate);
+        }
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_else<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaElse<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaElse::ElseIf(it) => visitor.visit_nota_if(it),
+            NotaElse::Else(it) => visitor.visit_nota_fragment(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_for<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaFor<'a>) {
+        let kind = AstType::NotaFor;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_binding_pattern(&mut it.binding);
+        visitor.visit_expression(&mut it.iterable);
+        visitor.visit_nota_fragment(&mut it.body);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_code<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaCode<'a>) {
+        let kind = AstType::NotaCode;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_math<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaMath<'a>) {
+        let kind = AstType::NotaMath;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_math_parts(&mut it.parts);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_math_part<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaMathPart<'a>) {
+        // No `AstType` for this type
+        match it {
+            NotaMathPart::Raw(it) => visitor.visit_nota_text(it),
+            NotaMathPart::Interpolation(it) => visitor.visit_nota_interpolation(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_verbatim<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaVerbatim<'a>) {
+        let kind = AstType::NotaVerbatim;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_tag(&mut it.tag);
+        visitor.visit_nota_verbatim_parts(&mut it.parts);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_verbatim_part<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut NotaVerbatimPart<'a>,
+    ) {
+        // No `AstType` for this type
+        match it {
+            NotaVerbatimPart::Raw(it) => visitor.visit_nota_text(it),
+            NotaVerbatimPart::Child(it) => visitor.visit_nota_markup(it),
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_emphasis<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaEmphasis<'a>) {
+        let kind = AstType::NotaEmphasis;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_children(&mut it.children);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_heading<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaHeading<'a>) {
+        let kind = AstType::NotaHeading;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_children(&mut it.children);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_list_item<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaListItem<'a>) {
+        let kind = AstType::NotaListItem;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_children(&mut it.children);
         visitor.leave_node(kind);
     }
 
@@ -4738,6 +5206,43 @@ pub mod walk_mut {
     ) {
         for el in it {
             visitor.visit_ts_index_signature_name(el);
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_children<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut Vec<'a, NotaChild<'a>>,
+    ) {
+        for el in it {
+            visitor.visit_nota_child(el);
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_props<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut Vec<'a, NotaProp<'a>>) {
+        for el in it {
+            visitor.visit_nota_prop(el);
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_math_parts<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut Vec<'a, NotaMathPart<'a>>,
+    ) {
+        for el in it {
+            visitor.visit_nota_math_part(el);
+        }
+    }
+
+    #[inline]
+    pub fn walk_nota_verbatim_parts<'a, V: VisitMut<'a>>(
+        visitor: &mut V,
+        it: &mut Vec<'a, NotaVerbatimPart<'a>>,
+    ) {
+        for el in it {
+            visitor.visit_nota_verbatim_part(el);
         }
     }
 

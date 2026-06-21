@@ -8520,7 +8520,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkup<'_> {
         NotaMarkup {
             node_id: Default::default(),
             span: CloneIn::clone_in(&self.span, allocator),
-            expression: CloneIn::clone_in(&self.expression, allocator),
+            kind: CloneIn::clone_in(&self.kind, allocator),
         }
     }
 
@@ -8528,7 +8528,723 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkup<'_> {
         NotaMarkup {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            kind: CloneIn::clone_in_with_semantic_ids(&self.kind, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkupKind<'_> {
+    type Cloned = NotaMarkupKind<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Document(it) => NotaMarkupKind::Document(CloneIn::clone_in(it, allocator)),
+            Self::Element(it) => NotaMarkupKind::Element(CloneIn::clone_in(it, allocator)),
+            Self::Fragment(it) => NotaMarkupKind::Fragment(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => {
+                NotaMarkupKind::Interpolation(CloneIn::clone_in(it, allocator))
+            }
+            Self::If(it) => NotaMarkupKind::If(CloneIn::clone_in(it, allocator)),
+            Self::For(it) => NotaMarkupKind::For(CloneIn::clone_in(it, allocator)),
+            Self::Code(it) => NotaMarkupKind::Code(CloneIn::clone_in(it, allocator)),
+            Self::Math(it) => NotaMarkupKind::Math(CloneIn::clone_in(it, allocator)),
+            Self::Verbatim(it) => NotaMarkupKind::Verbatim(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Document(it) => {
+                NotaMarkupKind::Document(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Element(it) => {
+                NotaMarkupKind::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Fragment(it) => {
+                NotaMarkupKind::Fragment(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Interpolation(it) => {
+                NotaMarkupKind::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::If(it) => NotaMarkupKind::If(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::For(it) => {
+                NotaMarkupKind::For(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Code(it) => {
+                NotaMarkupKind::Code(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Math(it) => {
+                NotaMarkupKind::Math(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Verbatim(it) => {
+                NotaMarkupKind::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaDocument<'_> {
+    type Cloned = NotaDocument<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDocument {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            items: CloneIn::clone_in(&self.items, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDocument {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            items: CloneIn::clone_in_with_semantic_ids(&self.items, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
+    type Cloned = NotaChild<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Text(it) => NotaChild::Text(CloneIn::clone_in(it, allocator)),
+            Self::Statement(it) => NotaChild::Statement(CloneIn::clone_in(it, allocator)),
+            Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
+            Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => NotaChild::Interpolation(CloneIn::clone_in(it, allocator)),
+            Self::If(it) => NotaChild::If(CloneIn::clone_in(it, allocator)),
+            Self::For(it) => NotaChild::For(CloneIn::clone_in(it, allocator)),
+            Self::Code(it) => NotaChild::Code(CloneIn::clone_in(it, allocator)),
+            Self::Math(it) => NotaChild::Math(CloneIn::clone_in(it, allocator)),
+            Self::Verbatim(it) => NotaChild::Verbatim(CloneIn::clone_in(it, allocator)),
+            Self::Emphasis(it) => NotaChild::Emphasis(CloneIn::clone_in(it, allocator)),
+            Self::Heading(it) => NotaChild::Heading(CloneIn::clone_in(it, allocator)),
+            Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Text(it) => NotaChild::Text(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Statement(it) => {
+                NotaChild::Statement(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Element(it) => {
+                NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Fragment(it) => {
+                NotaChild::Fragment(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Interpolation(it) => {
+                NotaChild::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::If(it) => NotaChild::If(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::For(it) => NotaChild::For(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Code(it) => NotaChild::Code(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Math(it) => NotaChild::Math(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Verbatim(it) => {
+                NotaChild::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Emphasis(it) => {
+                NotaChild::Emphasis(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Heading(it) => {
+                NotaChild::Heading(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::ListItem(it) => {
+                NotaChild::ListItem(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaText<'_> {
+    type Cloned = NotaText<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaText {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            value: CloneIn::clone_in(&self.value, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaText {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            value: CloneIn::clone_in_with_semantic_ids(&self.value, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaStatement<'_> {
+    type Cloned = NotaStatement<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaStatement {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            statement: CloneIn::clone_in(&self.statement, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaStatement {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            statement: CloneIn::clone_in_with_semantic_ids(&self.statement, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaElement<'_> {
+    type Cloned = NotaElement<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaElement {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            tag: CloneIn::clone_in(&self.tag, allocator),
+            props: CloneIn::clone_in(&self.props, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaElement {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            tag: CloneIn::clone_in_with_semantic_ids(&self.tag, allocator),
+            props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaTag<'_> {
+    type Cloned = NotaTag<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Host(it) => NotaTag::Host(CloneIn::clone_in(it, allocator)),
+            Self::Component(it) => NotaTag::Component(CloneIn::clone_in(it, allocator)),
+            Self::Dynamic(it) => NotaTag::Dynamic(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Host(it) => NotaTag::Host(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Component(it) => {
+                NotaTag::Component(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Dynamic(it) => {
+                NotaTag::Dynamic(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaHostName<'_> {
+    type Cloned = NotaHostName<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaHostName {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            name: CloneIn::clone_in(&self.name, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaHostName {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            name: CloneIn::clone_in_with_semantic_ids(&self.name, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaDynamicTag<'_> {
+    type Cloned = NotaDynamicTag<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDynamicTag {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            expression: CloneIn::clone_in(&self.expression, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDynamicTag {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
             expression: CloneIn::clone_in_with_semantic_ids(&self.expression, allocator),
         }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaProp<'_> {
+    type Cloned = NotaProp<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Field(it) => NotaProp::Field(CloneIn::clone_in(it, allocator)),
+            Self::Shorthand(it) => NotaProp::Shorthand(CloneIn::clone_in(it, allocator)),
+            Self::Spread(it) => NotaProp::Spread(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Field(it) => NotaProp::Field(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Shorthand(it) => {
+                NotaProp::Shorthand(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Spread(it) => {
+                NotaProp::Spread(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaFieldProp<'_> {
+    type Cloned = NotaFieldProp<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFieldProp {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            name: CloneIn::clone_in(&self.name, allocator),
+            value: CloneIn::clone_in(&self.value, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFieldProp {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            name: CloneIn::clone_in_with_semantic_ids(&self.name, allocator),
+            value: CloneIn::clone_in_with_semantic_ids(&self.value, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaPropName<'_> {
+    type Cloned = NotaPropName<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaPropName {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            name: CloneIn::clone_in(&self.name, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaPropName {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            name: CloneIn::clone_in_with_semantic_ids(&self.name, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaPropValue<'_> {
+    type Cloned = NotaPropValue<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Expression(it) => NotaPropValue::Expression(CloneIn::clone_in(it, allocator)),
+            Self::Markup(it) => NotaPropValue::Markup(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Expression(it) => {
+                NotaPropValue::Expression(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Markup(it) => {
+                NotaPropValue::Markup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaPropExpr<'_> {
+    type Cloned = NotaPropExpr<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaPropExpr {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            expression: CloneIn::clone_in(&self.expression, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaPropExpr {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            expression: CloneIn::clone_in_with_semantic_ids(&self.expression, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaShorthandProp<'_> {
+    type Cloned = NotaShorthandProp<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaShorthandProp {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            name: CloneIn::clone_in(&self.name, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaShorthandProp {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            name: CloneIn::clone_in_with_semantic_ids(&self.name, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaSpreadProp<'_> {
+    type Cloned = NotaSpreadProp<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaSpreadProp {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            argument: CloneIn::clone_in(&self.argument, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaSpreadProp {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            argument: CloneIn::clone_in_with_semantic_ids(&self.argument, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaFragment<'_> {
+    type Cloned = NotaFragment<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFragment {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFragment {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaInterpolation<'_> {
+    type Cloned = NotaInterpolation<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaInterpolation {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            expression: CloneIn::clone_in(&self.expression, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaInterpolation {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            expression: CloneIn::clone_in_with_semantic_ids(&self.expression, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaIf<'_> {
+    type Cloned = NotaIf<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaIf {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            test: CloneIn::clone_in(&self.test, allocator),
+            consequent: CloneIn::clone_in(&self.consequent, allocator),
+            alternate: CloneIn::clone_in(&self.alternate, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaIf {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            test: CloneIn::clone_in_with_semantic_ids(&self.test, allocator),
+            consequent: CloneIn::clone_in_with_semantic_ids(&self.consequent, allocator),
+            alternate: CloneIn::clone_in_with_semantic_ids(&self.alternate, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaElse<'_> {
+    type Cloned = NotaElse<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::ElseIf(it) => NotaElse::ElseIf(CloneIn::clone_in(it, allocator)),
+            Self::Else(it) => NotaElse::Else(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::ElseIf(it) => {
+                NotaElse::ElseIf(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Else(it) => NotaElse::Else(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaFor<'_> {
+    type Cloned = NotaFor<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFor {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            binding: CloneIn::clone_in(&self.binding, allocator),
+            iterable: CloneIn::clone_in(&self.iterable, allocator),
+            body: CloneIn::clone_in(&self.body, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaFor {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            binding: CloneIn::clone_in_with_semantic_ids(&self.binding, allocator),
+            iterable: CloneIn::clone_in_with_semantic_ids(&self.iterable, allocator),
+            body: CloneIn::clone_in_with_semantic_ids(&self.body, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaCode<'_> {
+    type Cloned = NotaCode<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaCode {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            language: CloneIn::clone_in(&self.language, allocator),
+            value: CloneIn::clone_in(&self.value, allocator),
+            block: CloneIn::clone_in(&self.block, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaCode {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            language: CloneIn::clone_in_with_semantic_ids(&self.language, allocator),
+            value: CloneIn::clone_in_with_semantic_ids(&self.value, allocator),
+            block: CloneIn::clone_in_with_semantic_ids(&self.block, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaMath<'_> {
+    type Cloned = NotaMath<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaMath {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            display: CloneIn::clone_in(&self.display, allocator),
+            parts: CloneIn::clone_in(&self.parts, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaMath {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            display: CloneIn::clone_in_with_semantic_ids(&self.display, allocator),
+            parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaMathPart<'_> {
+    type Cloned = NotaMathPart<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Raw(it) => NotaMathPart::Raw(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => {
+                NotaMathPart::Interpolation(CloneIn::clone_in(it, allocator))
+            }
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Raw(it) => NotaMathPart::Raw(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Interpolation(it) => {
+                NotaMathPart::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatim<'_> {
+    type Cloned = NotaVerbatim<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaVerbatim {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            tag: CloneIn::clone_in(&self.tag, allocator),
+            parts: CloneIn::clone_in(&self.parts, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaVerbatim {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            tag: CloneIn::clone_in_with_semantic_ids(&self.tag, allocator),
+            parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatimPart<'_> {
+    type Cloned = NotaVerbatimPart<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Raw(it) => NotaVerbatimPart::Raw(CloneIn::clone_in(it, allocator)),
+            Self::Child(it) => NotaVerbatimPart::Child(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Raw(it) => {
+                NotaVerbatimPart::Raw(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Child(it) => {
+                NotaVerbatimPart::Child(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaEmphasis<'_> {
+    type Cloned = NotaEmphasis<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaEmphasis {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            marker: CloneIn::clone_in(&self.marker, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaEmphasis {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            marker: CloneIn::clone_in_with_semantic_ids(&self.marker, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaEmphasisMarker {
+    type Cloned = NotaEmphasisMarker;
+
+    #[inline(always)]
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
+    }
+
+    #[inline(always)]
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaHeading<'_> {
+    type Cloned = NotaHeading<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaHeading {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            level: CloneIn::clone_in(&self.level, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaHeading {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            level: CloneIn::clone_in_with_semantic_ids(&self.level, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaListItem<'_> {
+    type Cloned = NotaListItem<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaListItem {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            kind: CloneIn::clone_in(&self.kind, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaListItem {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            kind: CloneIn::clone_in_with_semantic_ids(&self.kind, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaListKind {
+    type Cloned = NotaListKind;
+
+    #[inline(always)]
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
+    }
+
+    #[inline(always)]
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
     }
 }

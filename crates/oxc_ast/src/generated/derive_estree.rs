@@ -3254,8 +3254,342 @@ impl ESTree for NotaMarkup<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaMarkup"));
+        state.serialize_field("kind", &self.kind);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaMarkupKind<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Document(it) => it.serialize(serializer),
+            Self::Element(it) => it.serialize(serializer),
+            Self::Fragment(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+            Self::If(it) => it.serialize(serializer),
+            Self::For(it) => it.serialize(serializer),
+            Self::Code(it) => it.serialize(serializer),
+            Self::Math(it) => it.serialize(serializer),
+            Self::Verbatim(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaDocument<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaDocument"));
+        state.serialize_field("items", &self.items);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaChild<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Text(it) => it.serialize(serializer),
+            Self::Statement(it) => it.serialize(serializer),
+            Self::Element(it) => it.serialize(serializer),
+            Self::Fragment(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+            Self::If(it) => it.serialize(serializer),
+            Self::For(it) => it.serialize(serializer),
+            Self::Code(it) => it.serialize(serializer),
+            Self::Math(it) => it.serialize(serializer),
+            Self::Verbatim(it) => it.serialize(serializer),
+            Self::Emphasis(it) => it.serialize(serializer),
+            Self::Heading(it) => it.serialize(serializer),
+            Self::ListItem(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaText<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaText"));
+        state.serialize_field("value", &self.value);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaStatement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaStatement"));
+        state.serialize_field("statement", &self.statement);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaElement<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaElement"));
+        state.serialize_field("tag", &self.tag);
+        state.serialize_field("props", &self.props);
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaTag<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Host(it) => it.serialize(serializer),
+            Self::Component(it) => it.serialize(serializer),
+            Self::Dynamic(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaHostName<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaHostName"));
+        state.serialize_field("name", &self.name);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaDynamicTag<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaDynamicTag"));
         state.serialize_field("expression", &self.expression);
         state.serialize_span(self.span);
         state.end();
+    }
+}
+
+impl ESTree for NotaProp<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Field(it) => it.serialize(serializer),
+            Self::Shorthand(it) => it.serialize(serializer),
+            Self::Spread(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaFieldProp<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaFieldProp"));
+        state.serialize_field("name", &self.name);
+        state.serialize_field("value", &self.value);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaPropName<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaPropName"));
+        state.serialize_field("name", &self.name);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaPropValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Expression(it) => it.serialize(serializer),
+            Self::Markup(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaPropExpr<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaPropExpr"));
+        state.serialize_field("expression", &self.expression);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaShorthandProp<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaShorthandProp"));
+        state.serialize_field("name", &self.name);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaSpreadProp<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaSpreadProp"));
+        state.serialize_field("argument", &self.argument);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaFragment<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaFragment"));
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaInterpolation<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaInterpolation"));
+        state.serialize_field("expression", &self.expression);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaIf<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaIf"));
+        state.serialize_field("test", &self.test);
+        state.serialize_field("consequent", &self.consequent);
+        state.serialize_field("alternate", &self.alternate);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaElse<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::ElseIf(it) => it.serialize(serializer),
+            Self::Else(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaFor<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaFor"));
+        state.serialize_field("binding", &self.binding);
+        state.serialize_field("iterable", &self.iterable);
+        state.serialize_field("body", &self.body);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaCode<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaCode"));
+        state.serialize_field("language", &self.language);
+        state.serialize_field("value", &self.value);
+        state.serialize_field("block", &self.block);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaMath<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaMath"));
+        state.serialize_field("display", &self.display);
+        state.serialize_field("parts", &self.parts);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaMathPart<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Raw(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaVerbatim<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaVerbatim"));
+        state.serialize_field("tag", &self.tag);
+        state.serialize_field("parts", &self.parts);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaVerbatimPart<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Raw(it) => it.serialize(serializer),
+            Self::Child(it) => it.serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaEmphasis<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaEmphasis"));
+        state.serialize_field("marker", &self.marker);
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaEmphasisMarker {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Strong => JsonSafeString("strong").serialize(serializer),
+            Self::Em => JsonSafeString("em").serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaHeading<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaHeading"));
+        state.serialize_field("level", &self.level);
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaListItem<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaListItem"));
+        state.serialize_field("kind", &self.kind);
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaListKind {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Unordered => JsonSafeString("unordered").serialize(serializer),
+            Self::Ordered => JsonSafeString("ordered").serialize(serializer),
+        }
     }
 }

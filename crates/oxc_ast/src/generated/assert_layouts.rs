@@ -1822,7 +1822,198 @@ const _: () = {
     assert!(align_of::<NotaMarkup>() == 8);
     assert!(offset_of!(NotaMarkup, span) == 0);
     assert!(offset_of!(NotaMarkup, node_id) == 8);
-    assert!(offset_of!(NotaMarkup, expression) == 16);
+    assert!(offset_of!(NotaMarkup, kind) == 16);
+
+    assert!(size_of::<NotaMarkupKind>() == 16);
+    assert!(align_of::<NotaMarkupKind>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaDocument>() == 40);
+    assert!(align_of::<NotaDocument>() == 8);
+    assert!(offset_of!(NotaDocument, span) == 0);
+    assert!(offset_of!(NotaDocument, node_id) == 8);
+    assert!(offset_of!(NotaDocument, items) == 16);
+
+    assert!(size_of::<NotaChild>() == 16);
+    assert!(align_of::<NotaChild>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaText>() == 32);
+    assert!(align_of::<NotaText>() == 8);
+    assert!(offset_of!(NotaText, span) == 0);
+    assert!(offset_of!(NotaText, node_id) == 8);
+    assert!(offset_of!(NotaText, value) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaStatement>() == 32);
+    assert!(align_of::<NotaStatement>() == 8);
+    assert!(offset_of!(NotaStatement, span) == 0);
+    assert!(offset_of!(NotaStatement, node_id) == 8);
+    assert!(offset_of!(NotaStatement, statement) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaElement>() == 80);
+    assert!(align_of::<NotaElement>() == 8);
+    assert!(offset_of!(NotaElement, span) == 0);
+    assert!(offset_of!(NotaElement, node_id) == 8);
+    assert!(offset_of!(NotaElement, tag) == 16);
+    assert!(offset_of!(NotaElement, props) == 32);
+    assert!(offset_of!(NotaElement, children) == 56);
+
+    assert!(size_of::<NotaTag>() == 16);
+    assert!(align_of::<NotaTag>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaHostName>() == 32);
+    assert!(align_of::<NotaHostName>() == 8);
+    assert!(offset_of!(NotaHostName, span) == 0);
+    assert!(offset_of!(NotaHostName, node_id) == 8);
+    assert!(offset_of!(NotaHostName, name) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaDynamicTag>() == 32);
+    assert!(align_of::<NotaDynamicTag>() == 8);
+    assert!(offset_of!(NotaDynamicTag, span) == 0);
+    assert!(offset_of!(NotaDynamicTag, node_id) == 8);
+    assert!(offset_of!(NotaDynamicTag, expression) == 16);
+
+    assert!(size_of::<NotaProp>() == 16);
+    assert!(align_of::<NotaProp>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaFieldProp>() == 64);
+    assert!(align_of::<NotaFieldProp>() == 8);
+    assert!(offset_of!(NotaFieldProp, span) == 0);
+    assert!(offset_of!(NotaFieldProp, node_id) == 8);
+    assert!(offset_of!(NotaFieldProp, name) == 16);
+    assert!(offset_of!(NotaFieldProp, value) == 48);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaPropName>() == 32);
+    assert!(align_of::<NotaPropName>() == 8);
+    assert!(offset_of!(NotaPropName, span) == 0);
+    assert!(offset_of!(NotaPropName, node_id) == 8);
+    assert!(offset_of!(NotaPropName, name) == 16);
+
+    assert!(size_of::<NotaPropValue>() == 16);
+    assert!(align_of::<NotaPropValue>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaPropExpr>() == 32);
+    assert!(align_of::<NotaPropExpr>() == 8);
+    assert!(offset_of!(NotaPropExpr, span) == 0);
+    assert!(offset_of!(NotaPropExpr, node_id) == 8);
+    assert!(offset_of!(NotaPropExpr, expression) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaShorthandProp>() == 48);
+    assert!(align_of::<NotaShorthandProp>() == 8);
+    assert!(offset_of!(NotaShorthandProp, span) == 0);
+    assert!(offset_of!(NotaShorthandProp, node_id) == 8);
+    assert!(offset_of!(NotaShorthandProp, name) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaSpreadProp>() == 32);
+    assert!(align_of::<NotaSpreadProp>() == 8);
+    assert!(offset_of!(NotaSpreadProp, span) == 0);
+    assert!(offset_of!(NotaSpreadProp, node_id) == 8);
+    assert!(offset_of!(NotaSpreadProp, argument) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaFragment>() == 40);
+    assert!(align_of::<NotaFragment>() == 8);
+    assert!(offset_of!(NotaFragment, span) == 0);
+    assert!(offset_of!(NotaFragment, node_id) == 8);
+    assert!(offset_of!(NotaFragment, children) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaInterpolation>() == 32);
+    assert!(align_of::<NotaInterpolation>() == 8);
+    assert!(offset_of!(NotaInterpolation, span) == 0);
+    assert!(offset_of!(NotaInterpolation, node_id) == 8);
+    assert!(offset_of!(NotaInterpolation, expression) == 16);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaIf>() == 56);
+    assert!(align_of::<NotaIf>() == 8);
+    assert!(offset_of!(NotaIf, span) == 0);
+    assert!(offset_of!(NotaIf, node_id) == 8);
+    assert!(offset_of!(NotaIf, test) == 16);
+    assert!(offset_of!(NotaIf, consequent) == 32);
+    assert!(offset_of!(NotaIf, alternate) == 40);
+
+    assert!(size_of::<NotaElse>() == 16);
+    assert!(align_of::<NotaElse>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaFor>() == 56);
+    assert!(align_of::<NotaFor>() == 8);
+    assert!(offset_of!(NotaFor, span) == 0);
+    assert!(offset_of!(NotaFor, node_id) == 8);
+    assert!(offset_of!(NotaFor, binding) == 16);
+    assert!(offset_of!(NotaFor, iterable) == 32);
+    assert!(offset_of!(NotaFor, body) == 48);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaCode>() == 48);
+    assert!(align_of::<NotaCode>() == 8);
+    assert!(offset_of!(NotaCode, span) == 0);
+    assert!(offset_of!(NotaCode, node_id) == 8);
+    assert!(offset_of!(NotaCode, block) == 12);
+    assert!(offset_of!(NotaCode, language) == 16);
+    assert!(offset_of!(NotaCode, value) == 32);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaMath>() == 40);
+    assert!(align_of::<NotaMath>() == 8);
+    assert!(offset_of!(NotaMath, span) == 0);
+    assert!(offset_of!(NotaMath, node_id) == 8);
+    assert!(offset_of!(NotaMath, display) == 12);
+    assert!(offset_of!(NotaMath, parts) == 16);
+
+    assert!(size_of::<NotaMathPart>() == 16);
+    assert!(align_of::<NotaMathPart>() == 8);
+
+    // Padding: 4 bytes
+    assert!(size_of::<NotaVerbatim>() == 56);
+    assert!(align_of::<NotaVerbatim>() == 8);
+    assert!(offset_of!(NotaVerbatim, span) == 0);
+    assert!(offset_of!(NotaVerbatim, node_id) == 8);
+    assert!(offset_of!(NotaVerbatim, tag) == 16);
+    assert!(offset_of!(NotaVerbatim, parts) == 32);
+
+    assert!(size_of::<NotaVerbatimPart>() == 16);
+    assert!(align_of::<NotaVerbatimPart>() == 8);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaEmphasis>() == 40);
+    assert!(align_of::<NotaEmphasis>() == 8);
+    assert!(offset_of!(NotaEmphasis, span) == 0);
+    assert!(offset_of!(NotaEmphasis, node_id) == 8);
+    assert!(offset_of!(NotaEmphasis, marker) == 12);
+    assert!(offset_of!(NotaEmphasis, children) == 16);
+
+    assert!(size_of::<NotaEmphasisMarker>() == 1);
+    assert!(align_of::<NotaEmphasisMarker>() == 1);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaHeading>() == 40);
+    assert!(align_of::<NotaHeading>() == 8);
+    assert!(offset_of!(NotaHeading, span) == 0);
+    assert!(offset_of!(NotaHeading, node_id) == 8);
+    assert!(offset_of!(NotaHeading, level) == 12);
+    assert!(offset_of!(NotaHeading, children) == 16);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaListItem>() == 40);
+    assert!(align_of::<NotaListItem>() == 8);
+    assert!(offset_of!(NotaListItem, span) == 0);
+    assert!(offset_of!(NotaListItem, node_id) == 8);
+    assert!(offset_of!(NotaListItem, kind) == 12);
+    assert!(offset_of!(NotaListItem, children) == 16);
+
+    assert!(size_of::<NotaListKind>() == 1);
+    assert!(align_of::<NotaListKind>() == 1);
 };
 
 #[cfg(target_pointer_width = "32")]
@@ -3640,7 +3831,198 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(align_of::<NotaMarkup>() == 4);
     assert!(offset_of!(NotaMarkup, span) == 0);
     assert!(offset_of!(NotaMarkup, node_id) == 8);
-    assert!(offset_of!(NotaMarkup, expression) == 12);
+    assert!(offset_of!(NotaMarkup, kind) == 12);
+
+    assert!(size_of::<NotaMarkupKind>() == 8);
+    assert!(align_of::<NotaMarkupKind>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaDocument>() == 28);
+    assert!(align_of::<NotaDocument>() == 4);
+    assert!(offset_of!(NotaDocument, span) == 0);
+    assert!(offset_of!(NotaDocument, node_id) == 8);
+    assert!(offset_of!(NotaDocument, items) == 12);
+
+    assert!(size_of::<NotaChild>() == 8);
+    assert!(align_of::<NotaChild>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaText>() == 20);
+    assert!(align_of::<NotaText>() == 4);
+    assert!(offset_of!(NotaText, span) == 0);
+    assert!(offset_of!(NotaText, node_id) == 8);
+    assert!(offset_of!(NotaText, value) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaStatement>() == 20);
+    assert!(align_of::<NotaStatement>() == 4);
+    assert!(offset_of!(NotaStatement, span) == 0);
+    assert!(offset_of!(NotaStatement, node_id) == 8);
+    assert!(offset_of!(NotaStatement, statement) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaElement>() == 52);
+    assert!(align_of::<NotaElement>() == 4);
+    assert!(offset_of!(NotaElement, span) == 0);
+    assert!(offset_of!(NotaElement, node_id) == 8);
+    assert!(offset_of!(NotaElement, tag) == 12);
+    assert!(offset_of!(NotaElement, props) == 20);
+    assert!(offset_of!(NotaElement, children) == 36);
+
+    assert!(size_of::<NotaTag>() == 8);
+    assert!(align_of::<NotaTag>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaHostName>() == 20);
+    assert!(align_of::<NotaHostName>() == 4);
+    assert!(offset_of!(NotaHostName, span) == 0);
+    assert!(offset_of!(NotaHostName, node_id) == 8);
+    assert!(offset_of!(NotaHostName, name) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaDynamicTag>() == 20);
+    assert!(align_of::<NotaDynamicTag>() == 4);
+    assert!(offset_of!(NotaDynamicTag, span) == 0);
+    assert!(offset_of!(NotaDynamicTag, node_id) == 8);
+    assert!(offset_of!(NotaDynamicTag, expression) == 12);
+
+    assert!(size_of::<NotaProp>() == 8);
+    assert!(align_of::<NotaProp>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaFieldProp>() == 40);
+    assert!(align_of::<NotaFieldProp>() == 4);
+    assert!(offset_of!(NotaFieldProp, span) == 0);
+    assert!(offset_of!(NotaFieldProp, node_id) == 8);
+    assert!(offset_of!(NotaFieldProp, name) == 12);
+    assert!(offset_of!(NotaFieldProp, value) == 32);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaPropName>() == 20);
+    assert!(align_of::<NotaPropName>() == 4);
+    assert!(offset_of!(NotaPropName, span) == 0);
+    assert!(offset_of!(NotaPropName, node_id) == 8);
+    assert!(offset_of!(NotaPropName, name) == 12);
+
+    assert!(size_of::<NotaPropValue>() == 8);
+    assert!(align_of::<NotaPropValue>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaPropExpr>() == 20);
+    assert!(align_of::<NotaPropExpr>() == 4);
+    assert!(offset_of!(NotaPropExpr, span) == 0);
+    assert!(offset_of!(NotaPropExpr, node_id) == 8);
+    assert!(offset_of!(NotaPropExpr, expression) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaShorthandProp>() == 40);
+    assert!(align_of::<NotaShorthandProp>() == 4);
+    assert!(offset_of!(NotaShorthandProp, span) == 0);
+    assert!(offset_of!(NotaShorthandProp, node_id) == 8);
+    assert!(offset_of!(NotaShorthandProp, name) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaSpreadProp>() == 20);
+    assert!(align_of::<NotaSpreadProp>() == 4);
+    assert!(offset_of!(NotaSpreadProp, span) == 0);
+    assert!(offset_of!(NotaSpreadProp, node_id) == 8);
+    assert!(offset_of!(NotaSpreadProp, argument) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaFragment>() == 28);
+    assert!(align_of::<NotaFragment>() == 4);
+    assert!(offset_of!(NotaFragment, span) == 0);
+    assert!(offset_of!(NotaFragment, node_id) == 8);
+    assert!(offset_of!(NotaFragment, children) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaInterpolation>() == 20);
+    assert!(align_of::<NotaInterpolation>() == 4);
+    assert!(offset_of!(NotaInterpolation, span) == 0);
+    assert!(offset_of!(NotaInterpolation, node_id) == 8);
+    assert!(offset_of!(NotaInterpolation, expression) == 12);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaIf>() == 32);
+    assert!(align_of::<NotaIf>() == 4);
+    assert!(offset_of!(NotaIf, span) == 0);
+    assert!(offset_of!(NotaIf, node_id) == 8);
+    assert!(offset_of!(NotaIf, test) == 12);
+    assert!(offset_of!(NotaIf, consequent) == 20);
+    assert!(offset_of!(NotaIf, alternate) == 24);
+
+    assert!(size_of::<NotaElse>() == 8);
+    assert!(align_of::<NotaElse>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaFor>() == 32);
+    assert!(align_of::<NotaFor>() == 4);
+    assert!(offset_of!(NotaFor, span) == 0);
+    assert!(offset_of!(NotaFor, node_id) == 8);
+    assert!(offset_of!(NotaFor, binding) == 12);
+    assert!(offset_of!(NotaFor, iterable) == 20);
+    assert!(offset_of!(NotaFor, body) == 28);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaCode>() == 32);
+    assert!(align_of::<NotaCode>() == 4);
+    assert!(offset_of!(NotaCode, span) == 0);
+    assert!(offset_of!(NotaCode, node_id) == 8);
+    assert!(offset_of!(NotaCode, block) == 12);
+    assert!(offset_of!(NotaCode, language) == 16);
+    assert!(offset_of!(NotaCode, value) == 24);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaMath>() == 32);
+    assert!(align_of::<NotaMath>() == 4);
+    assert!(offset_of!(NotaMath, span) == 0);
+    assert!(offset_of!(NotaMath, node_id) == 8);
+    assert!(offset_of!(NotaMath, display) == 12);
+    assert!(offset_of!(NotaMath, parts) == 16);
+
+    assert!(size_of::<NotaMathPart>() == 8);
+    assert!(align_of::<NotaMathPart>() == 4);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaVerbatim>() == 36);
+    assert!(align_of::<NotaVerbatim>() == 4);
+    assert!(offset_of!(NotaVerbatim, span) == 0);
+    assert!(offset_of!(NotaVerbatim, node_id) == 8);
+    assert!(offset_of!(NotaVerbatim, tag) == 12);
+    assert!(offset_of!(NotaVerbatim, parts) == 20);
+
+    assert!(size_of::<NotaVerbatimPart>() == 8);
+    assert!(align_of::<NotaVerbatimPart>() == 4);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaEmphasis>() == 32);
+    assert!(align_of::<NotaEmphasis>() == 4);
+    assert!(offset_of!(NotaEmphasis, span) == 0);
+    assert!(offset_of!(NotaEmphasis, node_id) == 8);
+    assert!(offset_of!(NotaEmphasis, marker) == 12);
+    assert!(offset_of!(NotaEmphasis, children) == 16);
+
+    assert!(size_of::<NotaEmphasisMarker>() == 1);
+    assert!(align_of::<NotaEmphasisMarker>() == 1);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaHeading>() == 32);
+    assert!(align_of::<NotaHeading>() == 4);
+    assert!(offset_of!(NotaHeading, span) == 0);
+    assert!(offset_of!(NotaHeading, node_id) == 8);
+    assert!(offset_of!(NotaHeading, level) == 12);
+    assert!(offset_of!(NotaHeading, children) == 16);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaListItem>() == 32);
+    assert!(align_of::<NotaListItem>() == 4);
+    assert!(offset_of!(NotaListItem, span) == 0);
+    assert!(offset_of!(NotaListItem, node_id) == 8);
+    assert!(offset_of!(NotaListItem, kind) == 12);
+    assert!(offset_of!(NotaListItem, children) == 16);
+
+    assert!(size_of::<NotaListKind>() == 1);
+    assert!(align_of::<NotaListKind>() == 1);
 };
 
 #[cfg(not(any(target_pointer_width = "64", target_pointer_width = "32")))]

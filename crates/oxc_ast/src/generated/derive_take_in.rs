@@ -478,3 +478,61 @@ impl<'a> TakeIn<'a> for JSDocNonNullableType<'a> {}
 impl<'a> TakeIn<'a> for JSDocUnknownType {}
 
 impl<'a> TakeIn<'a> for NotaMarkup<'a> {}
+
+impl<'a> TakeIn<'a> for NotaMarkupKind<'a> {}
+
+impl<'a> TakeIn<'a> for NotaDocument<'a> {}
+
+impl<'a> TakeIn<'a> for NotaChild<'a> {}
+
+impl<'a> TakeIn<'a> for NotaText<'a> {}
+
+impl<'a> TakeIn<'a> for NotaStatement<'a> {}
+
+impl<'a> TakeIn<'a> for NotaElement<'a> {}
+
+impl<'a> TakeIn<'a> for NotaTag<'a> {}
+
+impl<'a> TakeIn<'a> for NotaHostName<'a> {}
+
+impl<'a> TakeIn<'a> for NotaDynamicTag<'a> {}
+
+impl<'a> TakeIn<'a> for NotaProp<'a> {}
+
+impl<'a> TakeIn<'a> for NotaFieldProp<'a> {}
+
+impl<'a> TakeIn<'a> for NotaPropName<'a> {}
+
+impl<'a> TakeIn<'a> for NotaPropValue<'a> {}
+
+impl<'a> TakeIn<'a> for NotaPropExpr<'a> {}
+
+impl<'a> TakeIn<'a> for NotaShorthandProp<'a> {}
+
+impl<'a> TakeIn<'a> for NotaSpreadProp<'a> {}
+
+impl<'a> TakeIn<'a> for NotaFragment<'a> {}
+
+impl<'a> TakeIn<'a> for NotaInterpolation<'a> {}
+
+impl<'a> TakeIn<'a> for NotaIf<'a> {}
+
+impl<'a> TakeIn<'a> for NotaElse<'a> {}
+
+impl<'a> TakeIn<'a> for NotaFor<'a> {}
+
+impl<'a> TakeIn<'a> for NotaCode<'a> {}
+
+impl<'a> TakeIn<'a> for NotaMath<'a> {}
+
+impl<'a> TakeIn<'a> for NotaMathPart<'a> {}
+
+impl<'a> TakeIn<'a> for NotaVerbatim<'a> {}
+
+impl<'a> TakeIn<'a> for NotaVerbatimPart<'a> {}
+
+impl<'a> TakeIn<'a> for NotaEmphasis<'a> {}
+
+impl<'a> TakeIn<'a> for NotaHeading<'a> {}
+
+impl<'a> TakeIn<'a> for NotaListItem<'a> {}

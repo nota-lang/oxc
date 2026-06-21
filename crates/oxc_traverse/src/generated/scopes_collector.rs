@@ -2029,7 +2029,205 @@ impl<'a> Visit<'a> for ChildScopeCollector {
 
     #[inline]
     fn visit_nota_markup(&mut self, it: &NotaMarkup<'a>) {
+        self.visit_nota_markup_kind(&it.kind);
+    }
+
+    fn visit_nota_markup_kind(&mut self, it: &NotaMarkupKind<'a>) {
+        match it {
+            NotaMarkupKind::Document(it) => self.visit_nota_document(it),
+            NotaMarkupKind::Element(it) => self.visit_nota_element(it),
+            NotaMarkupKind::Fragment(it) => self.visit_nota_fragment(it),
+            NotaMarkupKind::Interpolation(it) => self.visit_nota_interpolation(it),
+            NotaMarkupKind::If(it) => self.visit_nota_if(it),
+            NotaMarkupKind::For(it) => self.visit_nota_for(it),
+            NotaMarkupKind::Math(it) => self.visit_nota_math(it),
+            NotaMarkupKind::Verbatim(it) => self.visit_nota_verbatim(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Code`
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_nota_document(&mut self, it: &NotaDocument<'a>) {
+        self.visit_nota_children(&it.items);
+    }
+
+    fn visit_nota_child(&mut self, it: &NotaChild<'a>) {
+        match it {
+            NotaChild::Statement(it) => self.visit_nota_statement(it),
+            NotaChild::Element(it) => self.visit_nota_element(it),
+            NotaChild::Fragment(it) => self.visit_nota_fragment(it),
+            NotaChild::Interpolation(it) => self.visit_nota_interpolation(it),
+            NotaChild::If(it) => self.visit_nota_if(it),
+            NotaChild::For(it) => self.visit_nota_for(it),
+            NotaChild::Math(it) => self.visit_nota_math(it),
+            NotaChild::Verbatim(it) => self.visit_nota_verbatim(it),
+            NotaChild::Emphasis(it) => self.visit_nota_emphasis(it),
+            NotaChild::Heading(it) => self.visit_nota_heading(it),
+            NotaChild::ListItem(it) => self.visit_nota_list_item(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Text`
+                // `Code`
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn visit_nota_text(&mut self, it: &NotaText<'a>) {
+        // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_statement(&mut self, it: &NotaStatement<'a>) {
+        self.visit_statement(&it.statement);
+    }
+
+    #[inline]
+    fn visit_nota_element(&mut self, it: &NotaElement<'a>) {
+        self.visit_nota_tag(&it.tag);
+        self.visit_nota_props(&it.props);
+        self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_tag(&mut self, it: &NotaTag<'a>) {
+        match it {
+            NotaTag::Dynamic(it) => self.visit_nota_dynamic_tag(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Host`
+                // `Component`
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn visit_nota_host_name(&mut self, it: &NotaHostName<'a>) {
+        // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_dynamic_tag(&mut self, it: &NotaDynamicTag<'a>) {
         self.visit_expression(&it.expression);
+    }
+
+    #[inline]
+    fn visit_nota_prop(&mut self, it: &NotaProp<'a>) {
+        match it {
+            NotaProp::Field(it) => self.visit_nota_field_prop(it),
+            NotaProp::Spread(it) => self.visit_nota_spread_prop(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Shorthand`
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_nota_field_prop(&mut self, it: &NotaFieldProp<'a>) {
+        self.visit_nota_prop_value(&it.value);
+    }
+
+    #[inline(always)]
+    fn visit_nota_prop_name(&mut self, it: &NotaPropName<'a>) {
+        // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_prop_expr(&mut self, it: &NotaPropExpr<'a>) {
+        self.visit_expression(&it.expression);
+    }
+
+    #[inline(always)]
+    fn visit_nota_shorthand_prop(&mut self, it: &NotaShorthandProp<'a>) {
+        // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_spread_prop(&mut self, it: &NotaSpreadProp<'a>) {
+        self.visit_expression(&it.argument);
+    }
+
+    #[inline]
+    fn visit_nota_fragment(&mut self, it: &NotaFragment<'a>) {
+        self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_interpolation(&mut self, it: &NotaInterpolation<'a>) {
+        self.visit_expression(&it.expression);
+    }
+
+    #[inline]
+    fn visit_nota_if(&mut self, it: &NotaIf<'a>) {
+        self.visit_expression(&it.test);
+        self.visit_nota_fragment(&it.consequent);
+        if let Some(alternate) = &it.alternate {
+            self.visit_nota_else(alternate);
+        }
+    }
+
+    #[inline]
+    fn visit_nota_for(&mut self, it: &NotaFor<'a>) {
+        self.visit_binding_pattern(&it.binding);
+        self.visit_expression(&it.iterable);
+        self.visit_nota_fragment(&it.body);
+    }
+
+    #[inline(always)]
+    fn visit_nota_code(&mut self, it: &NotaCode<'a>) {
+        // Struct does not contain a scope. Halt traversal.
+    }
+
+    #[inline]
+    fn visit_nota_math(&mut self, it: &NotaMath<'a>) {
+        self.visit_nota_math_parts(&it.parts);
+    }
+
+    #[inline]
+    fn visit_nota_math_part(&mut self, it: &NotaMathPart<'a>) {
+        match it {
+            NotaMathPart::Interpolation(it) => self.visit_nota_interpolation(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Raw`
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_nota_verbatim(&mut self, it: &NotaVerbatim<'a>) {
+        self.visit_nota_tag(&it.tag);
+        self.visit_nota_verbatim_parts(&it.parts);
+    }
+
+    #[inline]
+    fn visit_nota_verbatim_part(&mut self, it: &NotaVerbatimPart<'a>) {
+        match it {
+            NotaVerbatimPart::Child(it) => self.visit_nota_markup(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Raw`
+            }
+        }
+    }
+
+    #[inline]
+    fn visit_nota_emphasis(&mut self, it: &NotaEmphasis<'a>) {
+        self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_heading(&mut self, it: &NotaHeading<'a>) {
+        self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
+        self.visit_nota_children(&it.children);
     }
 
     #[inline(always)]

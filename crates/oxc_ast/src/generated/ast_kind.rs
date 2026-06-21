@@ -10,7 +10,7 @@ use oxc_syntax::node::NodeId;
 use crate::ast::*;
 
 /// The largest integer value that can be mapped to an `AstType`/`AstKind` enum variant.
-pub const AST_TYPE_MAX: u8 = 188;
+pub const AST_TYPE_MAX: u8 = 209;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -204,6 +204,27 @@ pub enum AstType {
     JSDocNonNullableType = 186,
     JSDocUnknownType = 187,
     NotaMarkup = 188,
+    NotaDocument = 189,
+    NotaText = 190,
+    NotaStatement = 191,
+    NotaElement = 192,
+    NotaHostName = 193,
+    NotaDynamicTag = 194,
+    NotaFieldProp = 195,
+    NotaPropName = 196,
+    NotaPropExpr = 197,
+    NotaShorthandProp = 198,
+    NotaSpreadProp = 199,
+    NotaFragment = 200,
+    NotaInterpolation = 201,
+    NotaIf = 202,
+    NotaFor = 203,
+    NotaCode = 204,
+    NotaMath = 205,
+    NotaVerbatim = 206,
+    NotaEmphasis = 207,
+    NotaHeading = 208,
+    NotaListItem = 209,
 }
 
 /// Untyped AST Node Kind
@@ -417,6 +438,27 @@ pub enum AstKind<'a> {
     JSDocNonNullableType(&'a JSDocNonNullableType<'a>) = AstType::JSDocNonNullableType as u8,
     JSDocUnknownType(&'a JSDocUnknownType) = AstType::JSDocUnknownType as u8,
     NotaMarkup(&'a NotaMarkup<'a>) = AstType::NotaMarkup as u8,
+    NotaDocument(&'a NotaDocument<'a>) = AstType::NotaDocument as u8,
+    NotaText(&'a NotaText<'a>) = AstType::NotaText as u8,
+    NotaStatement(&'a NotaStatement<'a>) = AstType::NotaStatement as u8,
+    NotaElement(&'a NotaElement<'a>) = AstType::NotaElement as u8,
+    NotaHostName(&'a NotaHostName<'a>) = AstType::NotaHostName as u8,
+    NotaDynamicTag(&'a NotaDynamicTag<'a>) = AstType::NotaDynamicTag as u8,
+    NotaFieldProp(&'a NotaFieldProp<'a>) = AstType::NotaFieldProp as u8,
+    NotaPropName(&'a NotaPropName<'a>) = AstType::NotaPropName as u8,
+    NotaPropExpr(&'a NotaPropExpr<'a>) = AstType::NotaPropExpr as u8,
+    NotaShorthandProp(&'a NotaShorthandProp<'a>) = AstType::NotaShorthandProp as u8,
+    NotaSpreadProp(&'a NotaSpreadProp<'a>) = AstType::NotaSpreadProp as u8,
+    NotaFragment(&'a NotaFragment<'a>) = AstType::NotaFragment as u8,
+    NotaInterpolation(&'a NotaInterpolation<'a>) = AstType::NotaInterpolation as u8,
+    NotaIf(&'a NotaIf<'a>) = AstType::NotaIf as u8,
+    NotaFor(&'a NotaFor<'a>) = AstType::NotaFor as u8,
+    NotaCode(&'a NotaCode<'a>) = AstType::NotaCode as u8,
+    NotaMath(&'a NotaMath<'a>) = AstType::NotaMath as u8,
+    NotaVerbatim(&'a NotaVerbatim<'a>) = AstType::NotaVerbatim as u8,
+    NotaEmphasis(&'a NotaEmphasis<'a>) = AstType::NotaEmphasis as u8,
+    NotaHeading(&'a NotaHeading<'a>) = AstType::NotaHeading as u8,
+    NotaListItem(&'a NotaListItem<'a>) = AstType::NotaListItem as u8,
 }
 
 impl AstKind<'_> {
@@ -624,6 +666,27 @@ impl AstKind<'_> {
             Self::JSDocNonNullableType(it) => it.node_id(),
             Self::JSDocUnknownType(it) => it.node_id(),
             Self::NotaMarkup(it) => it.node_id(),
+            Self::NotaDocument(it) => it.node_id(),
+            Self::NotaText(it) => it.node_id(),
+            Self::NotaStatement(it) => it.node_id(),
+            Self::NotaElement(it) => it.node_id(),
+            Self::NotaHostName(it) => it.node_id(),
+            Self::NotaDynamicTag(it) => it.node_id(),
+            Self::NotaFieldProp(it) => it.node_id(),
+            Self::NotaPropName(it) => it.node_id(),
+            Self::NotaPropExpr(it) => it.node_id(),
+            Self::NotaShorthandProp(it) => it.node_id(),
+            Self::NotaSpreadProp(it) => it.node_id(),
+            Self::NotaFragment(it) => it.node_id(),
+            Self::NotaInterpolation(it) => it.node_id(),
+            Self::NotaIf(it) => it.node_id(),
+            Self::NotaFor(it) => it.node_id(),
+            Self::NotaCode(it) => it.node_id(),
+            Self::NotaMath(it) => it.node_id(),
+            Self::NotaVerbatim(it) => it.node_id(),
+            Self::NotaEmphasis(it) => it.node_id(),
+            Self::NotaHeading(it) => it.node_id(),
+            Self::NotaListItem(it) => it.node_id(),
         }
     }
 
@@ -821,6 +884,27 @@ impl AstKind<'_> {
             Self::JSDocNonNullableType(it) => it.set_node_id(node_id),
             Self::JSDocUnknownType(it) => it.set_node_id(node_id),
             Self::NotaMarkup(it) => it.set_node_id(node_id),
+            Self::NotaDocument(it) => it.set_node_id(node_id),
+            Self::NotaText(it) => it.set_node_id(node_id),
+            Self::NotaStatement(it) => it.set_node_id(node_id),
+            Self::NotaElement(it) => it.set_node_id(node_id),
+            Self::NotaHostName(it) => it.set_node_id(node_id),
+            Self::NotaDynamicTag(it) => it.set_node_id(node_id),
+            Self::NotaFieldProp(it) => it.set_node_id(node_id),
+            Self::NotaPropName(it) => it.set_node_id(node_id),
+            Self::NotaPropExpr(it) => it.set_node_id(node_id),
+            Self::NotaShorthandProp(it) => it.set_node_id(node_id),
+            Self::NotaSpreadProp(it) => it.set_node_id(node_id),
+            Self::NotaFragment(it) => it.set_node_id(node_id),
+            Self::NotaInterpolation(it) => it.set_node_id(node_id),
+            Self::NotaIf(it) => it.set_node_id(node_id),
+            Self::NotaFor(it) => it.set_node_id(node_id),
+            Self::NotaCode(it) => it.set_node_id(node_id),
+            Self::NotaMath(it) => it.set_node_id(node_id),
+            Self::NotaVerbatim(it) => it.set_node_id(node_id),
+            Self::NotaEmphasis(it) => it.set_node_id(node_id),
+            Self::NotaHeading(it) => it.set_node_id(node_id),
+            Self::NotaListItem(it) => it.set_node_id(node_id),
         }
     }
 }
@@ -1020,6 +1104,27 @@ impl GetSpan for AstKind<'_> {
             Self::JSDocNonNullableType(it) => it.span(),
             Self::JSDocUnknownType(it) => it.span(),
             Self::NotaMarkup(it) => it.span(),
+            Self::NotaDocument(it) => it.span(),
+            Self::NotaText(it) => it.span(),
+            Self::NotaStatement(it) => it.span(),
+            Self::NotaElement(it) => it.span(),
+            Self::NotaHostName(it) => it.span(),
+            Self::NotaDynamicTag(it) => it.span(),
+            Self::NotaFieldProp(it) => it.span(),
+            Self::NotaPropName(it) => it.span(),
+            Self::NotaPropExpr(it) => it.span(),
+            Self::NotaShorthandProp(it) => it.span(),
+            Self::NotaSpreadProp(it) => it.span(),
+            Self::NotaFragment(it) => it.span(),
+            Self::NotaInterpolation(it) => it.span(),
+            Self::NotaIf(it) => it.span(),
+            Self::NotaFor(it) => it.span(),
+            Self::NotaCode(it) => it.span(),
+            Self::NotaMath(it) => it.span(),
+            Self::NotaVerbatim(it) => it.span(),
+            Self::NotaEmphasis(it) => it.span(),
+            Self::NotaHeading(it) => it.span(),
+            Self::NotaListItem(it) => it.span(),
         }
     }
 }
@@ -1220,6 +1325,27 @@ impl GetAddress for AstKind<'_> {
             Self::JSDocNonNullableType(it) => it.unstable_address(),
             Self::JSDocUnknownType(it) => it.unstable_address(),
             Self::NotaMarkup(it) => it.unstable_address(),
+            Self::NotaDocument(it) => it.unstable_address(),
+            Self::NotaText(it) => it.unstable_address(),
+            Self::NotaStatement(it) => it.unstable_address(),
+            Self::NotaElement(it) => it.unstable_address(),
+            Self::NotaHostName(it) => it.unstable_address(),
+            Self::NotaDynamicTag(it) => it.unstable_address(),
+            Self::NotaFieldProp(it) => it.unstable_address(),
+            Self::NotaPropName(it) => it.unstable_address(),
+            Self::NotaPropExpr(it) => it.unstable_address(),
+            Self::NotaShorthandProp(it) => it.unstable_address(),
+            Self::NotaSpreadProp(it) => it.unstable_address(),
+            Self::NotaFragment(it) => it.unstable_address(),
+            Self::NotaInterpolation(it) => it.unstable_address(),
+            Self::NotaIf(it) => it.unstable_address(),
+            Self::NotaFor(it) => it.unstable_address(),
+            Self::NotaCode(it) => it.unstable_address(),
+            Self::NotaMath(it) => it.unstable_address(),
+            Self::NotaVerbatim(it) => it.unstable_address(),
+            Self::NotaEmphasis(it) => it.unstable_address(),
+            Self::NotaHeading(it) => it.unstable_address(),
+            Self::NotaListItem(it) => it.unstable_address(),
         }
     }
 }
@@ -2178,5 +2304,110 @@ impl<'a> AstKind<'a> {
     #[inline]
     pub fn as_nota_markup(self) -> Option<&'a NotaMarkup<'a>> {
         if let Self::NotaMarkup(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_document(self) -> Option<&'a NotaDocument<'a>> {
+        if let Self::NotaDocument(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_text(self) -> Option<&'a NotaText<'a>> {
+        if let Self::NotaText(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_statement(self) -> Option<&'a NotaStatement<'a>> {
+        if let Self::NotaStatement(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_element(self) -> Option<&'a NotaElement<'a>> {
+        if let Self::NotaElement(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_host_name(self) -> Option<&'a NotaHostName<'a>> {
+        if let Self::NotaHostName(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_dynamic_tag(self) -> Option<&'a NotaDynamicTag<'a>> {
+        if let Self::NotaDynamicTag(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_field_prop(self) -> Option<&'a NotaFieldProp<'a>> {
+        if let Self::NotaFieldProp(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_prop_name(self) -> Option<&'a NotaPropName<'a>> {
+        if let Self::NotaPropName(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_prop_expr(self) -> Option<&'a NotaPropExpr<'a>> {
+        if let Self::NotaPropExpr(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_shorthand_prop(self) -> Option<&'a NotaShorthandProp<'a>> {
+        if let Self::NotaShorthandProp(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_spread_prop(self) -> Option<&'a NotaSpreadProp<'a>> {
+        if let Self::NotaSpreadProp(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_fragment(self) -> Option<&'a NotaFragment<'a>> {
+        if let Self::NotaFragment(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_interpolation(self) -> Option<&'a NotaInterpolation<'a>> {
+        if let Self::NotaInterpolation(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_if(self) -> Option<&'a NotaIf<'a>> {
+        if let Self::NotaIf(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_for(self) -> Option<&'a NotaFor<'a>> {
+        if let Self::NotaFor(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_code(self) -> Option<&'a NotaCode<'a>> {
+        if let Self::NotaCode(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_math(self) -> Option<&'a NotaMath<'a>> {
+        if let Self::NotaMath(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_verbatim(self) -> Option<&'a NotaVerbatim<'a>> {
+        if let Self::NotaVerbatim(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_emphasis(self) -> Option<&'a NotaEmphasis<'a>> {
+        if let Self::NotaEmphasis(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_heading(self) -> Option<&'a NotaHeading<'a>> {
+        if let Self::NotaHeading(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_list_item(self) -> Option<&'a NotaListItem<'a>> {
+        if let Self::NotaListItem(v) = self { Some(v) } else { None }
     }
 }

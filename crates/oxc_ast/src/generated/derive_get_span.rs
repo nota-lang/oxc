@@ -2194,3 +2194,242 @@ impl GetSpan for NotaMarkup<'_> {
         self.span
     }
 }
+
+impl GetSpan for NotaMarkupKind<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Document(it) => GetSpan::span(&**it),
+            Self::Element(it) => GetSpan::span(&**it),
+            Self::Fragment(it) => GetSpan::span(&**it),
+            Self::Interpolation(it) => GetSpan::span(&**it),
+            Self::If(it) => GetSpan::span(&**it),
+            Self::For(it) => GetSpan::span(&**it),
+            Self::Code(it) => GetSpan::span(&**it),
+            Self::Math(it) => GetSpan::span(&**it),
+            Self::Verbatim(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaDocument<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaChild<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Text(it) => GetSpan::span(&**it),
+            Self::Statement(it) => GetSpan::span(&**it),
+            Self::Element(it) => GetSpan::span(&**it),
+            Self::Fragment(it) => GetSpan::span(&**it),
+            Self::Interpolation(it) => GetSpan::span(&**it),
+            Self::If(it) => GetSpan::span(&**it),
+            Self::For(it) => GetSpan::span(&**it),
+            Self::Code(it) => GetSpan::span(&**it),
+            Self::Math(it) => GetSpan::span(&**it),
+            Self::Verbatim(it) => GetSpan::span(&**it),
+            Self::Emphasis(it) => GetSpan::span(&**it),
+            Self::Heading(it) => GetSpan::span(&**it),
+            Self::ListItem(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaText<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaStatement<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaElement<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaTag<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Host(it) => GetSpan::span(&**it),
+            Self::Component(it) => GetSpan::span(&**it),
+            Self::Dynamic(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaHostName<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaDynamicTag<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaProp<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Field(it) => GetSpan::span(&**it),
+            Self::Shorthand(it) => GetSpan::span(&**it),
+            Self::Spread(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaFieldProp<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaPropName<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaPropValue<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Expression(it) => GetSpan::span(&**it),
+            Self::Markup(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaPropExpr<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaShorthandProp<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaSpreadProp<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaFragment<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaInterpolation<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaIf<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaElse<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::ElseIf(it) => GetSpan::span(&**it),
+            Self::Else(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaFor<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaCode<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaMath<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaMathPart<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Raw(it) => GetSpan::span(&**it),
+            Self::Interpolation(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaVerbatim<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaVerbatimPart<'_> {
+    fn span(&self) -> Span {
+        match self {
+            Self::Raw(it) => GetSpan::span(&**it),
+            Self::Child(it) => GetSpan::span(&**it),
+        }
+    }
+}
+
+impl GetSpan for NotaEmphasis<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaHeading<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaListItem<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}

@@ -386,3 +386,45 @@ impl UnstableAddress for JSDocNonNullableType<'_> {}
 impl UnstableAddress for JSDocUnknownType {}
 
 impl UnstableAddress for NotaMarkup<'_> {}
+
+impl UnstableAddress for NotaDocument<'_> {}
+
+impl UnstableAddress for NotaText<'_> {}
+
+impl UnstableAddress for NotaStatement<'_> {}
+
+impl UnstableAddress for NotaElement<'_> {}
+
+impl UnstableAddress for NotaHostName<'_> {}
+
+impl UnstableAddress for NotaDynamicTag<'_> {}
+
+impl UnstableAddress for NotaFieldProp<'_> {}
+
+impl UnstableAddress for NotaPropName<'_> {}
+
+impl UnstableAddress for NotaPropExpr<'_> {}
+
+impl UnstableAddress for NotaShorthandProp<'_> {}
+
+impl UnstableAddress for NotaSpreadProp<'_> {}
+
+impl UnstableAddress for NotaFragment<'_> {}
+
+impl UnstableAddress for NotaInterpolation<'_> {}
+
+impl UnstableAddress for NotaIf<'_> {}
+
+impl UnstableAddress for NotaFor<'_> {}
+
+impl UnstableAddress for NotaCode<'_> {}
+
+impl UnstableAddress for NotaMath<'_> {}
+
+impl UnstableAddress for NotaVerbatim<'_> {}
+
+impl UnstableAddress for NotaEmphasis<'_> {}
+
+impl UnstableAddress for NotaHeading<'_> {}
+
+impl UnstableAddress for NotaListItem<'_> {}

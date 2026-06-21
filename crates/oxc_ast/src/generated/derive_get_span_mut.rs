@@ -2194,3 +2194,242 @@ impl GetSpanMut for NotaMarkup<'_> {
         &mut self.span
     }
 }
+
+impl GetSpanMut for NotaMarkupKind<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Document(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Element(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+            Self::If(it) => GetSpanMut::span_mut(&mut **it),
+            Self::For(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Code(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Math(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaDocument<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaChild<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Text(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Statement(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Element(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+            Self::If(it) => GetSpanMut::span_mut(&mut **it),
+            Self::For(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Code(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Math(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Emphasis(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Heading(it) => GetSpanMut::span_mut(&mut **it),
+            Self::ListItem(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaText<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaStatement<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaElement<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaTag<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Host(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Component(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Dynamic(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaHostName<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaDynamicTag<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaProp<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Field(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Shorthand(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Spread(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaFieldProp<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaPropName<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaPropValue<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Expression(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Markup(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaPropExpr<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaShorthandProp<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaSpreadProp<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaFragment<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaInterpolation<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaIf<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaElse<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::ElseIf(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Else(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaFor<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaCode<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaMath<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaMathPart<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Raw(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaVerbatim<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaVerbatimPart<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Raw(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Child(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
+impl GetSpanMut for NotaEmphasis<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaHeading<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaListItem<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}

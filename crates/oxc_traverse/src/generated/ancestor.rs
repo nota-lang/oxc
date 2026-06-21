@@ -323,7 +323,32 @@ pub(crate) enum AncestorType {
     TSInstantiationExpressionTypeArguments = 299,
     JSDocNullableTypeTypeAnnotation = 300,
     JSDocNonNullableTypeTypeAnnotation = 301,
-    NotaMarkupExpression = 302,
+    NotaMarkupKind = 302,
+    NotaDocumentItems = 303,
+    NotaStatementStatement = 304,
+    NotaElementTag = 305,
+    NotaElementProps = 306,
+    NotaElementChildren = 307,
+    NotaDynamicTagExpression = 308,
+    NotaFieldPropName = 309,
+    NotaFieldPropValue = 310,
+    NotaPropExprExpression = 311,
+    NotaShorthandPropName = 312,
+    NotaSpreadPropArgument = 313,
+    NotaFragmentChildren = 314,
+    NotaInterpolationExpression = 315,
+    NotaIfTest = 316,
+    NotaIfConsequent = 317,
+    NotaIfAlternate = 318,
+    NotaForBinding = 319,
+    NotaForIterable = 320,
+    NotaForBody = 321,
+    NotaMathParts = 322,
+    NotaVerbatimTag = 323,
+    NotaVerbatimParts = 324,
+    NotaEmphasisChildren = 325,
+    NotaHeadingChildren = 326,
+    NotaListItemChildren = 327,
 }
 
 /// Ancestor type used in AST traversal.
@@ -908,8 +933,43 @@ pub enum Ancestor<'a, 't> {
         AncestorType::JSDocNullableTypeTypeAnnotation as u16,
     JSDocNonNullableTypeTypeAnnotation(JSDocNonNullableTypeWithoutTypeAnnotation<'a, 't>) =
         AncestorType::JSDocNonNullableTypeTypeAnnotation as u16,
-    NotaMarkupExpression(NotaMarkupWithoutExpression<'a, 't>) =
-        AncestorType::NotaMarkupExpression as u16,
+    NotaMarkupKind(NotaMarkupWithoutKind<'a, 't>) = AncestorType::NotaMarkupKind as u16,
+    NotaDocumentItems(NotaDocumentWithoutItems<'a, 't>) = AncestorType::NotaDocumentItems as u16,
+    NotaStatementStatement(NotaStatementWithoutStatement<'a, 't>) =
+        AncestorType::NotaStatementStatement as u16,
+    NotaElementTag(NotaElementWithoutTag<'a, 't>) = AncestorType::NotaElementTag as u16,
+    NotaElementProps(NotaElementWithoutProps<'a, 't>) = AncestorType::NotaElementProps as u16,
+    NotaElementChildren(NotaElementWithoutChildren<'a, 't>) =
+        AncestorType::NotaElementChildren as u16,
+    NotaDynamicTagExpression(NotaDynamicTagWithoutExpression<'a, 't>) =
+        AncestorType::NotaDynamicTagExpression as u16,
+    NotaFieldPropName(NotaFieldPropWithoutName<'a, 't>) = AncestorType::NotaFieldPropName as u16,
+    NotaFieldPropValue(NotaFieldPropWithoutValue<'a, 't>) = AncestorType::NotaFieldPropValue as u16,
+    NotaPropExprExpression(NotaPropExprWithoutExpression<'a, 't>) =
+        AncestorType::NotaPropExprExpression as u16,
+    NotaShorthandPropName(NotaShorthandPropWithoutName<'a, 't>) =
+        AncestorType::NotaShorthandPropName as u16,
+    NotaSpreadPropArgument(NotaSpreadPropWithoutArgument<'a, 't>) =
+        AncestorType::NotaSpreadPropArgument as u16,
+    NotaFragmentChildren(NotaFragmentWithoutChildren<'a, 't>) =
+        AncestorType::NotaFragmentChildren as u16,
+    NotaInterpolationExpression(NotaInterpolationWithoutExpression<'a, 't>) =
+        AncestorType::NotaInterpolationExpression as u16,
+    NotaIfTest(NotaIfWithoutTest<'a, 't>) = AncestorType::NotaIfTest as u16,
+    NotaIfConsequent(NotaIfWithoutConsequent<'a, 't>) = AncestorType::NotaIfConsequent as u16,
+    NotaIfAlternate(NotaIfWithoutAlternate<'a, 't>) = AncestorType::NotaIfAlternate as u16,
+    NotaForBinding(NotaForWithoutBinding<'a, 't>) = AncestorType::NotaForBinding as u16,
+    NotaForIterable(NotaForWithoutIterable<'a, 't>) = AncestorType::NotaForIterable as u16,
+    NotaForBody(NotaForWithoutBody<'a, 't>) = AncestorType::NotaForBody as u16,
+    NotaMathParts(NotaMathWithoutParts<'a, 't>) = AncestorType::NotaMathParts as u16,
+    NotaVerbatimTag(NotaVerbatimWithoutTag<'a, 't>) = AncestorType::NotaVerbatimTag as u16,
+    NotaVerbatimParts(NotaVerbatimWithoutParts<'a, 't>) = AncestorType::NotaVerbatimParts as u16,
+    NotaEmphasisChildren(NotaEmphasisWithoutChildren<'a, 't>) =
+        AncestorType::NotaEmphasisChildren as u16,
+    NotaHeadingChildren(NotaHeadingWithoutChildren<'a, 't>) =
+        AncestorType::NotaHeadingChildren as u16,
+    NotaListItemChildren(NotaListItemWithoutChildren<'a, 't>) =
+        AncestorType::NotaListItemChildren as u16,
 }
 
 impl<'a, 't> Ancestor<'a, 't> {
@@ -1910,7 +1970,95 @@ impl<'a, 't> Ancestor<'a, 't> {
 
     #[inline]
     pub fn is_nota_markup(self) -> bool {
-        matches!(self, Self::NotaMarkupExpression(_))
+        matches!(self, Self::NotaMarkupKind(_))
+    }
+
+    #[inline]
+    pub fn is_nota_document(self) -> bool {
+        matches!(self, Self::NotaDocumentItems(_))
+    }
+
+    #[inline]
+    pub fn is_nota_statement(self) -> bool {
+        matches!(self, Self::NotaStatementStatement(_))
+    }
+
+    #[inline]
+    pub fn is_nota_element(self) -> bool {
+        matches!(
+            self,
+            Self::NotaElementTag(_) | Self::NotaElementProps(_) | Self::NotaElementChildren(_)
+        )
+    }
+
+    #[inline]
+    pub fn is_nota_dynamic_tag(self) -> bool {
+        matches!(self, Self::NotaDynamicTagExpression(_))
+    }
+
+    #[inline]
+    pub fn is_nota_field_prop(self) -> bool {
+        matches!(self, Self::NotaFieldPropName(_) | Self::NotaFieldPropValue(_))
+    }
+
+    #[inline]
+    pub fn is_nota_prop_expr(self) -> bool {
+        matches!(self, Self::NotaPropExprExpression(_))
+    }
+
+    #[inline]
+    pub fn is_nota_shorthand_prop(self) -> bool {
+        matches!(self, Self::NotaShorthandPropName(_))
+    }
+
+    #[inline]
+    pub fn is_nota_spread_prop(self) -> bool {
+        matches!(self, Self::NotaSpreadPropArgument(_))
+    }
+
+    #[inline]
+    pub fn is_nota_fragment(self) -> bool {
+        matches!(self, Self::NotaFragmentChildren(_))
+    }
+
+    #[inline]
+    pub fn is_nota_interpolation(self) -> bool {
+        matches!(self, Self::NotaInterpolationExpression(_))
+    }
+
+    #[inline]
+    pub fn is_nota_if(self) -> bool {
+        matches!(self, Self::NotaIfTest(_) | Self::NotaIfConsequent(_) | Self::NotaIfAlternate(_))
+    }
+
+    #[inline]
+    pub fn is_nota_for(self) -> bool {
+        matches!(self, Self::NotaForBinding(_) | Self::NotaForIterable(_) | Self::NotaForBody(_))
+    }
+
+    #[inline]
+    pub fn is_nota_math(self) -> bool {
+        matches!(self, Self::NotaMathParts(_))
+    }
+
+    #[inline]
+    pub fn is_nota_verbatim(self) -> bool {
+        matches!(self, Self::NotaVerbatimTag(_) | Self::NotaVerbatimParts(_))
+    }
+
+    #[inline]
+    pub fn is_nota_emphasis(self) -> bool {
+        matches!(self, Self::NotaEmphasisChildren(_))
+    }
+
+    #[inline]
+    pub fn is_nota_heading(self) -> bool {
+        matches!(self, Self::NotaHeadingChildren(_))
+    }
+
+    #[inline]
+    pub fn is_nota_list_item(self) -> bool {
+        matches!(self, Self::NotaListItemChildren(_))
     }
 
     #[inline]
@@ -1932,6 +2080,7 @@ impl<'a, 't> Ancestor<'a, 't> {
                 | Self::FunctionBodyStatements(_)
                 | Self::StaticBlockBody(_)
                 | Self::TSModuleBlockBody(_)
+                | Self::NotaStatementStatement(_)
         )
     }
 
@@ -2022,7 +2171,12 @@ impl<'a, 't> Ancestor<'a, 't> {
                 | Self::DecoratorExpression(_)
                 | Self::TSExportAssignmentExpression(_)
                 | Self::TSInstantiationExpressionExpression(_)
-                | Self::NotaMarkupExpression(_)
+                | Self::NotaDynamicTagExpression(_)
+                | Self::NotaPropExprExpression(_)
+                | Self::NotaSpreadPropArgument(_)
+                | Self::NotaInterpolationExpression(_)
+                | Self::NotaIfTest(_)
+                | Self::NotaForIterable(_)
         )
     }
 
@@ -2081,6 +2235,7 @@ impl<'a, 't> Ancestor<'a, 't> {
                 | Self::ArrayPatternElements(_)
                 | Self::BindingRestElementArgument(_)
                 | Self::FormalParameterPattern(_)
+                | Self::NotaForBinding(_)
         )
     }
 
@@ -2257,6 +2412,54 @@ impl<'a, 't> Ancestor<'a, 't> {
     #[inline]
     pub fn is_parent_of_ts_module_reference(self) -> bool {
         matches!(self, Self::TSImportEqualsDeclarationModuleReference(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_markup_kind(self) -> bool {
+        matches!(self, Self::NotaMarkupKind(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_child(self) -> bool {
+        matches!(
+            self,
+            Self::NotaDocumentItems(_)
+                | Self::NotaElementChildren(_)
+                | Self::NotaFragmentChildren(_)
+                | Self::NotaEmphasisChildren(_)
+                | Self::NotaHeadingChildren(_)
+                | Self::NotaListItemChildren(_)
+        )
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_tag(self) -> bool {
+        matches!(self, Self::NotaElementTag(_) | Self::NotaVerbatimTag(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_prop(self) -> bool {
+        matches!(self, Self::NotaElementProps(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_prop_value(self) -> bool {
+        matches!(self, Self::NotaFieldPropValue(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_else(self) -> bool {
+        matches!(self, Self::NotaIfAlternate(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_math_part(self) -> bool {
+        matches!(self, Self::NotaMathParts(_))
+    }
+
+    #[inline]
+    pub fn is_parent_of_nota_verbatim_part(self) -> bool {
+        matches!(self, Self::NotaVerbatimParts(_))
     }
 }
 
@@ -2568,7 +2771,32 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::TSInstantiationExpressionTypeArguments(a) => a.address(),
             Self::JSDocNullableTypeTypeAnnotation(a) => a.address(),
             Self::JSDocNonNullableTypeTypeAnnotation(a) => a.address(),
-            Self::NotaMarkupExpression(a) => a.address(),
+            Self::NotaMarkupKind(a) => a.address(),
+            Self::NotaDocumentItems(a) => a.address(),
+            Self::NotaStatementStatement(a) => a.address(),
+            Self::NotaElementTag(a) => a.address(),
+            Self::NotaElementProps(a) => a.address(),
+            Self::NotaElementChildren(a) => a.address(),
+            Self::NotaDynamicTagExpression(a) => a.address(),
+            Self::NotaFieldPropName(a) => a.address(),
+            Self::NotaFieldPropValue(a) => a.address(),
+            Self::NotaPropExprExpression(a) => a.address(),
+            Self::NotaShorthandPropName(a) => a.address(),
+            Self::NotaSpreadPropArgument(a) => a.address(),
+            Self::NotaFragmentChildren(a) => a.address(),
+            Self::NotaInterpolationExpression(a) => a.address(),
+            Self::NotaIfTest(a) => a.address(),
+            Self::NotaIfConsequent(a) => a.address(),
+            Self::NotaIfAlternate(a) => a.address(),
+            Self::NotaForBinding(a) => a.address(),
+            Self::NotaForIterable(a) => a.address(),
+            Self::NotaForBody(a) => a.address(),
+            Self::NotaMathParts(a) => a.address(),
+            Self::NotaVerbatimTag(a) => a.address(),
+            Self::NotaVerbatimParts(a) => a.address(),
+            Self::NotaEmphasisChildren(a) => a.address(),
+            Self::NotaHeadingChildren(a) => a.address(),
+            Self::NotaListItemChildren(a) => a.address(),
         }
     }
 }
@@ -18582,16 +18810,16 @@ impl<'a, 't> GetAddress for JSDocNonNullableTypeWithoutTypeAnnotation<'a, 't> {
 
 pub(crate) const OFFSET_NOTA_MARKUP_NODE_ID: usize = offset_of!(NotaMarkup, node_id);
 pub(crate) const OFFSET_NOTA_MARKUP_SPAN: usize = offset_of!(NotaMarkup, span);
-pub(crate) const OFFSET_NOTA_MARKUP_EXPRESSION: usize = offset_of!(NotaMarkup, expression);
+pub(crate) const OFFSET_NOTA_MARKUP_KIND: usize = offset_of!(NotaMarkup, kind);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-pub struct NotaMarkupWithoutExpression<'a, 't>(
+pub struct NotaMarkupWithoutKind<'a, 't>(
     pub(crate) *const NotaMarkup<'a>,
     pub(crate) PhantomData<&'t ()>,
 );
 
-impl<'a, 't> NotaMarkupWithoutExpression<'a, 't> {
+impl<'a, 't> NotaMarkupWithoutKind<'a, 't> {
     #[inline]
     pub fn node_id(self) -> &'t Cell<NodeId> {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MARKUP_NODE_ID) as *const Cell<NodeId>) }
@@ -18603,7 +18831,930 @@ impl<'a, 't> NotaMarkupWithoutExpression<'a, 't> {
     }
 }
 
-impl<'a, 't> GetAddress for NotaMarkupWithoutExpression<'a, 't> {
+impl<'a, 't> GetAddress for NotaMarkupWithoutKind<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_DOCUMENT_NODE_ID: usize = offset_of!(NotaDocument, node_id);
+pub(crate) const OFFSET_NOTA_DOCUMENT_SPAN: usize = offset_of!(NotaDocument, span);
+pub(crate) const OFFSET_NOTA_DOCUMENT_ITEMS: usize = offset_of!(NotaDocument, items);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaDocumentWithoutItems<'a, 't>(
+    pub(crate) *const NotaDocument<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaDocumentWithoutItems<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DOCUMENT_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DOCUMENT_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaDocumentWithoutItems<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_STATEMENT_NODE_ID: usize = offset_of!(NotaStatement, node_id);
+pub(crate) const OFFSET_NOTA_STATEMENT_SPAN: usize = offset_of!(NotaStatement, span);
+pub(crate) const OFFSET_NOTA_STATEMENT_STATEMENT: usize = offset_of!(NotaStatement, statement);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaStatementWithoutStatement<'a, 't>(
+    pub(crate) *const NotaStatement<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaStatementWithoutStatement<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_STATEMENT_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_STATEMENT_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaStatementWithoutStatement<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_ELEMENT_NODE_ID: usize = offset_of!(NotaElement, node_id);
+pub(crate) const OFFSET_NOTA_ELEMENT_SPAN: usize = offset_of!(NotaElement, span);
+pub(crate) const OFFSET_NOTA_ELEMENT_TAG: usize = offset_of!(NotaElement, tag);
+pub(crate) const OFFSET_NOTA_ELEMENT_PROPS: usize = offset_of!(NotaElement, props);
+pub(crate) const OFFSET_NOTA_ELEMENT_CHILDREN: usize = offset_of!(NotaElement, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaElementWithoutTag<'a, 't>(
+    pub(crate) *const NotaElement<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaElementWithoutTag<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn props(self) -> &'t Vec<'a, NotaProp<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS) as *const Vec<'a, NotaProp<'a>>)
+        }
+    }
+
+    #[inline]
+    pub fn children(self) -> &'t Vec<'a, NotaChild<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_CHILDREN)
+                as *const Vec<'a, NotaChild<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaElementWithoutTag<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaElementWithoutProps<'a, 't>(
+    pub(crate) *const NotaElement<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaElementWithoutProps<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn tag(self) -> &'t NotaTag<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_TAG) as *const NotaTag<'a>) }
+    }
+
+    #[inline]
+    pub fn children(self) -> &'t Vec<'a, NotaChild<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_CHILDREN)
+                as *const Vec<'a, NotaChild<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaElementWithoutProps<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaElementWithoutChildren<'a, 't>(
+    pub(crate) *const NotaElement<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaElementWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn tag(self) -> &'t NotaTag<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_TAG) as *const NotaTag<'a>) }
+    }
+
+    #[inline]
+    pub fn props(self) -> &'t Vec<'a, NotaProp<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS) as *const Vec<'a, NotaProp<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaElementWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_DYNAMIC_TAG_NODE_ID: usize = offset_of!(NotaDynamicTag, node_id);
+pub(crate) const OFFSET_NOTA_DYNAMIC_TAG_SPAN: usize = offset_of!(NotaDynamicTag, span);
+pub(crate) const OFFSET_NOTA_DYNAMIC_TAG_EXPRESSION: usize = offset_of!(NotaDynamicTag, expression);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaDynamicTagWithoutExpression<'a, 't>(
+    pub(crate) *const NotaDynamicTag<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaDynamicTagWithoutExpression<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DYNAMIC_TAG_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DYNAMIC_TAG_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaDynamicTagWithoutExpression<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_FIELD_PROP_NODE_ID: usize = offset_of!(NotaFieldProp, node_id);
+pub(crate) const OFFSET_NOTA_FIELD_PROP_SPAN: usize = offset_of!(NotaFieldProp, span);
+pub(crate) const OFFSET_NOTA_FIELD_PROP_NAME: usize = offset_of!(NotaFieldProp, name);
+pub(crate) const OFFSET_NOTA_FIELD_PROP_VALUE: usize = offset_of!(NotaFieldProp, value);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaFieldPropWithoutName<'a, 't>(
+    pub(crate) *const NotaFieldProp<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaFieldPropWithoutName<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn value(self) -> &'t NotaPropValue<'a> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_VALUE) as *const NotaPropValue<'a>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaFieldPropWithoutName<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaFieldPropWithoutValue<'a, 't>(
+    pub(crate) *const NotaFieldProp<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaFieldPropWithoutValue<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn name(self) -> &'t NotaPropName<'a> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FIELD_PROP_NAME) as *const NotaPropName<'a>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaFieldPropWithoutValue<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_PROP_EXPR_NODE_ID: usize = offset_of!(NotaPropExpr, node_id);
+pub(crate) const OFFSET_NOTA_PROP_EXPR_SPAN: usize = offset_of!(NotaPropExpr, span);
+pub(crate) const OFFSET_NOTA_PROP_EXPR_EXPRESSION: usize = offset_of!(NotaPropExpr, expression);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaPropExprWithoutExpression<'a, 't>(
+    pub(crate) *const NotaPropExpr<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaPropExprWithoutExpression<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_PROP_EXPR_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_PROP_EXPR_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaPropExprWithoutExpression<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_SHORTHAND_PROP_NODE_ID: usize = offset_of!(NotaShorthandProp, node_id);
+pub(crate) const OFFSET_NOTA_SHORTHAND_PROP_SPAN: usize = offset_of!(NotaShorthandProp, span);
+pub(crate) const OFFSET_NOTA_SHORTHAND_PROP_NAME: usize = offset_of!(NotaShorthandProp, name);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaShorthandPropWithoutName<'a, 't>(
+    pub(crate) *const NotaShorthandProp<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaShorthandPropWithoutName<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_SHORTHAND_PROP_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_SHORTHAND_PROP_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaShorthandPropWithoutName<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_SPREAD_PROP_NODE_ID: usize = offset_of!(NotaSpreadProp, node_id);
+pub(crate) const OFFSET_NOTA_SPREAD_PROP_SPAN: usize = offset_of!(NotaSpreadProp, span);
+pub(crate) const OFFSET_NOTA_SPREAD_PROP_ARGUMENT: usize = offset_of!(NotaSpreadProp, argument);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaSpreadPropWithoutArgument<'a, 't>(
+    pub(crate) *const NotaSpreadProp<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaSpreadPropWithoutArgument<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_SPREAD_PROP_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_SPREAD_PROP_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaSpreadPropWithoutArgument<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_FRAGMENT_NODE_ID: usize = offset_of!(NotaFragment, node_id);
+pub(crate) const OFFSET_NOTA_FRAGMENT_SPAN: usize = offset_of!(NotaFragment, span);
+pub(crate) const OFFSET_NOTA_FRAGMENT_CHILDREN: usize = offset_of!(NotaFragment, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaFragmentWithoutChildren<'a, 't>(
+    pub(crate) *const NotaFragment<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaFragmentWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FRAGMENT_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FRAGMENT_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaFragmentWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_INTERPOLATION_NODE_ID: usize = offset_of!(NotaInterpolation, node_id);
+pub(crate) const OFFSET_NOTA_INTERPOLATION_SPAN: usize = offset_of!(NotaInterpolation, span);
+pub(crate) const OFFSET_NOTA_INTERPOLATION_EXPRESSION: usize =
+    offset_of!(NotaInterpolation, expression);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaInterpolationWithoutExpression<'a, 't>(
+    pub(crate) *const NotaInterpolation<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaInterpolationWithoutExpression<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_INTERPOLATION_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_INTERPOLATION_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaInterpolationWithoutExpression<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_IF_NODE_ID: usize = offset_of!(NotaIf, node_id);
+pub(crate) const OFFSET_NOTA_IF_SPAN: usize = offset_of!(NotaIf, span);
+pub(crate) const OFFSET_NOTA_IF_TEST: usize = offset_of!(NotaIf, test);
+pub(crate) const OFFSET_NOTA_IF_CONSEQUENT: usize = offset_of!(NotaIf, consequent);
+pub(crate) const OFFSET_NOTA_IF_ALTERNATE: usize = offset_of!(NotaIf, alternate);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaIfWithoutTest<'a, 't>(pub(crate) *const NotaIf<'a>, pub(crate) PhantomData<&'t ()>);
+
+impl<'a, 't> NotaIfWithoutTest<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn consequent(self) -> &'t Box<'a, NotaFragment<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_IF_CONSEQUENT)
+                as *const Box<'a, NotaFragment<'a>>)
+        }
+    }
+
+    #[inline]
+    pub fn alternate(self) -> &'t Option<NotaElse<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_IF_ALTERNATE) as *const Option<NotaElse<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaIfWithoutTest<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaIfWithoutConsequent<'a, 't>(
+    pub(crate) *const NotaIf<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaIfWithoutConsequent<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn test(self) -> &'t Expression<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_TEST) as *const Expression<'a>) }
+    }
+
+    #[inline]
+    pub fn alternate(self) -> &'t Option<NotaElse<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_IF_ALTERNATE) as *const Option<NotaElse<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaIfWithoutConsequent<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaIfWithoutAlternate<'a, 't>(
+    pub(crate) *const NotaIf<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaIfWithoutAlternate<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn test(self) -> &'t Expression<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_IF_TEST) as *const Expression<'a>) }
+    }
+
+    #[inline]
+    pub fn consequent(self) -> &'t Box<'a, NotaFragment<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_IF_CONSEQUENT)
+                as *const Box<'a, NotaFragment<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaIfWithoutAlternate<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_FOR_NODE_ID: usize = offset_of!(NotaFor, node_id);
+pub(crate) const OFFSET_NOTA_FOR_SPAN: usize = offset_of!(NotaFor, span);
+pub(crate) const OFFSET_NOTA_FOR_BINDING: usize = offset_of!(NotaFor, binding);
+pub(crate) const OFFSET_NOTA_FOR_ITERABLE: usize = offset_of!(NotaFor, iterable);
+pub(crate) const OFFSET_NOTA_FOR_BODY: usize = offset_of!(NotaFor, body);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaForWithoutBinding<'a, 't>(
+    pub(crate) *const NotaFor<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaForWithoutBinding<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn iterable(self) -> &'t Expression<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_ITERABLE) as *const Expression<'a>) }
+    }
+
+    #[inline]
+    pub fn body(self) -> &'t Box<'a, NotaFragment<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_BODY) as *const Box<'a, NotaFragment<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaForWithoutBinding<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaForWithoutIterable<'a, 't>(
+    pub(crate) *const NotaFor<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaForWithoutIterable<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn binding(self) -> &'t BindingPattern<'a> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_BINDING) as *const BindingPattern<'a>)
+        }
+    }
+
+    #[inline]
+    pub fn body(self) -> &'t Box<'a, NotaFragment<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_BODY) as *const Box<'a, NotaFragment<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaForWithoutIterable<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaForWithoutBody<'a, 't>(
+    pub(crate) *const NotaFor<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaForWithoutBody<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn binding(self) -> &'t BindingPattern<'a> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_BINDING) as *const BindingPattern<'a>)
+        }
+    }
+
+    #[inline]
+    pub fn iterable(self) -> &'t Expression<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_FOR_ITERABLE) as *const Expression<'a>) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaForWithoutBody<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_MATH_NODE_ID: usize = offset_of!(NotaMath, node_id);
+pub(crate) const OFFSET_NOTA_MATH_SPAN: usize = offset_of!(NotaMath, span);
+pub(crate) const OFFSET_NOTA_MATH_DISPLAY: usize = offset_of!(NotaMath, display);
+pub(crate) const OFFSET_NOTA_MATH_PARTS: usize = offset_of!(NotaMath, parts);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaMathWithoutParts<'a, 't>(
+    pub(crate) *const NotaMath<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaMathWithoutParts<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MATH_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MATH_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn display(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MATH_DISPLAY) as *const bool) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaMathWithoutParts<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_VERBATIM_NODE_ID: usize = offset_of!(NotaVerbatim, node_id);
+pub(crate) const OFFSET_NOTA_VERBATIM_SPAN: usize = offset_of!(NotaVerbatim, span);
+pub(crate) const OFFSET_NOTA_VERBATIM_TAG: usize = offset_of!(NotaVerbatim, tag);
+pub(crate) const OFFSET_NOTA_VERBATIM_PARTS: usize = offset_of!(NotaVerbatim, parts);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaVerbatimWithoutTag<'a, 't>(
+    pub(crate) *const NotaVerbatim<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaVerbatimWithoutTag<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn parts(self) -> &'t Vec<'a, NotaVerbatimPart<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_PARTS)
+                as *const Vec<'a, NotaVerbatimPart<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaVerbatimWithoutTag<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaVerbatimWithoutParts<'a, 't>(
+    pub(crate) *const NotaVerbatim<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaVerbatimWithoutParts<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn tag(self) -> &'t NotaTag<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_TAG) as *const NotaTag<'a>) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaVerbatimWithoutParts<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_EMPHASIS_NODE_ID: usize = offset_of!(NotaEmphasis, node_id);
+pub(crate) const OFFSET_NOTA_EMPHASIS_SPAN: usize = offset_of!(NotaEmphasis, span);
+pub(crate) const OFFSET_NOTA_EMPHASIS_MARKER: usize = offset_of!(NotaEmphasis, marker);
+pub(crate) const OFFSET_NOTA_EMPHASIS_CHILDREN: usize = offset_of!(NotaEmphasis, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaEmphasisWithoutChildren<'a, 't>(
+    pub(crate) *const NotaEmphasis<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaEmphasisWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_EMPHASIS_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_EMPHASIS_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn marker(self) -> &'t NotaEmphasisMarker {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_EMPHASIS_MARKER) as *const NotaEmphasisMarker)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaEmphasisWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_HEADING_NODE_ID: usize = offset_of!(NotaHeading, node_id);
+pub(crate) const OFFSET_NOTA_HEADING_SPAN: usize = offset_of!(NotaHeading, span);
+pub(crate) const OFFSET_NOTA_HEADING_LEVEL: usize = offset_of!(NotaHeading, level);
+pub(crate) const OFFSET_NOTA_HEADING_CHILDREN: usize = offset_of!(NotaHeading, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaHeadingWithoutChildren<'a, 't>(
+    pub(crate) *const NotaHeading<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaHeadingWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_HEADING_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_HEADING_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn level(self) -> &'t u8 {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_HEADING_LEVEL) as *const u8) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaHeadingWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_LIST_ITEM_NODE_ID: usize = offset_of!(NotaListItem, node_id);
+pub(crate) const OFFSET_NOTA_LIST_ITEM_SPAN: usize = offset_of!(NotaListItem, span);
+pub(crate) const OFFSET_NOTA_LIST_ITEM_KIND: usize = offset_of!(NotaListItem, kind);
+pub(crate) const OFFSET_NOTA_LIST_ITEM_CHILDREN: usize = offset_of!(NotaListItem, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaListItemWithoutChildren<'a, 't>(
+    pub(crate) *const NotaListItem<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaListItemWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_LIST_ITEM_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LIST_ITEM_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn kind(self) -> &'t NotaListKind {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LIST_ITEM_KIND) as *const NotaListKind) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaListItemWithoutChildren<'a, 't> {
     #[inline]
     fn address(&self) -> Address {
         unsafe { Address::from_ptr(self.0) }

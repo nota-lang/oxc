@@ -13,9 +13,9 @@ The reader is being restructured from **parse-and-lower-in-one-pass** (the parse
 `Expression::NotaMarkup`** variant (discriminant 40), rich tree in our own `#[ast]` types; (2)
 **faithful** sugar/raw-text nodes, Scribble runs in *lowering*; (3) **full-document deferral** — the
 parser emits a faithful `NotaDocument`; lowering builds the `Doc` skeleton, `%`-routing, F1 hoist+export,
-decode-wraps, await→async. Phases: **P0 AST integration spike ✓** · P1 full AST · P2 parser→tree lowered
-inline (120 fixtures as oracle) · P3 defer to a pass · P4 relocate to `oxc_transformer/src/nota/` · P5
-migrate H1/H2.
+decode-wraps, await→async. Phases: **P0 AST integration spike ✓** · **P1 full faithful AST ✓** · P2
+parser→tree lowered inline (120 fixtures as oracle) · P3 defer to a pass · P4 relocate to
+`oxc_transformer/src/nota/` · P5 migrate H1/H2.
 
 **P0 done ✓** — added an unused `Expression::NotaMarkup` stub (`crates/oxc_ast/src/ast/nota.rs`) and got
 the whole workspace green (check: 0 errors; ~2470 tests incl. 122 codegen nota fixtures, 82 parser-lib, 11
@@ -25,6 +25,18 @@ in the personal memory `nota-oxc-add-expression-variant`. The **non-obvious** si
 `ast/macros.rs` carries Expression's variant list in two places (typed splice + `shared_enum_variants!`
 names) — both need the new variant, else the inheriting enums (`Argument`, `PropertyKey`, `JSXExpression`,
 …) don't get it.
+
+**P1 done ✓** — the full faithful node set lives in `crates/oxc_ast/src/ast/nota.rs` (32 types: the
+`NotaMarkup` umbrella struct + `NotaMarkupKind`, `NotaDocument`, `NotaElement`/`NotaTag`/`NotaProp`/
+`NotaPropValue`/`NotaChild`, control flow, verbatim/code/math, and faithful `NotaEmphasis`/`NotaHeading`/
+`NotaListItem`). Forms are shared structs reused by both the umbrella and the `NotaChild` body list (à la
+JSX); embedded JS sits verbatim at the leaves. Nodes are unused (no parser/lowering yet). Ripple from the
+22 *visited* nodes was contained to `oxc_formatter` (per-node `FormatWrite` stubs via one macro) + the
+`AstKind` debug-name match; semantic/minifier/transformer/linter/codegen needed nothing (generated
+handling / catch-alls). Naming gotcha: an enum variant builder (`NotaProp::Field` → `nota_prop_field`)
+collided with a struct of the same snake_case (`NotaPropField`) → renamed to `NotaFieldProp`. Open design
+nit: `NotaListKind` collapses `-`/`+` into `Unordered` (both lower to `nota-ul-li`), so exact-marker
+round-trip would need a marker field. Green: workspace check 0 errors; 1841 + 11 tests pass.
 
 ---
 

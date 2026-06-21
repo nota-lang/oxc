@@ -1219,10 +1219,10 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: Node location in source code.
-    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    /// * `kind`: Which markup form this is.
     #[inline]
-    pub fn expression_nota_markup(self, span: Span, expression: Expression<'a>) -> Expression<'a> {
-        Expression::NotaMarkup(self.alloc_nota_markup(span, expression))
+    pub fn expression_nota_markup(self, span: Span, kind: NotaMarkupKind<'a>) -> Expression<'a> {
+        Expression::NotaMarkup(self.alloc_nota_markup(span, kind))
     }
 
     /// Build an [`IdentifierName`].
@@ -15552,10 +15552,10 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: Node location in source code.
-    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    /// * `kind`: Which markup form this is.
     #[inline]
-    pub fn nota_markup(self, span: Span, expression: Expression<'a>) -> NotaMarkup<'a> {
-        NotaMarkup { node_id: Default::default(), span, expression }
+    pub fn nota_markup(self, span: Span, kind: NotaMarkupKind<'a>) -> NotaMarkup<'a> {
+        NotaMarkup { node_id: Default::default(), span, kind }
     }
 
     /// Build a [`NotaMarkup`], and store it in the memory arena.
@@ -15565,14 +15565,1406 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: Node location in source code.
-    /// * `expression`: The wrapped expression (stub; Phase 1 replaces this with the faithful Nota tree).
+    /// * `kind`: Which markup form this is.
     #[inline]
     pub fn alloc_nota_markup(
         self,
         span: Span,
-        expression: Expression<'a>,
+        kind: NotaMarkupKind<'a>,
     ) -> Box<'a, NotaMarkup<'a>> {
-        Box::new_in(self.nota_markup(span, expression), self.allocator)
+        Box::new_in(self.nota_markup(span, kind), self.allocator)
+    }
+
+    /// Build a [`NotaMarkupKind::Document`].
+    ///
+    /// This node contains a [`NotaDocument`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `items`: Top-level items in source order ([`NotaChild::Statement`] carries `%`/`%%%` lines).
+    #[inline]
+    pub fn nota_markup_kind_document(
+        self,
+        span: Span,
+        items: Vec<'a, NotaChild<'a>>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Document(self.alloc_nota_document(span, items))
+    }
+
+    /// Build a [`NotaMarkupKind::Element`].
+    ///
+    /// This node contains a [`NotaElement`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `props`
+    /// * `children`
+    #[inline]
+    pub fn nota_markup_kind_element(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Element(self.alloc_nota_element(span, tag, props, children))
+    }
+
+    /// Build a [`NotaMarkupKind::Fragment`].
+    ///
+    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn nota_markup_kind_fragment(
+        self,
+        span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Fragment(self.alloc_nota_fragment(span, children))
+    }
+
+    /// Build a [`NotaMarkupKind::Interpolation`].
+    ///
+    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_markup_kind_interpolation(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Interpolation(self.alloc_nota_interpolation(span, expression))
+    }
+
+    /// Build a [`NotaMarkupKind::If`].
+    ///
+    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn nota_markup_kind_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> NotaMarkupKind<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaMarkupKind::If(self.alloc_nota_if(span, test, consequent, alternate))
+    }
+
+    /// Build a [`NotaMarkupKind::For`].
+    ///
+    /// This node contains a [`NotaFor`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `binding`
+    /// * `iterable`
+    /// * `body`
+    #[inline]
+    pub fn nota_markup_kind_for<T1>(
+        self,
+        span: Span,
+        binding: BindingPattern<'a>,
+        iterable: Expression<'a>,
+        body: T1,
+    ) -> NotaMarkupKind<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaMarkupKind::For(self.alloc_nota_for(span, binding, iterable, body))
+    }
+
+    /// Build a [`NotaMarkupKind::Code`].
+    ///
+    /// This node contains a [`NotaCode`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `language`: Fence language tag, if any (block code only).
+    /// * `value`: The raw code text.
+    /// * `block`: `true` for a fenced block, `false` for inline.
+    #[inline]
+    pub fn nota_markup_kind_code<A1>(
+        self,
+        span: Span,
+        language: Option<Str<'a>>,
+        value: A1,
+        block: bool,
+    ) -> NotaMarkupKind<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaMarkupKind::Code(self.alloc_nota_code(span, language, value, block))
+    }
+
+    /// Build a [`NotaMarkupKind::Math`].
+    ///
+    /// This node contains a [`NotaMath`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `display`: `true` for `$$display$$`.
+    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    #[inline]
+    pub fn nota_markup_kind_math(
+        self,
+        span: Span,
+        display: bool,
+        parts: Vec<'a, NotaMathPart<'a>>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Math(self.alloc_nota_math(span, display, parts))
+    }
+
+    /// Build a [`NotaMarkupKind::Verbatim`].
+    ///
+    /// This node contains a [`NotaVerbatim`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `parts`
+    #[inline]
+    pub fn nota_markup_kind_verbatim(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaMarkupKind<'a> {
+        NotaMarkupKind::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
+    }
+
+    /// Build a [`NotaDocument`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_document`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `items`: Top-level items in source order ([`NotaChild::Statement`] carries `%`/`%%%` lines).
+    #[inline]
+    pub fn nota_document(self, span: Span, items: Vec<'a, NotaChild<'a>>) -> NotaDocument<'a> {
+        NotaDocument { node_id: Default::default(), span, items }
+    }
+
+    /// Build a [`NotaDocument`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_document`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `items`: Top-level items in source order ([`NotaChild::Statement`] carries `%`/`%%%` lines).
+    #[inline]
+    pub fn alloc_nota_document(
+        self,
+        span: Span,
+        items: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaDocument<'a>> {
+        Box::new_in(self.nota_document(span, items), self.allocator)
+    }
+
+    /// Build a [`NotaChild::Text`].
+    ///
+    /// This node contains a [`NotaText`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
+    #[inline]
+    pub fn nota_child_text<A1>(self, span: Span, value: A1) -> NotaChild<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaChild::Text(self.alloc_nota_text(span, value))
+    }
+
+    /// Build a [`NotaChild::Statement`].
+    ///
+    /// This node contains a [`NotaStatement`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `statement`
+    #[inline]
+    pub fn nota_child_statement(self, span: Span, statement: Statement<'a>) -> NotaChild<'a> {
+        NotaChild::Statement(self.alloc_nota_statement(span, statement))
+    }
+
+    /// Build a [`NotaChild::Element`].
+    ///
+    /// This node contains a [`NotaElement`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `props`
+    /// * `children`
+    #[inline]
+    pub fn nota_child_element(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Element(self.alloc_nota_element(span, tag, props, children))
+    }
+
+    /// Build a [`NotaChild::Fragment`].
+    ///
+    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn nota_child_fragment(
+        self,
+        span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Fragment(self.alloc_nota_fragment(span, children))
+    }
+
+    /// Build a [`NotaChild::Interpolation`].
+    ///
+    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_child_interpolation(self, span: Span, expression: Expression<'a>) -> NotaChild<'a> {
+        NotaChild::Interpolation(self.alloc_nota_interpolation(span, expression))
+    }
+
+    /// Build a [`NotaChild::If`].
+    ///
+    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn nota_child_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> NotaChild<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaChild::If(self.alloc_nota_if(span, test, consequent, alternate))
+    }
+
+    /// Build a [`NotaChild::For`].
+    ///
+    /// This node contains a [`NotaFor`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `binding`
+    /// * `iterable`
+    /// * `body`
+    #[inline]
+    pub fn nota_child_for<T1>(
+        self,
+        span: Span,
+        binding: BindingPattern<'a>,
+        iterable: Expression<'a>,
+        body: T1,
+    ) -> NotaChild<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaChild::For(self.alloc_nota_for(span, binding, iterable, body))
+    }
+
+    /// Build a [`NotaChild::Code`].
+    ///
+    /// This node contains a [`NotaCode`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `language`: Fence language tag, if any (block code only).
+    /// * `value`: The raw code text.
+    /// * `block`: `true` for a fenced block, `false` for inline.
+    #[inline]
+    pub fn nota_child_code<A1>(
+        self,
+        span: Span,
+        language: Option<Str<'a>>,
+        value: A1,
+        block: bool,
+    ) -> NotaChild<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaChild::Code(self.alloc_nota_code(span, language, value, block))
+    }
+
+    /// Build a [`NotaChild::Math`].
+    ///
+    /// This node contains a [`NotaMath`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `display`: `true` for `$$display$$`.
+    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    #[inline]
+    pub fn nota_child_math(
+        self,
+        span: Span,
+        display: bool,
+        parts: Vec<'a, NotaMathPart<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Math(self.alloc_nota_math(span, display, parts))
+    }
+
+    /// Build a [`NotaChild::Verbatim`].
+    ///
+    /// This node contains a [`NotaVerbatim`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `parts`
+    #[inline]
+    pub fn nota_child_verbatim(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
+    }
+
+    /// Build a [`NotaChild::Emphasis`].
+    ///
+    /// This node contains a [`NotaEmphasis`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `marker`
+    /// * `children`
+    #[inline]
+    pub fn nota_child_emphasis(
+        self,
+        span: Span,
+        marker: NotaEmphasisMarker,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Emphasis(self.alloc_nota_emphasis(span, marker, children))
+    }
+
+    /// Build a [`NotaChild::Heading`].
+    ///
+    /// This node contains a [`NotaHeading`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `level`: Heading level 1–6 (number of `#`).
+    /// * `children`
+    #[inline]
+    pub fn nota_child_heading(
+        self,
+        span: Span,
+        level: u8,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::Heading(self.alloc_nota_heading(span, level, children))
+    }
+
+    /// Build a [`NotaChild::ListItem`].
+    ///
+    /// This node contains a [`NotaListItem`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`
+    /// * `children`
+    #[inline]
+    pub fn nota_child_list_item(
+        self,
+        span: Span,
+        kind: NotaListKind,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a> {
+        NotaChild::ListItem(self.alloc_nota_list_item(span, kind, children))
+    }
+
+    /// Build a [`NotaText`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_text`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
+    #[inline]
+    pub fn nota_text<A1>(self, span: Span, value: A1) -> NotaText<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaText { node_id: Default::default(), span, value: value.into() }
+    }
+
+    /// Build a [`NotaText`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_text`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
+    #[inline]
+    pub fn alloc_nota_text<A1>(self, span: Span, value: A1) -> Box<'a, NotaText<'a>>
+    where
+        A1: Into<Str<'a>>,
+    {
+        Box::new_in(self.nota_text(span, value), self.allocator)
+    }
+
+    /// Build a [`NotaStatement`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_statement`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `statement`
+    #[inline]
+    pub fn nota_statement(self, span: Span, statement: Statement<'a>) -> NotaStatement<'a> {
+        NotaStatement { node_id: Default::default(), span, statement }
+    }
+
+    /// Build a [`NotaStatement`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_statement`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `statement`
+    #[inline]
+    pub fn alloc_nota_statement(
+        self,
+        span: Span,
+        statement: Statement<'a>,
+    ) -> Box<'a, NotaStatement<'a>> {
+        Box::new_in(self.nota_statement(span, statement), self.allocator)
+    }
+
+    /// Build a [`NotaElement`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_element`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `props`
+    /// * `children`
+    #[inline]
+    pub fn nota_element(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaElement<'a> {
+        NotaElement { node_id: Default::default(), span, tag, props, children }
+    }
+
+    /// Build a [`NotaElement`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_element`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `props`
+    /// * `children`
+    #[inline]
+    pub fn alloc_nota_element(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaElement<'a>> {
+        Box::new_in(self.nota_element(span, tag, props, children), self.allocator)
+    }
+
+    /// Build a [`NotaTag::Host`].
+    ///
+    /// This node contains a [`NotaHostName`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn nota_tag_host<A1>(self, span: Span, name: A1) -> NotaTag<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaTag::Host(self.alloc_nota_host_name(span, name))
+    }
+
+    /// Build a [`NotaTag::Component`].
+    ///
+    /// This node contains an [`IdentifierReference`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`: The name of the identifier being referenced.
+    #[inline]
+    pub fn nota_tag_component<A1>(self, span: Span, name: A1) -> NotaTag<'a>
+    where
+        A1: Into<Ident<'a>>,
+    {
+        NotaTag::Component(self.alloc_identifier_reference(span, name))
+    }
+
+    /// Build a [`NotaTag::Component`] with `reference_id`.
+    ///
+    /// This node contains an [`IdentifierReference`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`: The name of the identifier being referenced.
+    /// * `reference_id`: Reference ID
+    #[inline]
+    pub fn nota_tag_component_with_reference_id<A1>(
+        self,
+        span: Span,
+        name: A1,
+        reference_id: ReferenceId,
+    ) -> NotaTag<'a>
+    where
+        A1: Into<Ident<'a>>,
+    {
+        NotaTag::Component(self.alloc_identifier_reference_with_reference_id(
+            span,
+            name,
+            reference_id,
+        ))
+    }
+
+    /// Build a [`NotaTag::Dynamic`].
+    ///
+    /// This node contains a [`NotaDynamicTag`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_tag_dynamic(self, span: Span, expression: Expression<'a>) -> NotaTag<'a> {
+        NotaTag::Dynamic(self.alloc_nota_dynamic_tag(span, expression))
+    }
+
+    /// Build a [`NotaHostName`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_host_name`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn nota_host_name<A1>(self, span: Span, name: A1) -> NotaHostName<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaHostName { node_id: Default::default(), span, name: name.into() }
+    }
+
+    /// Build a [`NotaHostName`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_host_name`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn alloc_nota_host_name<A1>(self, span: Span, name: A1) -> Box<'a, NotaHostName<'a>>
+    where
+        A1: Into<Str<'a>>,
+    {
+        Box::new_in(self.nota_host_name(span, name), self.allocator)
+    }
+
+    /// Build a [`NotaDynamicTag`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_dynamic_tag`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_dynamic_tag(self, span: Span, expression: Expression<'a>) -> NotaDynamicTag<'a> {
+        NotaDynamicTag { node_id: Default::default(), span, expression }
+    }
+
+    /// Build a [`NotaDynamicTag`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_dynamic_tag`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn alloc_nota_dynamic_tag(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> Box<'a, NotaDynamicTag<'a>> {
+        Box::new_in(self.nota_dynamic_tag(span, expression), self.allocator)
+    }
+
+    /// Build a [`NotaProp::Field`].
+    ///
+    /// This node contains a [`NotaFieldProp`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    /// * `value`
+    #[inline]
+    pub fn nota_prop_field(
+        self,
+        span: Span,
+        name: NotaPropName<'a>,
+        value: NotaPropValue<'a>,
+    ) -> NotaProp<'a> {
+        NotaProp::Field(self.alloc_nota_field_prop(span, name, value))
+    }
+
+    /// Build a [`NotaProp::Shorthand`].
+    ///
+    /// This node contains a [`NotaShorthandProp`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn nota_prop_shorthand(self, span: Span, name: IdentifierReference<'a>) -> NotaProp<'a> {
+        NotaProp::Shorthand(self.alloc_nota_shorthand_prop(span, name))
+    }
+
+    /// Build a [`NotaProp::Spread`].
+    ///
+    /// This node contains a [`NotaSpreadProp`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `argument`
+    #[inline]
+    pub fn nota_prop_spread(self, span: Span, argument: Expression<'a>) -> NotaProp<'a> {
+        NotaProp::Spread(self.alloc_nota_spread_prop(span, argument))
+    }
+
+    /// Build a [`NotaFieldProp`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_field_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    /// * `value`
+    #[inline]
+    pub fn nota_field_prop(
+        self,
+        span: Span,
+        name: NotaPropName<'a>,
+        value: NotaPropValue<'a>,
+    ) -> NotaFieldProp<'a> {
+        NotaFieldProp { node_id: Default::default(), span, name, value }
+    }
+
+    /// Build a [`NotaFieldProp`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_field_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    /// * `value`
+    #[inline]
+    pub fn alloc_nota_field_prop(
+        self,
+        span: Span,
+        name: NotaPropName<'a>,
+        value: NotaPropValue<'a>,
+    ) -> Box<'a, NotaFieldProp<'a>> {
+        Box::new_in(self.nota_field_prop(span, name, value), self.allocator)
+    }
+
+    /// Build a [`NotaPropName`].
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn nota_prop_name<A1>(self, span: Span, name: A1) -> NotaPropName<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaPropName { node_id: Default::default(), span, name: name.into() }
+    }
+
+    /// Build a [`NotaPropValue::Expression`].
+    ///
+    /// This node contains a [`NotaPropExpr`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_prop_value_expression(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> NotaPropValue<'a> {
+        NotaPropValue::Expression(self.alloc_nota_prop_expr(span, expression))
+    }
+
+    /// Build a [`NotaPropValue::Markup`].
+    ///
+    /// This node contains a [`NotaMarkup`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: Node location in source code.
+    /// * `kind`: Which markup form this is.
+    #[inline]
+    pub fn nota_prop_value_markup(self, span: Span, kind: NotaMarkupKind<'a>) -> NotaPropValue<'a> {
+        NotaPropValue::Markup(self.alloc_nota_markup(span, kind))
+    }
+
+    /// Build a [`NotaPropExpr`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_prop_expr`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_prop_expr(self, span: Span, expression: Expression<'a>) -> NotaPropExpr<'a> {
+        NotaPropExpr { node_id: Default::default(), span, expression }
+    }
+
+    /// Build a [`NotaPropExpr`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_prop_expr`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn alloc_nota_prop_expr(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> Box<'a, NotaPropExpr<'a>> {
+        Box::new_in(self.nota_prop_expr(span, expression), self.allocator)
+    }
+
+    /// Build a [`NotaShorthandProp`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_shorthand_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn nota_shorthand_prop(
+        self,
+        span: Span,
+        name: IdentifierReference<'a>,
+    ) -> NotaShorthandProp<'a> {
+        NotaShorthandProp { node_id: Default::default(), span, name }
+    }
+
+    /// Build a [`NotaShorthandProp`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_shorthand_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `name`
+    #[inline]
+    pub fn alloc_nota_shorthand_prop(
+        self,
+        span: Span,
+        name: IdentifierReference<'a>,
+    ) -> Box<'a, NotaShorthandProp<'a>> {
+        Box::new_in(self.nota_shorthand_prop(span, name), self.allocator)
+    }
+
+    /// Build a [`NotaSpreadProp`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_spread_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `argument`
+    #[inline]
+    pub fn nota_spread_prop(self, span: Span, argument: Expression<'a>) -> NotaSpreadProp<'a> {
+        NotaSpreadProp { node_id: Default::default(), span, argument }
+    }
+
+    /// Build a [`NotaSpreadProp`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_spread_prop`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `argument`
+    #[inline]
+    pub fn alloc_nota_spread_prop(
+        self,
+        span: Span,
+        argument: Expression<'a>,
+    ) -> Box<'a, NotaSpreadProp<'a>> {
+        Box::new_in(self.nota_spread_prop(span, argument), self.allocator)
+    }
+
+    /// Build a [`NotaFragment`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_fragment`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn nota_fragment(self, span: Span, children: Vec<'a, NotaChild<'a>>) -> NotaFragment<'a> {
+        NotaFragment { node_id: Default::default(), span, children }
+    }
+
+    /// Build a [`NotaFragment`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_fragment`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn alloc_nota_fragment(
+        self,
+        span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaFragment<'a>> {
+        Box::new_in(self.nota_fragment(span, children), self.allocator)
+    }
+
+    /// Build a [`NotaInterpolation`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_interpolation`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_interpolation(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> NotaInterpolation<'a> {
+        NotaInterpolation { node_id: Default::default(), span, expression }
+    }
+
+    /// Build a [`NotaInterpolation`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_interpolation`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn alloc_nota_interpolation(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> Box<'a, NotaInterpolation<'a>> {
+        Box::new_in(self.nota_interpolation(span, expression), self.allocator)
+    }
+
+    /// Build a [`NotaIf`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_if`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn nota_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> NotaIf<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaIf {
+            node_id: Default::default(),
+            span,
+            test,
+            consequent: consequent.into_in(self.allocator),
+            alternate,
+        }
+    }
+
+    /// Build a [`NotaIf`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_if`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn alloc_nota_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> Box<'a, NotaIf<'a>>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        Box::new_in(self.nota_if(span, test, consequent, alternate), self.allocator)
+    }
+
+    /// Build a [`NotaElse::ElseIf`].
+    ///
+    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn nota_else_else_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> NotaElse<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaElse::ElseIf(self.alloc_nota_if(span, test, consequent, alternate))
+    }
+
+    /// Build a [`NotaElse::Else`].
+    ///
+    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn nota_else_else(self, span: Span, children: Vec<'a, NotaChild<'a>>) -> NotaElse<'a> {
+        NotaElse::Else(self.alloc_nota_fragment(span, children))
+    }
+
+    /// Build a [`NotaFor`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_for`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `binding`
+    /// * `iterable`
+    /// * `body`
+    #[inline]
+    pub fn nota_for<T1>(
+        self,
+        span: Span,
+        binding: BindingPattern<'a>,
+        iterable: Expression<'a>,
+        body: T1,
+    ) -> NotaFor<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaFor {
+            node_id: Default::default(),
+            span,
+            binding,
+            iterable,
+            body: body.into_in(self.allocator),
+        }
+    }
+
+    /// Build a [`NotaFor`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_for`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `binding`
+    /// * `iterable`
+    /// * `body`
+    #[inline]
+    pub fn alloc_nota_for<T1>(
+        self,
+        span: Span,
+        binding: BindingPattern<'a>,
+        iterable: Expression<'a>,
+        body: T1,
+    ) -> Box<'a, NotaFor<'a>>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        Box::new_in(self.nota_for(span, binding, iterable, body), self.allocator)
+    }
+
+    /// Build a [`NotaCode`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_code`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `language`: Fence language tag, if any (block code only).
+    /// * `value`: The raw code text.
+    /// * `block`: `true` for a fenced block, `false` for inline.
+    #[inline]
+    pub fn nota_code<A1>(
+        self,
+        span: Span,
+        language: Option<Str<'a>>,
+        value: A1,
+        block: bool,
+    ) -> NotaCode<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaCode { node_id: Default::default(), span, language, value: value.into(), block }
+    }
+
+    /// Build a [`NotaCode`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_code`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `language`: Fence language tag, if any (block code only).
+    /// * `value`: The raw code text.
+    /// * `block`: `true` for a fenced block, `false` for inline.
+    #[inline]
+    pub fn alloc_nota_code<A1>(
+        self,
+        span: Span,
+        language: Option<Str<'a>>,
+        value: A1,
+        block: bool,
+    ) -> Box<'a, NotaCode<'a>>
+    where
+        A1: Into<Str<'a>>,
+    {
+        Box::new_in(self.nota_code(span, language, value, block), self.allocator)
+    }
+
+    /// Build a [`NotaMath`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_math`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `display`: `true` for `$$display$$`.
+    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    #[inline]
+    pub fn nota_math(
+        self,
+        span: Span,
+        display: bool,
+        parts: Vec<'a, NotaMathPart<'a>>,
+    ) -> NotaMath<'a> {
+        NotaMath { node_id: Default::default(), span, display, parts }
+    }
+
+    /// Build a [`NotaMath`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_math`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `display`: `true` for `$$display$$`.
+    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    #[inline]
+    pub fn alloc_nota_math(
+        self,
+        span: Span,
+        display: bool,
+        parts: Vec<'a, NotaMathPart<'a>>,
+    ) -> Box<'a, NotaMath<'a>> {
+        Box::new_in(self.nota_math(span, display, parts), self.allocator)
+    }
+
+    /// Build a [`NotaMathPart::Raw`].
+    ///
+    /// This node contains a [`NotaText`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
+    #[inline]
+    pub fn nota_math_part_raw<A1>(self, span: Span, value: A1) -> NotaMathPart<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaMathPart::Raw(self.alloc_nota_text(span, value))
+    }
+
+    /// Build a [`NotaMathPart::Interpolation`].
+    ///
+    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_math_part_interpolation(
+        self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> NotaMathPart<'a> {
+        NotaMathPart::Interpolation(self.alloc_nota_interpolation(span, expression))
+    }
+
+    /// Build a [`NotaVerbatim`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_verbatim`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `parts`
+    #[inline]
+    pub fn nota_verbatim(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaVerbatim<'a> {
+        NotaVerbatim { node_id: Default::default(), span, tag, parts }
+    }
+
+    /// Build a [`NotaVerbatim`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_verbatim`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `parts`
+    #[inline]
+    pub fn alloc_nota_verbatim(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> Box<'a, NotaVerbatim<'a>> {
+        Box::new_in(self.nota_verbatim(span, tag, parts), self.allocator)
+    }
+
+    /// Build a [`NotaVerbatimPart::Raw`].
+    ///
+    /// This node contains a [`NotaText`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
+    #[inline]
+    pub fn nota_verbatim_part_raw<A1>(self, span: Span, value: A1) -> NotaVerbatimPart<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaVerbatimPart::Raw(self.alloc_nota_text(span, value))
+    }
+
+    /// Build a [`NotaVerbatimPart::Child`].
+    ///
+    /// This node contains a [`NotaMarkup`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: Node location in source code.
+    /// * `kind`: Which markup form this is.
+    #[inline]
+    pub fn nota_verbatim_part_child(
+        self,
+        span: Span,
+        kind: NotaMarkupKind<'a>,
+    ) -> NotaVerbatimPart<'a> {
+        NotaVerbatimPart::Child(self.alloc_nota_markup(span, kind))
+    }
+
+    /// Build a [`NotaEmphasis`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_emphasis`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `marker`
+    /// * `children`
+    #[inline]
+    pub fn nota_emphasis(
+        self,
+        span: Span,
+        marker: NotaEmphasisMarker,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaEmphasis<'a> {
+        NotaEmphasis { node_id: Default::default(), span, marker, children }
+    }
+
+    /// Build a [`NotaEmphasis`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_emphasis`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `marker`
+    /// * `children`
+    #[inline]
+    pub fn alloc_nota_emphasis(
+        self,
+        span: Span,
+        marker: NotaEmphasisMarker,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaEmphasis<'a>> {
+        Box::new_in(self.nota_emphasis(span, marker, children), self.allocator)
+    }
+
+    /// Build a [`NotaHeading`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_heading`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `level`: Heading level 1–6 (number of `#`).
+    /// * `children`
+    #[inline]
+    pub fn nota_heading(
+        self,
+        span: Span,
+        level: u8,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaHeading<'a> {
+        NotaHeading { node_id: Default::default(), span, level, children }
+    }
+
+    /// Build a [`NotaHeading`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_heading`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `level`: Heading level 1–6 (number of `#`).
+    /// * `children`
+    #[inline]
+    pub fn alloc_nota_heading(
+        self,
+        span: Span,
+        level: u8,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaHeading<'a>> {
+        Box::new_in(self.nota_heading(span, level, children), self.allocator)
+    }
+
+    /// Build a [`NotaListItem`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_list_item`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`
+    /// * `children`
+    #[inline]
+    pub fn nota_list_item(
+        self,
+        span: Span,
+        kind: NotaListKind,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaListItem<'a> {
+        NotaListItem { node_id: Default::default(), span, kind, children }
+    }
+
+    /// Build a [`NotaListItem`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_list_item`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`
+    /// * `children`
+    #[inline]
+    pub fn alloc_nota_list_item(
+        self,
+        span: Span,
+        kind: NotaListKind,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaListItem<'a>> {
+        Box::new_in(self.nota_list_item(span, kind, children), self.allocator)
     }
 }
 

@@ -5745,16 +5745,545 @@ unsafe fn walk_nota_markup<'a, Tr: Traverse<'a>>(
     ctx: &mut TraverseCtx<'a>,
 ) {
     traverser.enter_nota_markup(&mut *node, ctx);
-    let pop_token = ctx.push_stack(Ancestor::NotaMarkupExpression(
-        ancestor::NotaMarkupWithoutExpression(node, PhantomData),
-    ));
-    walk_expression(
+    let pop_token = ctx
+        .push_stack(Ancestor::NotaMarkupKind(ancestor::NotaMarkupWithoutKind(node, PhantomData)));
+    walk_nota_markup_kind(
         traverser,
-        (node as *mut u8).add(ancestor::OFFSET_NOTA_MARKUP_EXPRESSION) as *mut Expression,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_MARKUP_KIND) as *mut NotaMarkupKind,
         ctx,
     );
     ctx.pop_stack(pop_token);
     traverser.exit_nota_markup(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_markup_kind<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaMarkupKind<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_markup_kind(&mut *node, ctx);
+    match &mut *node {
+        NotaMarkupKind::Document(node) => {
+            walk_nota_document(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaMarkupKind::Element(node) => walk_nota_element(traverser, (&mut **node) as *mut _, ctx),
+        NotaMarkupKind::Fragment(node) => {
+            walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaMarkupKind::Interpolation(node) => {
+            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaMarkupKind::If(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
+        NotaMarkupKind::For(node) => walk_nota_for(traverser, (&mut **node) as *mut _, ctx),
+        NotaMarkupKind::Code(node) => walk_nota_code(traverser, (&mut **node) as *mut _, ctx),
+        NotaMarkupKind::Math(node) => walk_nota_math(traverser, (&mut **node) as *mut _, ctx),
+        NotaMarkupKind::Verbatim(node) => {
+            walk_nota_verbatim(traverser, (&mut **node) as *mut _, ctx)
+        }
+    }
+    traverser.exit_nota_markup_kind(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_document<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaDocument<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_document(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaDocumentItems(
+        ancestor::NotaDocumentWithoutItems(node, PhantomData),
+    ));
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_DOCUMENT_ITEMS) as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_document(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_child<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaChild<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_child(&mut *node, ctx);
+    match &mut *node {
+        NotaChild::Text(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Statement(node) => walk_nota_statement(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Element(node) => walk_nota_element(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Fragment(node) => walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Interpolation(node) => {
+            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaChild::If(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::For(node) => walk_nota_for(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Code(node) => walk_nota_code(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Math(node) => walk_nota_math(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Verbatim(node) => walk_nota_verbatim(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Emphasis(node) => walk_nota_emphasis(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Heading(node) => walk_nota_heading(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::ListItem(node) => walk_nota_list_item(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_child(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_text<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaText<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_text(&mut *node, ctx);
+    traverser.exit_nota_text(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_statement<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaStatement<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_statement(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaStatementStatement(
+        ancestor::NotaStatementWithoutStatement(node, PhantomData),
+    ));
+    walk_statement(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_STATEMENT_STATEMENT) as *mut Statement,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_statement(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_element<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaElement<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_element(&mut *node, ctx);
+    let pop_token = ctx
+        .push_stack(Ancestor::NotaElementTag(ancestor::NotaElementWithoutTag(node, PhantomData)));
+    walk_nota_tag(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_ELEMENT_TAG) as *mut NotaTag,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaElementProps);
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_ELEMENT_PROPS) as *mut Vec<NotaProp>)
+    {
+        walk_nota_prop(traverser, item as *mut _, ctx);
+    }
+    ctx.retag_stack(AncestorType::NotaElementChildren);
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_ELEMENT_CHILDREN) as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_element(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_tag<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaTag<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_tag(&mut *node, ctx);
+    match &mut *node {
+        NotaTag::Host(node) => walk_nota_host_name(traverser, (&mut **node) as *mut _, ctx),
+        NotaTag::Component(node) => {
+            walk_identifier_reference(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaTag::Dynamic(node) => walk_nota_dynamic_tag(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_tag(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_host_name<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaHostName<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_host_name(&mut *node, ctx);
+    traverser.exit_nota_host_name(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_dynamic_tag<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaDynamicTag<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_dynamic_tag(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaDynamicTagExpression(
+        ancestor::NotaDynamicTagWithoutExpression(node, PhantomData),
+    ));
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_DYNAMIC_TAG_EXPRESSION) as *mut Expression,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_dynamic_tag(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_prop<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaProp<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_prop(&mut *node, ctx);
+    match &mut *node {
+        NotaProp::Field(node) => walk_nota_field_prop(traverser, (&mut **node) as *mut _, ctx),
+        NotaProp::Shorthand(node) => {
+            walk_nota_shorthand_prop(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaProp::Spread(node) => walk_nota_spread_prop(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_prop(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_field_prop<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaFieldProp<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_field_prop(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaFieldPropName(
+        ancestor::NotaFieldPropWithoutName(node, PhantomData),
+    ));
+    walk_nota_prop_name(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_FIELD_PROP_NAME) as *mut NotaPropName,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaFieldPropValue);
+    walk_nota_prop_value(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_FIELD_PROP_VALUE) as *mut NotaPropValue,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_field_prop(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_prop_name<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaPropName<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_prop_name(&mut *node, ctx);
+    traverser.exit_nota_prop_name(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_prop_value<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaPropValue<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_prop_value(&mut *node, ctx);
+    match &mut *node {
+        NotaPropValue::Expression(node) => {
+            walk_nota_prop_expr(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaPropValue::Markup(node) => walk_nota_markup(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_prop_value(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_prop_expr<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaPropExpr<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_prop_expr(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaPropExprExpression(
+        ancestor::NotaPropExprWithoutExpression(node, PhantomData),
+    ));
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_PROP_EXPR_EXPRESSION) as *mut Expression,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_prop_expr(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_shorthand_prop<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaShorthandProp<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_shorthand_prop(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaShorthandPropName(
+        ancestor::NotaShorthandPropWithoutName(node, PhantomData),
+    ));
+    walk_identifier_reference(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_SHORTHAND_PROP_NAME)
+            as *mut IdentifierReference,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_shorthand_prop(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_spread_prop<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaSpreadProp<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_spread_prop(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaSpreadPropArgument(
+        ancestor::NotaSpreadPropWithoutArgument(node, PhantomData),
+    ));
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_SPREAD_PROP_ARGUMENT) as *mut Expression,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_spread_prop(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_fragment<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaFragment<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_fragment(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaFragmentChildren(
+        ancestor::NotaFragmentWithoutChildren(node, PhantomData),
+    ));
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_FRAGMENT_CHILDREN)
+        as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_fragment(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_interpolation<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaInterpolation<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_interpolation(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaInterpolationExpression(
+        ancestor::NotaInterpolationWithoutExpression(node, PhantomData),
+    ));
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_INTERPOLATION_EXPRESSION) as *mut Expression,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_interpolation(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_if<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaIf<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_if(&mut *node, ctx);
+    let pop_token =
+        ctx.push_stack(Ancestor::NotaIfTest(ancestor::NotaIfWithoutTest(node, PhantomData)));
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_IF_TEST) as *mut Expression,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaIfConsequent);
+    walk_nota_fragment(
+        traverser,
+        (&mut **((node as *mut u8).add(ancestor::OFFSET_NOTA_IF_CONSEQUENT)
+            as *mut Box<NotaFragment>)) as *mut _,
+        ctx,
+    );
+    if let Some(field) =
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_IF_ALTERNATE) as *mut Option<NotaElse>)
+    {
+        ctx.retag_stack(AncestorType::NotaIfAlternate);
+        walk_nota_else(traverser, field as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_if(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_else<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaElse<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_else(&mut *node, ctx);
+    match &mut *node {
+        NotaElse::ElseIf(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
+        NotaElse::Else(node) => walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_else(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_for<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaFor<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_for(&mut *node, ctx);
+    let pop_token = ctx
+        .push_stack(Ancestor::NotaForBinding(ancestor::NotaForWithoutBinding(node, PhantomData)));
+    walk_binding_pattern(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_FOR_BINDING) as *mut BindingPattern,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaForIterable);
+    walk_expression(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_FOR_ITERABLE) as *mut Expression,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaForBody);
+    walk_nota_fragment(
+        traverser,
+        (&mut **((node as *mut u8).add(ancestor::OFFSET_NOTA_FOR_BODY) as *mut Box<NotaFragment>))
+            as *mut _,
+        ctx,
+    );
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_for(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_code<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaCode<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_code(&mut *node, ctx);
+    traverser.exit_nota_code(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_math<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaMath<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_math(&mut *node, ctx);
+    let pop_token =
+        ctx.push_stack(Ancestor::NotaMathParts(ancestor::NotaMathWithoutParts(node, PhantomData)));
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_MATH_PARTS) as *mut Vec<NotaMathPart>)
+    {
+        walk_nota_math_part(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_math(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_math_part<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaMathPart<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_math_part(&mut *node, ctx);
+    match &mut *node {
+        NotaMathPart::Raw(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
+        NotaMathPart::Interpolation(node) => {
+            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
+        }
+    }
+    traverser.exit_nota_math_part(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_verbatim<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaVerbatim<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_verbatim(&mut *node, ctx);
+    let pop_token = ctx
+        .push_stack(Ancestor::NotaVerbatimTag(ancestor::NotaVerbatimWithoutTag(node, PhantomData)));
+    walk_nota_tag(
+        traverser,
+        (node as *mut u8).add(ancestor::OFFSET_NOTA_VERBATIM_TAG) as *mut NotaTag,
+        ctx,
+    );
+    ctx.retag_stack(AncestorType::NotaVerbatimParts);
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_VERBATIM_PARTS)
+        as *mut Vec<NotaVerbatimPart>)
+    {
+        walk_nota_verbatim_part(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_verbatim(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_verbatim_part<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaVerbatimPart<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_verbatim_part(&mut *node, ctx);
+    match &mut *node {
+        NotaVerbatimPart::Raw(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
+        NotaVerbatimPart::Child(node) => walk_nota_markup(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_verbatim_part(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_emphasis<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaEmphasis<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_emphasis(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaEmphasisChildren(
+        ancestor::NotaEmphasisWithoutChildren(node, PhantomData),
+    ));
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_EMPHASIS_CHILDREN)
+        as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_emphasis(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_heading<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaHeading<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_heading(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaHeadingChildren(
+        ancestor::NotaHeadingWithoutChildren(node, PhantomData),
+    ));
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_HEADING_CHILDREN) as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_heading(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_list_item<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaListItem<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_list_item(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaListItemChildren(
+        ancestor::NotaListItemWithoutChildren(node, PhantomData),
+    ));
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_LIST_ITEM_CHILDREN)
+        as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_list_item(&mut *node, ctx);
 }
 
 unsafe fn walk_statements<'a, Tr: Traverse<'a>>(

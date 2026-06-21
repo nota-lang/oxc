@@ -2541,6 +2541,258 @@ impl ContentEq for Comment {
 
 impl ContentEq for NotaMarkup<'_> {
     fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.kind, &other.kind)
+    }
+}
+
+impl ContentEq for NotaMarkupKind<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Document(a), Self::Document(b)) => a.content_eq(b),
+            (Self::Element(a), Self::Element(b)) => a.content_eq(b),
+            (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            (Self::If(a), Self::If(b)) => a.content_eq(b),
+            (Self::For(a), Self::For(b)) => a.content_eq(b),
+            (Self::Code(a), Self::Code(b)) => a.content_eq(b),
+            (Self::Math(a), Self::Math(b)) => a.content_eq(b),
+            (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaDocument<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.items, &other.items)
+    }
+}
+
+impl ContentEq for NotaChild<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text(a), Self::Text(b)) => a.content_eq(b),
+            (Self::Statement(a), Self::Statement(b)) => a.content_eq(b),
+            (Self::Element(a), Self::Element(b)) => a.content_eq(b),
+            (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            (Self::If(a), Self::If(b)) => a.content_eq(b),
+            (Self::For(a), Self::For(b)) => a.content_eq(b),
+            (Self::Code(a), Self::Code(b)) => a.content_eq(b),
+            (Self::Math(a), Self::Math(b)) => a.content_eq(b),
+            (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
+            (Self::Emphasis(a), Self::Emphasis(b)) => a.content_eq(b),
+            (Self::Heading(a), Self::Heading(b)) => a.content_eq(b),
+            (Self::ListItem(a), Self::ListItem(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaText<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.value, &other.value)
+    }
+}
+
+impl ContentEq for NotaStatement<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.statement, &other.statement)
+    }
+}
+
+impl ContentEq for NotaElement<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.tag, &other.tag)
+            && ContentEq::content_eq(&self.props, &other.props)
+            && ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaTag<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Host(a), Self::Host(b)) => a.content_eq(b),
+            (Self::Component(a), Self::Component(b)) => a.content_eq(b),
+            (Self::Dynamic(a), Self::Dynamic(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaHostName<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+    }
+}
+
+impl ContentEq for NotaDynamicTag<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.expression, &other.expression)
+    }
+}
+
+impl ContentEq for NotaProp<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Field(a), Self::Field(b)) => a.content_eq(b),
+            (Self::Shorthand(a), Self::Shorthand(b)) => a.content_eq(b),
+            (Self::Spread(a), Self::Spread(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaFieldProp<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+            && ContentEq::content_eq(&self.value, &other.value)
+    }
+}
+
+impl ContentEq for NotaPropName<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+    }
+}
+
+impl ContentEq for NotaPropValue<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Expression(a), Self::Expression(b)) => a.content_eq(b),
+            (Self::Markup(a), Self::Markup(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaPropExpr<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.expression, &other.expression)
+    }
+}
+
+impl ContentEq for NotaShorthandProp<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.name, &other.name)
+    }
+}
+
+impl ContentEq for NotaSpreadProp<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.argument, &other.argument)
+    }
+}
+
+impl ContentEq for NotaFragment<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaInterpolation<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.expression, &other.expression)
+    }
+}
+
+impl ContentEq for NotaIf<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.test, &other.test)
+            && ContentEq::content_eq(&self.consequent, &other.consequent)
+            && ContentEq::content_eq(&self.alternate, &other.alternate)
+    }
+}
+
+impl ContentEq for NotaElse<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::ElseIf(a), Self::ElseIf(b)) => a.content_eq(b),
+            (Self::Else(a), Self::Else(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaFor<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.binding, &other.binding)
+            && ContentEq::content_eq(&self.iterable, &other.iterable)
+            && ContentEq::content_eq(&self.body, &other.body)
+    }
+}
+
+impl ContentEq for NotaCode<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.language, &other.language)
+            && ContentEq::content_eq(&self.value, &other.value)
+            && ContentEq::content_eq(&self.block, &other.block)
+    }
+}
+
+impl ContentEq for NotaMath<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.display, &other.display)
+            && ContentEq::content_eq(&self.parts, &other.parts)
+    }
+}
+
+impl ContentEq for NotaMathPart<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Raw(a), Self::Raw(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaVerbatim<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.tag, &other.tag)
+            && ContentEq::content_eq(&self.parts, &other.parts)
+    }
+}
+
+impl ContentEq for NotaVerbatimPart<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Raw(a), Self::Raw(b)) => a.content_eq(b),
+            (Self::Child(a), Self::Child(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
+impl ContentEq for NotaEmphasis<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.marker, &other.marker)
+            && ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaEmphasisMarker {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for NotaHeading<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.level, &other.level)
+            && ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaListItem<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.kind, &other.kind)
+            && ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaListKind {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
     }
 }

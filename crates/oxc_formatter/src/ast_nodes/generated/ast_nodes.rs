@@ -215,6 +215,27 @@ pub enum AstNodes<'a> {
     JSDocNonNullableType(&'a AstNode<'a, JSDocNonNullableType<'a>>),
     JSDocUnknownType(&'a AstNode<'a, JSDocUnknownType>),
     NotaMarkup(&'a AstNode<'a, NotaMarkup<'a>>),
+    NotaDocument(&'a AstNode<'a, NotaDocument<'a>>),
+    NotaText(&'a AstNode<'a, NotaText<'a>>),
+    NotaStatement(&'a AstNode<'a, NotaStatement<'a>>),
+    NotaElement(&'a AstNode<'a, NotaElement<'a>>),
+    NotaHostName(&'a AstNode<'a, NotaHostName<'a>>),
+    NotaDynamicTag(&'a AstNode<'a, NotaDynamicTag<'a>>),
+    NotaFieldProp(&'a AstNode<'a, NotaFieldProp<'a>>),
+    NotaPropName(&'a AstNode<'a, NotaPropName<'a>>),
+    NotaPropExpr(&'a AstNode<'a, NotaPropExpr<'a>>),
+    NotaShorthandProp(&'a AstNode<'a, NotaShorthandProp<'a>>),
+    NotaSpreadProp(&'a AstNode<'a, NotaSpreadProp<'a>>),
+    NotaFragment(&'a AstNode<'a, NotaFragment<'a>>),
+    NotaInterpolation(&'a AstNode<'a, NotaInterpolation<'a>>),
+    NotaIf(&'a AstNode<'a, NotaIf<'a>>),
+    NotaFor(&'a AstNode<'a, NotaFor<'a>>),
+    NotaCode(&'a AstNode<'a, NotaCode<'a>>),
+    NotaMath(&'a AstNode<'a, NotaMath<'a>>),
+    NotaVerbatim(&'a AstNode<'a, NotaVerbatim<'a>>),
+    NotaEmphasis(&'a AstNode<'a, NotaEmphasis<'a>>),
+    NotaHeading(&'a AstNode<'a, NotaHeading<'a>>),
+    NotaListItem(&'a AstNode<'a, NotaListItem<'a>>),
 }
 impl AstNodes<'_> {
     #[inline]
@@ -410,6 +431,27 @@ impl AstNodes<'_> {
             Self::JSDocNonNullableType(n) => n.span(),
             Self::JSDocUnknownType(n) => n.span(),
             Self::NotaMarkup(n) => n.span(),
+            Self::NotaDocument(n) => n.span(),
+            Self::NotaText(n) => n.span(),
+            Self::NotaStatement(n) => n.span(),
+            Self::NotaElement(n) => n.span(),
+            Self::NotaHostName(n) => n.span(),
+            Self::NotaDynamicTag(n) => n.span(),
+            Self::NotaFieldProp(n) => n.span(),
+            Self::NotaPropName(n) => n.span(),
+            Self::NotaPropExpr(n) => n.span(),
+            Self::NotaShorthandProp(n) => n.span(),
+            Self::NotaSpreadProp(n) => n.span(),
+            Self::NotaFragment(n) => n.span(),
+            Self::NotaInterpolation(n) => n.span(),
+            Self::NotaIf(n) => n.span(),
+            Self::NotaFor(n) => n.span(),
+            Self::NotaCode(n) => n.span(),
+            Self::NotaMath(n) => n.span(),
+            Self::NotaVerbatim(n) => n.span(),
+            Self::NotaEmphasis(n) => n.span(),
+            Self::NotaHeading(n) => n.span(),
+            Self::NotaListItem(n) => n.span(),
         }
     }
     #[inline]
@@ -605,6 +647,27 @@ impl AstNodes<'_> {
             Self::JSDocNonNullableType(n) => n.parent(),
             Self::JSDocUnknownType(n) => n.parent(),
             Self::NotaMarkup(n) => n.parent(),
+            Self::NotaDocument(n) => n.parent(),
+            Self::NotaText(n) => n.parent(),
+            Self::NotaStatement(n) => n.parent(),
+            Self::NotaElement(n) => n.parent(),
+            Self::NotaHostName(n) => n.parent(),
+            Self::NotaDynamicTag(n) => n.parent(),
+            Self::NotaFieldProp(n) => n.parent(),
+            Self::NotaPropName(n) => n.parent(),
+            Self::NotaPropExpr(n) => n.parent(),
+            Self::NotaShorthandProp(n) => n.parent(),
+            Self::NotaSpreadProp(n) => n.parent(),
+            Self::NotaFragment(n) => n.parent(),
+            Self::NotaInterpolation(n) => n.parent(),
+            Self::NotaIf(n) => n.parent(),
+            Self::NotaFor(n) => n.parent(),
+            Self::NotaCode(n) => n.parent(),
+            Self::NotaMath(n) => n.parent(),
+            Self::NotaVerbatim(n) => n.parent(),
+            Self::NotaEmphasis(n) => n.parent(),
+            Self::NotaHeading(n) => n.parent(),
+            Self::NotaListItem(n) => n.parent(),
         }
     }
     #[inline]
@@ -800,6 +863,27 @@ impl AstNodes<'_> {
             Self::JSDocNonNullableType(_) => "JSDocNonNullableType",
             Self::JSDocUnknownType(_) => "JSDocUnknownType",
             Self::NotaMarkup(_) => "NotaMarkup",
+            Self::NotaDocument(_) => "NotaDocument",
+            Self::NotaText(_) => "NotaText",
+            Self::NotaStatement(_) => "NotaStatement",
+            Self::NotaElement(_) => "NotaElement",
+            Self::NotaHostName(_) => "NotaHostName",
+            Self::NotaDynamicTag(_) => "NotaDynamicTag",
+            Self::NotaFieldProp(_) => "NotaFieldProp",
+            Self::NotaPropName(_) => "NotaPropName",
+            Self::NotaPropExpr(_) => "NotaPropExpr",
+            Self::NotaShorthandProp(_) => "NotaShorthandProp",
+            Self::NotaSpreadProp(_) => "NotaSpreadProp",
+            Self::NotaFragment(_) => "NotaFragment",
+            Self::NotaInterpolation(_) => "NotaInterpolation",
+            Self::NotaIf(_) => "NotaIf",
+            Self::NotaFor(_) => "NotaFor",
+            Self::NotaCode(_) => "NotaCode",
+            Self::NotaMath(_) => "NotaMath",
+            Self::NotaVerbatim(_) => "NotaVerbatim",
+            Self::NotaEmphasis(_) => "NotaEmphasis",
+            Self::NotaHeading(_) => "NotaHeading",
+            Self::NotaListItem(_) => "NotaListItem",
         }
     }
 }
@@ -10602,12 +10686,1002 @@ impl<'a> AstNode<'a, NotaMarkup<'a>> {
     }
 
     #[inline]
+    pub fn kind(&self) -> &AstNode<'a, NotaMarkupKind<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.kind,
+            allocator: self.allocator,
+            parent: AstNodes::NotaMarkup(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaMarkupKind<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaMarkupKind::Document(s) => AstNodes::NotaDocument(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Element(s) => AstNodes::NotaElement(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Fragment(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Interpolation(s) => {
+                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
+                    inner: s.as_ref(),
+                    parent,
+                    allocator: self.allocator,
+                    following_span_start: self.following_span_start,
+                }))
+            }
+            NotaMarkupKind::If(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::For(s) => AstNodes::NotaFor(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Code(s) => AstNodes::NotaCode(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Math(s) => AstNodes::NotaMath(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMarkupKind::Verbatim(s) => AstNodes::NotaVerbatim(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaDocument<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn items(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.items,
+            allocator: self.allocator,
+            parent: AstNodes::NotaDocument(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaChild<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaChild::Text(s) => AstNodes::NotaText(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Statement(s) => AstNodes::NotaStatement(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Element(s) => AstNodes::NotaElement(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Fragment(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Interpolation(s) => {
+                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
+                    inner: s.as_ref(),
+                    parent,
+                    allocator: self.allocator,
+                    following_span_start: self.following_span_start,
+                }))
+            }
+            NotaChild::If(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::For(s) => AstNodes::NotaFor(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Code(s) => AstNodes::NotaCode(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Math(s) => AstNodes::NotaMath(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Verbatim(s) => AstNodes::NotaVerbatim(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Emphasis(s) => AstNodes::NotaEmphasis(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::Heading(s) => AstNodes::NotaHeading(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaChild::ListItem(s) => AstNodes::NotaListItem(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaText<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn value(&self) -> Str<'a> {
+        self.inner.value
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaStatement<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn statement(&self) -> &AstNode<'a, Statement<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.statement,
+            allocator: self.allocator,
+            parent: AstNodes::NotaStatement(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaElement<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn tag(&self) -> &AstNode<'a, NotaTag<'a>> {
+        let following_span_start = self
+            .inner
+            .props
+            .first()
+            .map(|n| n.span().start)
+            .or_else(|| self.inner.children.first().map(|n| n.span().start))
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.tag,
+            allocator: self.allocator,
+            parent: AstNodes::NotaElement(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn props(&self) -> &AstNode<'a, Vec<'a, NotaProp<'a>>> {
+        let following_span_start = self
+            .inner
+            .children
+            .first()
+            .map(|n| n.span().start)
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.props,
+            allocator: self.allocator,
+            parent: AstNodes::NotaElement(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.children,
+            allocator: self.allocator,
+            parent: AstNodes::NotaElement(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaTag<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaTag::Host(s) => AstNodes::NotaHostName(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaTag::Component(s) => AstNodes::IdentifierReference(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaTag::Dynamic(s) => AstNodes::NotaDynamicTag(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaHostName<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn name(&self) -> Str<'a> {
+        self.inner.name
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaDynamicTag<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
     pub fn expression(&self) -> &AstNode<'a, Expression<'a>> {
         let following_span_start = self.following_span_start;
         self.allocator.alloc(AstNode {
             inner: &self.inner.expression,
             allocator: self.allocator,
-            parent: AstNodes::NotaMarkup(transmute_self(self)),
+            parent: AstNodes::NotaDynamicTag(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaProp<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaProp::Field(s) => AstNodes::NotaFieldProp(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaProp::Shorthand(s) => AstNodes::NotaShorthandProp(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaProp::Spread(s) => AstNodes::NotaSpreadProp(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaFieldProp<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn name(&self) -> &AstNode<'a, NotaPropName<'a>> {
+        let following_span_start = self.inner.value.span().start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.name,
+            allocator: self.allocator,
+            parent: AstNodes::NotaFieldProp(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn value(&self) -> &AstNode<'a, NotaPropValue<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.value,
+            allocator: self.allocator,
+            parent: AstNodes::NotaFieldProp(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaPropName<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn name(&self) -> Str<'a> {
+        self.inner.name
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaPropValue<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaPropValue::Expression(s) => AstNodes::NotaPropExpr(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaPropValue::Markup(s) => AstNodes::NotaMarkup(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaPropExpr<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn expression(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.expression,
+            allocator: self.allocator,
+            parent: AstNodes::NotaPropExpr(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaShorthandProp<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn name(&self) -> &AstNode<'a, IdentifierReference<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.name,
+            allocator: self.allocator,
+            parent: AstNodes::NotaShorthandProp(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaSpreadProp<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn argument(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.argument,
+            allocator: self.allocator,
+            parent: AstNodes::NotaSpreadProp(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaFragment<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.children,
+            allocator: self.allocator,
+            parent: AstNodes::NotaFragment(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaInterpolation<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn expression(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.expression,
+            allocator: self.allocator,
+            parent: AstNodes::NotaInterpolation(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaIf<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn test(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.inner.consequent.span().start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.test,
+            allocator: self.allocator,
+            parent: AstNodes::NotaIf(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn consequent(&self) -> &AstNode<'a, NotaFragment<'a>> {
+        let following_span_start = self
+            .inner
+            .alternate
+            .as_ref()
+            .map(|n| n.span().start)
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: self.inner.consequent.as_ref(),
+            allocator: self.allocator,
+            parent: AstNodes::NotaIf(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn alternate(&self) -> Option<&AstNode<'a, NotaElse<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator
+            .alloc(self.inner.alternate.as_ref().map(|inner| AstNode {
+                inner,
+                allocator: self.allocator,
+                parent: AstNodes::NotaIf(transmute_self(self)),
+                following_span_start,
+            }))
+            .as_ref()
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaElse<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaElse::ElseIf(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaElse::Else(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaFor<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn binding(&self) -> &AstNode<'a, BindingPattern<'a>> {
+        let following_span_start = self.inner.iterable.span().start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.binding,
+            allocator: self.allocator,
+            parent: AstNodes::NotaFor(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn iterable(&self) -> &AstNode<'a, Expression<'a>> {
+        let following_span_start = self.inner.body.span().start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.iterable,
+            allocator: self.allocator,
+            parent: AstNodes::NotaFor(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn body(&self) -> &AstNode<'a, NotaFragment<'a>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: self.inner.body.as_ref(),
+            allocator: self.allocator,
+            parent: AstNodes::NotaFor(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaCode<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn language(&self) -> Option<Str<'a>> {
+        self.inner.language
+    }
+
+    #[inline]
+    pub fn value(&self) -> Str<'a> {
+        self.inner.value
+    }
+
+    #[inline]
+    pub fn block(&self) -> bool {
+        self.inner.block
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaMath<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn display(&self) -> bool {
+        self.inner.display
+    }
+
+    #[inline]
+    pub fn parts(&self) -> &AstNode<'a, Vec<'a, NotaMathPart<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.parts,
+            allocator: self.allocator,
+            parent: AstNodes::NotaMath(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaMathPart<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaMathPart::Raw(s) => AstNodes::NotaText(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaMathPart::Interpolation(s) => {
+                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
+                    inner: s.as_ref(),
+                    parent,
+                    allocator: self.allocator,
+                    following_span_start: self.following_span_start,
+                }))
+            }
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaVerbatim<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn tag(&self) -> &AstNode<'a, NotaTag<'a>> {
+        let following_span_start = self
+            .inner
+            .parts
+            .first()
+            .map(|n| n.span().start)
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.tag,
+            allocator: self.allocator,
+            parent: AstNodes::NotaVerbatim(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn parts(&self) -> &AstNode<'a, Vec<'a, NotaVerbatimPart<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.parts,
+            allocator: self.allocator,
+            parent: AstNodes::NotaVerbatim(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaVerbatimPart<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaVerbatimPart::Raw(s) => AstNodes::NotaText(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaVerbatimPart::Child(s) => AstNodes::NotaMarkup(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
+impl<'a> AstNode<'a, NotaEmphasis<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn marker(&self) -> NotaEmphasisMarker {
+        self.inner.marker
+    }
+
+    #[inline]
+    pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.children,
+            allocator: self.allocator,
+            parent: AstNodes::NotaEmphasis(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaHeading<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn level(&self) -> u8 {
+        self.inner.level
+    }
+
+    #[inline]
+    pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.children,
+            allocator: self.allocator,
+            parent: AstNodes::NotaHeading(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaListItem<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn kind(&self) -> NotaListKind {
+        self.inner.kind
+    }
+
+    #[inline]
+    pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.children,
+            allocator: self.allocator,
+            parent: AstNodes::NotaListItem(transmute_self(self)),
             following_span_start,
         })
     }

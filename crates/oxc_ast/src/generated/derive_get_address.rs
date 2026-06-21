@@ -7,6 +7,7 @@ use oxc_allocator::{Address, GetAddress};
 
 use crate::ast::js::*;
 use crate::ast::jsx::*;
+use crate::ast::nota::*;
 use crate::ast::ts::*;
 
 impl GetAddress for Expression<'_> {
@@ -796,6 +797,114 @@ impl GetAddress for TSModuleReference<'_> {
             Self::ExternalModuleReference(it) => GetAddress::address(it),
             Self::IdentifierReference(it) => GetAddress::address(it),
             Self::QualifiedName(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaMarkupKind<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Document(it) => GetAddress::address(it),
+            Self::Element(it) => GetAddress::address(it),
+            Self::Fragment(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+            Self::If(it) => GetAddress::address(it),
+            Self::For(it) => GetAddress::address(it),
+            Self::Code(it) => GetAddress::address(it),
+            Self::Math(it) => GetAddress::address(it),
+            Self::Verbatim(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaChild<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Text(it) => GetAddress::address(it),
+            Self::Statement(it) => GetAddress::address(it),
+            Self::Element(it) => GetAddress::address(it),
+            Self::Fragment(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+            Self::If(it) => GetAddress::address(it),
+            Self::For(it) => GetAddress::address(it),
+            Self::Code(it) => GetAddress::address(it),
+            Self::Math(it) => GetAddress::address(it),
+            Self::Verbatim(it) => GetAddress::address(it),
+            Self::Emphasis(it) => GetAddress::address(it),
+            Self::Heading(it) => GetAddress::address(it),
+            Self::ListItem(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaTag<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Host(it) => GetAddress::address(it),
+            Self::Component(it) => GetAddress::address(it),
+            Self::Dynamic(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaProp<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Field(it) => GetAddress::address(it),
+            Self::Shorthand(it) => GetAddress::address(it),
+            Self::Spread(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaPropValue<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Expression(it) => GetAddress::address(it),
+            Self::Markup(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaElse<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::ElseIf(it) => GetAddress::address(it),
+            Self::Else(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaMathPart<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Raw(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+        }
+    }
+}
+
+impl GetAddress for NotaVerbatimPart<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Raw(it) => GetAddress::address(it),
+            Self::Child(it) => GetAddress::address(it),
         }
     }
 }

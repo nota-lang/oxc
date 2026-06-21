@@ -23,9 +23,8 @@ impl GetPrecedence for Expression<'_> {
             Self::AwaitExpression(expr) => expr.precedence(),
             Self::NewExpression(expr) => expr.precedence(),
             Self::CallExpression(expr) => expr.precedence(),
-            // Stub (Phase 0): a Nota form behaves like its wrapped expression. Lowered away before
-            // codegen in the build path; Phase 1+ gives Nota nodes their own precedence.
-            Self::NotaMarkup(n) => n.expression.precedence(),
+            // `NotaMarkup` (like JSX) is lowered before codegen, so precedence is never queried;
+            // it falls through to the catch-all below.
             match_member_expression!(Self) => self.to_member_expression().precedence(),
             _ => panic!("All cases should be covered"),
         }
