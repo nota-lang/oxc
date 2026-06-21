@@ -359,6 +359,332 @@ fn unknown_component_is_not_a_reader_error() {
 }
 
 // ===============================================================================================
+// Phase D — control flow (`@if` / `else` / `@for`). All are expressions (contract §3 rows).
+// `@if (c){a}` → `c ? Fragment(...a) : null`; `@for (x of y){body}` → keyed `.map` (contract §4 E5).
+// ===============================================================================================
+
+#[test]
+fn if_single_branch() {
+    // `@if (c) {a}` → `c ? Fragment("a") : null`.
+    nota_expr("@if (c) {a}", r#"c ? Fragment("a") : null"#);
+    // Whitespace after `@if` is insignificant (`@if(c)` ≡ `@if (c)`).
+    nota_expr("@if(c){a}", r#"c ? Fragment("a") : null"#);
+}
+
+#[test]
+fn if_else() {
+    // `@if (c) {a} else {b}` → `c ? Fragment("a") : Fragment("b")`.
+    nota_expr("@if (c) {a} else {b}", r#"c ? Fragment("a") : Fragment("b")"#);
+}
+
+#[test]
+fn if_else_if() {
+    // `@if (c) {a} else if (d) {b}` → nested ternary, `null` when no branch matches.
+    nota_expr("@if (c) {a} else if (d) {b}", r#"c ? Fragment("a") : d ? Fragment("b") : null"#);
+}
+
+#[test]
+fn if_else_if_else() {
+    nota_expr(
+        "@if (c) {a} else if (d) {b} else {e}",
+        r#"c ? Fragment("a") : d ? Fragment("b") : Fragment("e")"#,
+    );
+}
+
+#[test]
+fn if_branch_with_markup_and_interp() {
+    // Branch bodies nest markup and interpolation.
+    nota_expr("@if (c) {Hi @em{@name}}", r#"c ? Fragment("Hi ", h("em", {}, [name])) : null"#);
+}
+
+#[test]
+fn if_condition_is_arbitrary_expr() {
+    nota_expr("@if (a && b.c) {x}", r#"a && b.c ? Fragment("x") : null"#);
+}
+
+#[test]
+fn else_only_continues_as_next_token() {
+    // A blank line between `}` and `else` breaks the continuation: the `else` is literal text in the
+    // *following* sibling, so the `@if` has a `null` alternate. (Expression mode reads one form, so
+    // here we assert the body-nested behavior via a fragment.)
+    nota_expr(
+        "@{@if (c) {a}\n\nelse text}",
+        r#"Fragment(c ? Fragment("a") : null, "\n", "\n", "else text")"#,
+    );
+}
+
+#[test]
+fn else_adjacent_continues() {
+    // No blank line ⇒ `else` continues even across a single newline.
+    nota_expr("@if (c) {a}\nelse {b}", r#"c ? Fragment("a") : Fragment("b")"#);
+}
+
+#[test]
+fn escaped_else_is_literal() {
+    // `\else` right after the if-block forces a literal (not a continuation): `@if` keeps a `null`
+    // alternate and the `\else` text surfaces in the surrounding body.
+    let js = nota_expr_raw("@{@if (c) {a} \\else text}");
+    assert!(js.contains(r#"Fragment("a") : null"#), "if has null alternate: {js}");
+    assert!(js.contains("else text") || js.contains(r#"\else text"#), "else text literal: {js}");
+}
+
+#[test]
+fn if_nested_in_for() {
+    // Control flow nests: `@for` body contains an `@if`.
+    nota_expr(
+        "@for (x of xs) {@if (x) {@x}}",
+        r#"xs.map((x, _i) => Fragment({ key: _i }, x ? Fragment(x) : null))"#,
+    );
+}
+
+#[test]
+fn for_basic() {
+    // `@for (x of y) {@li{@x}}` → `y.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))` (E5).
+    nota_expr(
+        "@for (x of y) {@li{@x}}",
+        r#"y.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))"#,
+    );
+}
+
+#[test]
+fn for_array_literal_iter() {
+    nota_expr(
+        r#"@for (x of ["a", "b"]) {@x}"#,
+        r#"["a", "b"].map((x, _i) => Fragment({ key: _i }, x))"#,
+    );
+}
+
+#[test]
+fn for_destructuring_bind() {
+    // `bind` is any binding pattern.
+    nota_expr(
+        "@for ([k, v] of pairs) {@k = @v}",
+        r#"pairs.map(([k, v], _i) => Fragment({ key: _i }, k, " = ", v))"#,
+    );
+    nota_expr(
+        "@for ({ id } of items) {@id}",
+        r#"items.map(({ id }, _i) => Fragment({ key: _i }, id))"#,
+    );
+}
+
+#[test]
+fn for_multi_child_body() {
+    // The body's whitespace pass yields multiple children, all spread after the key prop.
+    nota_expr(
+        "@for (x of xs) {@b{@x} done}",
+        r#"xs.map((x, _i) => Fragment({ key: _i }, h("b", {}, [x]), " done"))"#,
+    );
+}
+
+#[test]
+fn control_flow_nested_in_markup_body() {
+    // `@if`/`@for` are expressions, so they sit as children of an element body.
+    nota_expr(
+        "@ul{@for (x of xs) {@li{@x}}}",
+        r#"h("ul", {}, [xs.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))])"#,
+    );
+}
+
+// ===============================================================================================
+// Phase D diagnostics
+// ===============================================================================================
+
+#[test]
+fn err_for_without_of() {
+    // A C-style `for` has no `@`-form (write it in `%`); `@for` requires `of`.
+    nota_expr_err("@for (let i = 0; i < n; i++) {x}");
+}
+
+#[test]
+fn err_if_without_body() {
+    nota_expr_err("@if (c) a");
+}
+
+#[test]
+fn err_for_without_body() {
+    nota_expr_err("@for (x of xs) x");
+}
+
+// ===============================================================================================
+// Phase E — markup sugar. Emphasis (`*`/`_`), headings (`#`), lists (`-`/`+`/`N.`). Each lowers to
+// an ordinary element; the runtime `struct` does the grouping (contract §3 / notation.md §sugar).
+// ===============================================================================================
+
+#[test]
+fn emphasis_strong() {
+    nota_expr("@p{*bold*}", r#"h("p", {}, [h("strong", {}, ["bold"])])"#);
+}
+
+#[test]
+fn emphasis_em() {
+    nota_expr("@p{_italic_}", r#"h("p", {}, [h("em", {}, ["italic"])])"#);
+}
+
+#[test]
+fn emphasis_nested() {
+    // `*a _b_ c*` → <strong>a <em>b</em> c</strong>.
+    nota_expr(
+        "@p{*a _b_ c*}",
+        r#"h("p", {}, [h("strong", {}, ["a ", h("em", {}, ["b"]), " c"])])"#,
+    );
+}
+
+#[test]
+fn emphasis_intra_word_is_literal() {
+    // Typst word-boundary rule: intra-word `_`/`*` are literal without escaping.
+    nota_expr("@p{my_var_name}", r#"h("p", {}, ["my_var_name"])"#);
+    nota_expr("@p{a*b*c}", r#"h("p", {}, ["a*b*c"])"#);
+}
+
+#[test]
+fn emphasis_with_surrounding_text() {
+    nota_expr("@p{say *hi* there}", r#"h("p", {}, ["say ", h("strong", {}, ["hi"]), " there"])"#);
+}
+
+#[test]
+fn emphasis_contains_interpolation() {
+    nota_expr("@p{*@name*}", r#"h("p", {}, [h("strong", {}, [name])])"#);
+}
+
+#[test]
+fn emphasis_unbalanced_is_literal() {
+    // No matching close before EOF/paragraph end ⇒ the marker is literal (Typst behavior).
+    nota_expr("@p{a * b}", r#"h("p", {}, ["a * b"])"#);
+}
+
+#[test]
+fn escaped_emphasis_marker_is_literal() {
+    // `\*` suppresses the emphasis marker (the `\`-stripping itself is Phase F, so the `\` stays).
+    let js = nota_expr_raw(r#"@p{\*not bold\*}"#);
+    assert!(!js.contains(r#"h("strong""#), "no strong: {js}");
+}
+
+#[test]
+fn escaped_hash_dash_at_line_start_not_construct() {
+    // `\#`/`\-` at line start: the first char is `\`, not the marker, so no heading/list fires.
+    let js = nota_doc("\\# not a heading\n\\- not a list\n");
+    assert!(!js.contains(r#"h("h1""#), "no heading: {js}");
+    assert!(!js.contains(r#"h("ulli""#), "no list: {js}");
+}
+
+#[test]
+fn emphasis_at_document_level() {
+    // Sugar works at document level too (hooks the same markup machinery).
+    let js = nota_doc("Some *bold* and _italic_ text.\n");
+    assert!(js.contains(r#"h("strong", {}, ["bold"])"#), "{js}");
+    assert!(js.contains(r#"h("em", {}, ["italic"])"#), "{js}");
+}
+
+// ----- Headings -----
+
+#[test]
+fn heading_h1() {
+    let js = nota_doc("# Title\n");
+    assert!(js.contains(r#"h("h1", {}, ["Title"])"#), "{js}");
+}
+
+#[test]
+fn heading_levels() {
+    let js = nota_doc("### Sub *bit*\n");
+    // `### Sub *bit*` → h("h3", {}, ["Sub ", h("strong", {}, ["bit"])]).
+    assert!(js.contains(r#"h("h3", {}, ["Sub ", h("strong", {}, ["bit"])])"#), "{js}");
+}
+
+#[test]
+fn heading_all_six_levels() {
+    let js = nota_doc("# a\n## b\n### c\n#### d\n##### e\n###### f\n");
+    for (n, body) in [(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e"), (6, "f")] {
+        assert!(js.contains(&format!(r#"h("h{n}", {{}}, ["{body}"])"#)), "h{n}: {js}");
+    }
+}
+
+#[test]
+fn heading_seven_hashes_is_not_heading() {
+    // 7+ `#` is not a heading (1–6 only); it stays literal text.
+    let js = nota_doc("####### too many\n");
+    assert!(!js.contains(r#"h("h7""#), "no h7: {js}");
+    assert!(!js.contains(r#"h("h"#), "no heading at all: {js}");
+}
+
+#[test]
+fn hash_without_space_is_literal() {
+    // `#tag` (no space after the run) is not a heading.
+    let js = nota_doc("#tag here\n");
+    assert!(!js.contains(r#"h("h1""#), "{js}");
+}
+
+// ----- Lists -----
+
+#[test]
+fn list_bullet() {
+    // `- a` → h("ulli", {}, ["a"]); the runtime struct coalesces runs into <ul>.
+    let js = nota_doc("- a\n- b\n");
+    assert!(js.contains(r#"h("ulli", {}, ["a"])"#), "{js}");
+    assert!(js.contains(r#"h("ulli", {}, ["b"])"#), "{js}");
+}
+
+#[test]
+fn list_number() {
+    let js = nota_doc("+ first\n+ second\n");
+    assert!(js.contains(r#"h("olli", {}, ["first"])"#), "{js}");
+    assert!(js.contains(r#"h("olli", {}, ["second"])"#), "{js}");
+}
+
+#[test]
+fn list_explicit_number_marker() {
+    // `N.` is an alternate olli marker; the written numbers are ignored.
+    let js = nota_doc("1. one\n2. two\n");
+    assert!(js.contains(r#"h("olli", {}, ["one"])"#), "{js}");
+    assert!(js.contains(r#"h("olli", {}, ["two"])"#), "{js}");
+}
+
+#[test]
+fn list_item_with_markup() {
+    let js = nota_doc("- a *bold* item\n");
+    // Compare modulo formatting (codegen wraps the >2-element array across lines).
+    assert_js_eq(
+        &js,
+        r#"export default function Doc() {
+  return decode(Fragment(h("ulli", {}, ["a ", h("strong", {}, ["bold"]), " item"])));
+}"#,
+    );
+}
+
+#[test]
+fn list_nested() {
+    // A deeper marker opens a nested list inside the parent item's children:
+    //   - a
+    //     - b
+    //     - c
+    // → h("ulli", {}, ["a", "\n", h("ulli",{},["b"]), h("ulli",{},["c"])]); the runtime `struct`
+    // coalesces the inner `ulli` run into one nested `<ul>`, and `a`'s item carries it.
+    let js = nota_doc("- a\n  - b\n  - c\n");
+    assert_js_eq(
+        &js,
+        r#"export default function Doc() {
+  return decode(Fragment(h("ulli", {}, ["a", "\n", h("ulli", {}, ["b"]), h("ulli", {}, ["c"])])));
+}"#,
+    );
+}
+
+#[test]
+fn list_continuation_line() {
+    // An item body continues on lines indented past its marker (block-sugar rule).
+    let js = nota_doc("- first line\n  continued\n");
+    assert!(js.contains("first line"), "{js}");
+    assert!(js.contains("continued"), "{js}");
+    // Both are children of the same ulli (no second ulli for "continued").
+    assert_eq!(js.matches(r#"h("ulli""#).count(), 1, "one ulli only: {js}");
+}
+
+#[test]
+fn dash_without_space_is_literal() {
+    // `-5` (no space) is not a list marker.
+    let js = nota_doc("-5 degrees\n");
+    assert!(!js.contains(r#"h("ulli""#), "{js}");
+}
+
+// ===============================================================================================
 // THE canonical golden (contract §2): stage-1 `.nota` → must equal stage-3 (modulo formatting).
 // ===============================================================================================
 
@@ -384,23 +710,27 @@ fn nota_doc_no_validity(source: &str) -> String {
     Codegen::new().build(&program).code
 }
 
-#[test]
-fn canonical_golden_component_matches_stage3() {
-    // The FULL canonical golden needs Phase D (`@for`); within Phase B/C scope, the F1 component
-    // definition must lower EXACTLY to contract §2 stage-3 (F1 hoist+export+name, `decode` wrap,
-    // `@children` → the bound param). We assert the component definition prefix matches stage-3.
-    let js = nota_doc_no_validity(CANONICAL_NOTA);
-    let expected_component = r#"export let Colorized = inlineComponent((children) => {
+/// THE canonical golden, stage-3 (contract §2), with the **Phase-D + E5** amendment applied: the
+/// `@for` is lowered to a *keyed* `.map` (`(x, _i) => Fragment({ key: _i }, …)`), and the `-` list
+/// marker is lowered to the `"ulli"` sentinel (Phase E — runtime `struct` later coalesces it).
+const CANONICAL_STAGE3: &str = r#"export let Colorized = inlineComponent((children) => {
   let [color, setColor] = useState("red");
   return decode(h("span", { onClick: () => setColor("green"), style: { color } }, [children]));
-}, "Colorized");"#;
-    // Compare the component definition (everything up to `export default`), modulo formatting.
-    let component_emitted = js.split("export default").next().unwrap();
-    assert_js_eq(component_emitted, expected_component);
+}, "Colorized");
 
-    // The document scaffolding is present: `export default function Doc()` + `decode(Fragment(...))`.
-    assert!(js.contains("export default function Doc()"), "{js}");
-    assert!(js.contains("decode(Fragment("), "{js}");
+export default function Doc() {
+  return decode(Fragment(["a", "b"].map((x, _i) => Fragment({ key: _i }, h("ulli", {}, [h(Colorized, {}, [x])])))));
+}"#;
+
+#[test]
+fn canonical_golden_matches_stage3() {
+    // THE capstone (contract §2): stage-1 `.nota` compiles to a module byte-equal (modulo
+    // formatting) to stage-3 — incl. the F1 component (hoist+export+name, `decode` wrap, `@children`
+    // → the bound param), the keyed `Fragment({ key: _i }, …)` (E5), the `["a", "b"].map((x, _i) =>
+    // …)` (Phase D), and the `-` → `h("ulli", …)` list sentinel (Phase E). Also valid JS (re-parses
+    // under stock oxc — the §1.6 validity invariant), now that nothing is un-lowered.
+    let js = nota_doc(CANONICAL_NOTA);
+    assert_js_eq(&js, CANONICAL_STAGE3);
 }
 
 #[test]

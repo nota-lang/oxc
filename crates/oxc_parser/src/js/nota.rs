@@ -36,6 +36,10 @@ const FRAGMENT: &str = "Fragment";
 const DECODE: &str = "decode";
 /// The fresh component-cased binding for a dynamic-tag IIFE (`@(getTag()){…}`).
 const DYNAMIC_TAG_BINDING: &str = "_Tag";
+/// The fresh map-index parameter the reader injects as the `@for` body's `Fragment` key (E5). Named
+/// to avoid colliding with author bindings (an author `_i` would shadow it, but the key still binds
+/// to the innermost — acceptable; the contract pins this exact name).
+const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
 const DOC: &str = "Doc";
 /// The F1 component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
@@ -148,6 +152,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return self.parse_fragment(span_start, in_body);
         }
 
+        // `@if (…)` / `@for (…)` — control flow (Phase D). Intercepted *before* the bare-identifier
+        // head path because `for`/`if` lex as keyword tokens that `is_identifier_name` (the head
+        // parser) would otherwise accept as interpolation identifiers (notation.md: `for`/`if` keep
+        // their `@`). The trigger is the keyword *followed by* `(` (whitespace after `@for`/`@if` is
+        // insignificant — peeked over the raw source). A bare `@if`/`@for` (no `(`) falls through.
+        if self.at(Kind::If) && self.control_head_has_paren() {
+            return self.parse_nota_if(span_start, in_body);
+        }
+        if self.at(Kind::For) && self.control_head_has_paren() {
+            return self.parse_nota_for(span_start, in_body);
+        }
+
         // Determine the head and the byte immediately after it (the element/interpolation switch).
         let head = self.parse_nota_head();
         let head = match head {
@@ -156,7 +172,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         };
 
         match self.byte_at(head.end) {
-            Some(b'{') | Some(b'[') => self.parse_element(span_start, head, in_body),
+            Some(b'{' | b'[') => self.parse_element(span_start, head, in_body),
             Some(b':') if !head.colon_escaped => {
                 self.parse_colon_element(span_start, head, in_body)
             }
@@ -356,6 +372,23 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                                 items.push(BodyItem::Child(iife));
                                 return close;
                             }
+                            // Line-start markup sugar (Phase E): lists (`-`/`+`/`N.`) and headings
+                            // (`#`). Only at brace depth 0 (a balanced `{…}` is literal body text).
+                            if *depth == 0 && self.list_marker_at(next_line).is_some() {
+                                let (els, resume) = self.parse_list(next_line);
+                                for e in els {
+                                    items.push(BodyItem::Child(e));
+                                }
+                                self.nota_seek_markup(resume);
+                                continue;
+                            }
+                            if *depth == 0
+                                && let Some((heading, h_end)) = self.try_heading(next_line)
+                            {
+                                items.push(BodyItem::Child(heading));
+                                self.nota_seek_markup(h_end);
+                                continue;
+                            }
                             self.nota_seek_markup(next_line);
                         }
                         Some(b'{') => {
@@ -383,6 +416,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             self.bump_any(); // lex `@`
                             let child = self.parse_nota_form(true);
                             items.push(BodyItem::Child(child));
+                        }
+                        Some(m @ (b'*' | b'_')) => {
+                            // Emphasis sigil (Phase E). Marker iff NOT intra-word (Typst rule); else
+                            // literal. An *opening* marker recurses into the emphasis body.
+                            if self.is_emphasis_marker(term_off) {
+                                self.parse_emphasis(m, term_off, items);
+                            } else {
+                                self.push_literal_byte(items, m);
+                                self.nota_seek_markup(term_off + 1);
+                            }
                         }
                         _ => {
                             // EOF.
@@ -515,17 +558,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             ))
         } else {
             // Bare key → shorthand `{ key }`. Value is an identifier reference of the same name.
-            let (name, key_span) = match &key {
-                PropertyKey::StaticIdentifier(id) => (id.name, id.span),
-                _ => {
-                    // A string-literal key with no value is malformed.
-                    let error = diagnostics::expect_token(
-                        Kind::Colon.to_str(),
-                        self.cur_kind().to_str(),
-                        self.cur_token().span(),
-                    );
-                    return self.fatal_error(error);
-                }
+            let (name, key_span) = if let PropertyKey::StaticIdentifier(id) = &key {
+                (id.name, id.span)
+            } else {
+                // A string-literal key with no value is malformed.
+                let error = diagnostics::expect_token(
+                    Kind::Colon.to_str(),
+                    self.cur_kind().to_str(),
+                    self.cur_token().span(),
+                );
+                return self.fatal_error(error);
             };
             let value = self.ast.expression_identifier(key_span, name);
             let span = self.end_span(span_start);
@@ -674,8 +716,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         );
 
         // `(<arrow>)()`
-        let iife = ast.expression_call(span, arrow, NONE, ast.vec(), false);
-        iife
+
+        ast.expression_call(span, arrow, NONE, ast.vec(), false)
     }
 
     // ===========================================================================================
@@ -696,6 +738,781 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             opening_span,
         );
         self.set_fatal_error(error);
+    }
+}
+
+// ===============================================================================================
+// Phase D — control flow (`@if` / `else` / `@for`). All are expressions, so they nest in markup
+// and embedded code alike (impl.md §1.5 D). `@if` lowers to a (nested) ternary; `@for` lowers to
+// `iter.map((bind, _i) => Fragment({ key: _i }, ...body))` (contract §4 E5). `else`/`else if` are
+// contextual continuations (only as the next token after `}`, no blank line between).
+// ===============================================================================================
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    /// Peek (over the raw source) whether the control keyword at the current token is followed by
+    /// `(` — the `@if (`/`@for (` trigger. Whitespace (incl. newlines) between the keyword and `(`
+    /// is insignificant (notation.md §"whitespace after `@for`/`@if` is insignificant").
+    fn control_head_has_paren(&self) -> bool {
+        let after_kw = self.cur_token().end();
+        matches!(self.skip_ws_byte(after_kw), Some((b'(', _)))
+    }
+
+    /// `@if (cond) {branch}` with optional `else`/`else if` continuations → a (nested) ternary
+    /// (`cond ? Fragment(...branch) : <alt-or-null>`). `@if` is keyless (single branch, no list
+    /// reconciliation), so its branch `Fragment`s carry no `key`.
+    fn parse_nota_if(&mut self, span_start: u32, in_body: bool) -> Expression<'a> {
+        // current token: the `if` keyword. Parse the `(cond)` test (JS expression).
+        self.bump_any(); // → `(`
+        let cond = self.parse_paren_expression();
+        // After `)` the next JS token is the branch-body `{` (whitespace skipped by the JS lexer).
+        let cons = self.parse_branch_fragment(span_start);
+        if self.has_fatal_error() {
+            return self.ast.expression_null_literal(Span::empty(span_start));
+        }
+        // The branch `}` is the current token; its end is the continuation-scan origin.
+        let close_end = self.cur_token().end();
+        let alternate = self.parse_else_continuation(close_end, in_body);
+        self.ast.expression_conditional(
+            Span::new(span_start, self.prev_token_end),
+            cond,
+            cons,
+            alternate,
+        )
+    }
+
+    /// Parse whatever follows an `@if`/`else if` branch's `}`: an `else`/`else if` continuation, or
+    /// nothing (→ `null`). Resumes the outer context (markup / JS) at the end of the whole chain.
+    /// `close_end` is one byte past the just-parsed branch's `}`.
+    fn parse_else_continuation(&mut self, close_end: u32, in_body: bool) -> Expression<'a> {
+        match self.peek_else(close_end) {
+            ElsePeek::None => {
+                // No continuation: the alternate is `null`; resume the outer context past the `}`.
+                self.resume_after_control(close_end, in_body);
+                self.ast.expression_null_literal(Span::empty(close_end))
+            }
+            ElsePeek::ElseIf { if_offset } => {
+                // `else if (d) {…}` — re-seek to the `if` and recurse; the recursion owns the resume.
+                self.nota_seek_to(if_offset);
+                let span_start = self.cur_token().start();
+                self.parse_nota_if(span_start, in_body)
+            }
+            ElsePeek::Else { brace_offset } => {
+                // `else {b}` — re-seek to the `{` and parse the final branch, then resume.
+                self.nota_seek_to(brace_offset);
+                let span_start = self.cur_token().start();
+                let alt = self.parse_branch_fragment(span_start);
+                if self.has_fatal_error() {
+                    return self.ast.expression_null_literal(Span::empty(brace_offset));
+                }
+                let else_end = self.cur_token().end();
+                self.resume_after_control(else_end, in_body);
+                alt
+            }
+        }
+    }
+
+    /// `@for (bind of iter) {body}` → `iter.map((bind, _i) => Fragment({ key: _i }, ...body))`
+    /// (contract §4 E5: the reader adds a fresh map-index param `_i` as the wrapping `Fragment`'s
+    /// `key`). `bind` is any binding pattern.
+    fn parse_nota_for(&mut self, span_start: u32, in_body: bool) -> Expression<'a> {
+        // current token: the `for` keyword.
+        self.bump_any(); // → `(`
+        let open = self.cur_token().span();
+        self.expect(Kind::LParen);
+        let bind = self.parse_binding_pattern();
+        if !self.at(Kind::Of) {
+            // `@for` requires `of` (the comprehension form). C-style `for(;;)` has no `@`-form.
+            let error = diagnostics::nota_for_expects_of(self.cur_token().span());
+            self.set_fatal_error(error);
+            return self.ast.expression_null_literal(Span::empty(span_start));
+        }
+        self.bump_any(); // consume `of`
+        let iter = self.parse_assignment_expression_or_higher();
+        self.expect_closing(Kind::RParen, open);
+        // Body `{ … }`: the next JS token is `{` (whitespace skipped).
+        let (children, body_end) = self.parse_control_branch();
+        if self.has_fatal_error() {
+            return self.ast.expression_null_literal(Span::empty(span_start));
+        }
+        let span = Span::new(span_start, body_end);
+        let map_call = self.build_for_map(span, bind, iter, children);
+        // Resume the outer context past the body's `}`.
+        self.resume_after_control(body_end, in_body);
+        map_call
+    }
+
+    /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))` (contract §4 E5).
+    fn build_for_map(
+        &self,
+        span: Span,
+        bind: BindingPattern<'a>,
+        iter: Expression<'a>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let ast = self.ast;
+        let empty = Span::empty(span.start);
+
+        // The arrow's wrapping `Fragment({ key: _i }, ...children)`.
+        let key_props = {
+            let key_name = ast.expression_identifier(empty, FOR_KEY_PARAM);
+            let key = PropertyKey::StaticIdentifier(ast.alloc_identifier_name(empty, "key"));
+            let prop = ast.alloc_object_property(
+                empty,
+                PropertyKind::Init,
+                key,
+                key_name,
+                false,
+                false,
+                false,
+            );
+            ast.vec1(ObjectPropertyKind::ObjectProperty(prop))
+        };
+        let fragment = self.build_keyed_fragment(span, key_props, children);
+
+        // `(bind, _i) => Fragment(...)`.
+        let mut params = ast.vec_with_capacity(2);
+        params.push(ast.formal_parameter(
+            empty,
+            ast.vec(),
+            bind,
+            NONE,
+            NONE,
+            false,
+            None,
+            false,
+            false,
+        ));
+        let index_pat = ast.binding_pattern_binding_identifier(empty, FOR_KEY_PARAM);
+        params.push(ast.formal_parameter(
+            empty,
+            ast.vec(),
+            index_pat,
+            NONE,
+            NONE,
+            false,
+            None,
+            false,
+            false,
+        ));
+        let body = ast.function_body(
+            empty,
+            ast.vec(),
+            ast.vec1(ast.statement_expression(empty, fragment)),
+        );
+        let arrow = ast.expression_arrow_function(
+            empty,
+            true, // expression body
+            false,
+            NONE,
+            ast.formal_parameters(empty, FormalParameterKind::ArrowFormalParameters, params, NONE),
+            NONE,
+            body,
+        );
+
+        // `iter.map(<arrow>)`.
+        let map_member = Expression::StaticMemberExpression(ast.alloc_static_member_expression(
+            empty,
+            iter,
+            ast.identifier_name(empty, "map"),
+            false,
+        ));
+        let mut args = ast.vec_with_capacity(1);
+        args.push(Argument::from(arrow));
+        ast.expression_call(span, map_member, NONE, args, false)
+    }
+
+    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg (contract §1:
+    /// `Fragment(props?, ...children)`; §4 E5 key mechanism).
+    fn build_keyed_fragment(
+        &self,
+        span: Span,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let ast = self.ast;
+        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
+        let props_obj = ast.expression_object(Span::empty(span.start), props);
+        let mut arguments = ast.vec_with_capacity(children.len() + 1);
+        arguments.push(Argument::from(props_obj));
+        for child in children {
+            arguments.push(Argument::from(child));
+        }
+        ast.expression_call(span, callee, NONE, arguments, false)
+    }
+
+    /// Parse an `@if`/`else if`/`else` branch body `{ … }` and wrap it in `Fragment(...children)`
+    /// (no key — `@if` branches are not list children). `span_start` is the form's start.
+    fn parse_branch_fragment(&mut self, span_start: u32) -> Expression<'a> {
+        let (children, end) = self.parse_control_branch();
+        self.build_fragment(Span::new(span_start, end), children)
+    }
+
+    /// Parse a control-flow body `{ … }` into children + the end offset (one past `}`), leaving the
+    /// `}` as the current token (so the caller can scan for a continuation / resume). Mirrors
+    /// [`Self::parse_body`] but defers the post-close resume to the caller (the whole if/for chain
+    /// resumes once, at its end).
+    fn parse_control_branch(&mut self) -> (ArenaVec<'a, Expression<'a>>, u32) {
+        if !self.at(Kind::LCurly) {
+            // Malformed: `@if (c) <not `{`>`. Surface a clear diagnostic.
+            let error = diagnostics::nota_control_expects_body(self.cur_token().span());
+            self.set_fatal_error(error);
+            return (self.ast.vec(), self.prev_token_end);
+        }
+        let open = self.cur_token().span();
+        self.advance_for_markup_text(); // switch the lexer into markup-body mode
+
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+        let mut depth = 0u32;
+        match self.collect_markup(&mut items, &mut depth, /* document */ false) {
+            // `collect_markup` lexed the close `}` as the current token; `end` is one past it.
+            MarkupClose::Curly { end } => (self.apply_whitespace(items), end),
+            MarkupClose::Eof => {
+                self.expect_markup_body_close(open);
+                (self.apply_whitespace(items), self.prev_token_end)
+            }
+            MarkupClose::AtStatement { .. } => (self.apply_whitespace(items), self.prev_token_end),
+        }
+    }
+
+    /// Resume the outer context after a control-flow form ends at `offset` (one past the final `}`):
+    /// re-lex as markup text if this form is a body child, else as a normal JS token.
+    fn resume_after_control(&mut self, offset: u32, in_body: bool) {
+        if in_body {
+            self.nota_seek_markup(offset);
+        } else {
+            self.nota_seek_to(offset);
+        }
+    }
+
+    /// Scan the raw source from `close_end` (one past a branch's `}`) for an `else`/`else if`
+    /// contextual continuation. A continuation requires `else` to be the *next token* with **no
+    /// blank line** between (≥2 newlines in the gap breaks it); `\else` forces a literal (→ no
+    /// continuation). Returns where to resume parsing the continuation, or [`ElsePeek::None`].
+    fn peek_else(&self, close_end: u32) -> ElsePeek {
+        let bytes = self.source_text.as_bytes();
+        let mut i = close_end as usize;
+        let mut newlines = 0u32;
+        while i < bytes.len() {
+            match bytes[i] {
+                b' ' | b'\t' | b'\r' => i += 1,
+                b'\n' => {
+                    newlines += 1;
+                    if newlines >= 2 {
+                        return ElsePeek::None; // blank line: continuation broken
+                    }
+                    i += 1;
+                }
+                _ => break,
+            }
+        }
+        // `\else` — an escaped literal, not a continuation.
+        if i < bytes.len() && bytes[i] == b'\\' {
+            return ElsePeek::None;
+        }
+        // Match the keyword `else` followed by a word boundary.
+        if !matches_keyword(bytes, i, b"else") {
+            return ElsePeek::None;
+        }
+        // After `else`, skip whitespace and look for `if` (→ `else if`) or `{` (→ `else {`).
+        let mut j = i + 4;
+        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
+            j += 1;
+        }
+        if matches_keyword(bytes, j, b"if") {
+            ElsePeek::ElseIf { if_offset: j as u32 }
+        } else if j < bytes.len() && bytes[j] == b'{' {
+            ElsePeek::Else { brace_offset: j as u32 }
+        } else {
+            // `else` not followed by `if`/`{` — malformed `else`; treat as no continuation so the
+            // text surfaces (and the misuse is caught by the un-lowered `else` / scope checks).
+            ElsePeek::None
+        }
+    }
+
+    /// Skip horizontal+vertical whitespace from `offset`; return the first non-ws byte and its
+    /// offset, or `None` at EOF.
+    fn skip_ws_byte(&self, offset: u32) -> Option<(u8, u32)> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = offset as usize;
+        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+            i += 1;
+        }
+        bytes.get(i).map(|b| (*b, i as u32))
+    }
+}
+
+/// A list marker found at a line start (Phase E).
+struct ListMarker {
+    /// `true` for an ordered marker (`+` / `N.`); `false` for a bullet (`-`).
+    ordered: bool,
+    /// Offset of the marker's first char (= the line's first non-whitespace; the item's indent).
+    indent: u32,
+    /// Offset where the item body begins (just past the marker and its one separating space).
+    body_col: u32,
+}
+
+/// The result of scanning for an `else`/`else if` contextual continuation after an `@if` branch.
+enum ElsePeek {
+    /// No continuation (the alternate is `null`).
+    None,
+    /// `else if (…) {…}` — resume parsing at the `if` keyword (`if_offset`).
+    ElseIf { if_offset: u32 },
+    /// `else {…}` — resume parsing at the body `{` (`brace_offset`).
+    Else { brace_offset: u32 },
+}
+
+/// Is `c` a "wordy" char for the emphasis word-boundary rule (Typst `in_word`): alphanumeric, with
+/// CJK scripts excluded (so CJK text gets emphasis without spaces)? `None` (start/end of source) is
+/// not wordy, so a marker at a boundary opens/closes. (CJK exclusion is approximated by Unicode
+/// block ranges — we have no `unicode-script` dep; ASCII + common Latin/Greek/Cyrillic are the
+/// realistic cases and classify exactly.)
+fn is_wordy(c: Option<char>) -> bool {
+    match c {
+        None => false,
+        Some(c) => c.is_alphanumeric() && !is_cjk(c),
+    }
+}
+
+/// Approximate the CJK scripts Typst excludes from `in_word` (Han/Hiragana/Katakana/Hangul) by
+/// codepoint range — enough that CJK prose gets emphasis without surrounding spaces.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x30FF        // Hiragana + Katakana
+        | 0x3400..=0x4DBF      // CJK Ext A
+        | 0x4E00..=0x9FFF      // CJK Unified
+        | 0xAC00..=0xD7AF      // Hangul syllables
+        | 0xF900..=0xFAFF      // CJK compat
+        | 0x20000..=0x2FA1F    // CJK Ext B+ / compat supplement
+    )
+}
+
+/// Does `bytes[at..]` begin with the keyword `kw` followed by a word boundary (not an
+/// identifier-continue char)? Used to match the contextual `else`/`else if`/`if` keywords over the
+/// raw source without lexing.
+fn matches_keyword(bytes: &[u8], at: usize, kw: &[u8]) -> bool {
+    if at + kw.len() > bytes.len() || &bytes[at..at + kw.len()] != kw {
+        return false;
+    }
+    // Word boundary: the following byte must not continue an identifier.
+    match bytes.get(at + kw.len()) {
+        None => true,
+        Some(b) => !(b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$'),
+    }
+}
+
+// ===============================================================================================
+// Phase E — markup sugar (emphasis `*`/`_`, headings `#`, lists `-`/`+`/`N.`). Each lowers to an
+// ordinary element; the runtime `decode`/`struct` does the grouping (the reader emits the flat
+// per-line/per-span sentinels). Escaped `\* \_ \# \- \+` are the literal char (Phase F).
+// ===============================================================================================
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    /// Is the `*`/`_` at `marker_off` (raw offset) a significant emphasis *marker*, or literal?
+    ///
+    /// Typst's rule (`references/typst/.../lexer.rs` `in_word`): a `*`/`_` is literal **only**
+    /// intra-word — when *both* the preceding and following chars are "wordy" (alphanumeric, with
+    /// CJK excluded). Otherwise it is a marker. So `my_var_name` keeps its `_` literal, while
+    /// `_italic_` and `*a _b_ c*` use them as markers. The open-vs-close determination is the
+    /// matcher's job ([`Self::find_emphasis_close`]); this only gates marker-vs-literal.
+    fn is_emphasis_marker(&self, marker_off: u32) -> bool {
+        // An escaped marker (`\*`/`\_`, odd run of preceding `\`) is literal (notation.md §Verbatim;
+        // the `\`-stripping itself is Phase F — here we only suppress the marker).
+        if self.is_escaped(marker_off) {
+            return false;
+        }
+        let prev = self.char_before(marker_off);
+        let next = self.char_at(marker_off + 1);
+        !(is_wordy(prev) && is_wordy(next))
+    }
+
+    /// Is the byte at `off` preceded by an *odd* run of backslashes (i.e. escaped)?
+    fn is_escaped(&self, off: u32) -> bool {
+        let bytes = self.source_text.as_bytes();
+        let mut n = 0usize;
+        let mut i = off as usize;
+        while i > 0 && bytes[i - 1] == b'\\' {
+            n += 1;
+            i -= 1;
+        }
+        n % 2 == 1
+    }
+
+    /// Parse an emphasis span opened by `marker` (`*`→`strong`, `_`→`em`) at raw offset `open`.
+    ///
+    /// Finds the matching close marker over the raw source ([`Self::find_emphasis_close`]); if one
+    /// exists in this paragraph/brace scope, collects `[open+1, close)` as an (inline) markup body
+    /// (nesting `@`-forms and nested emphasis) → `h(tag, {}, [...])` and resumes after `close`. With
+    /// no matching close the marker is **literal** (Typst behavior) and we resume right after it.
+    fn parse_emphasis(&mut self, marker: u8, open: u32, items: &mut Vec<BodyItem<'a>>) {
+        if let Some(close) = self.find_emphasis_close(open, marker) {
+            let mut body: Vec<BodyItem<'a>> = Vec::new();
+            self.collect_markup_range(open + 1, close, 0, &mut body);
+            let children = self.apply_whitespace(body);
+            let tag = if marker == b'*' { "strong" } else { "em" };
+            let span = Span::new(open, close + 1);
+            let tag_expr = self.ast.expression_string_literal(span, tag, None);
+            let element = self.build_h(span, tag_expr, self.ast.vec(), children);
+            items.push(BodyItem::Child(element));
+            self.nota_seek_markup(close + 1);
+        } else {
+            self.push_literal_byte(items, marker);
+            self.nota_seek_markup(open + 1);
+        }
+    }
+
+    /// Find the matching close marker for an emphasis opened at `open` (raw offset of the marker).
+    ///
+    /// Scans the raw source for the next `marker` byte that is a valid marker (not intra-word). The
+    /// search is bounded by the emphasis's *scope*: it stops (returning `None`) at a blank line
+    /// (paragraph break — emphasis is intra-paragraph, à la Typst), at the `}` that closes the
+    /// enclosing body (brace depth dropping below the open level), or at EOF. Nested balanced `{…}`
+    /// is skipped. `@`-forms are skipped wholesale so a `*` *inside* an embedded expression cannot
+    /// close the span (the embedded JS owns its own `*`).
+    fn find_emphasis_close(&self, open: u32, marker: u8) -> Option<u32> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = open as usize + 1;
+        let mut depth: i32 = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            match b {
+                b'\\' => {
+                    // Escape: skip the escaped char (so `\*` cannot close).
+                    i += 2;
+                }
+                b'\n' => {
+                    // A blank line (this `\n` then optional-ws then another `\n`) ends the scope.
+                    let mut j = i + 1;
+                    while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
+                        j += 1;
+                    }
+                    if j >= bytes.len() || bytes[j] == b'\n' {
+                        return None;
+                    }
+                    i += 1;
+                }
+                b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b'}' => {
+                    if depth == 0 {
+                        return None; // the enclosing body closes before a matching marker
+                    }
+                    depth -= 1;
+                    i += 1;
+                }
+                _ if b == marker && depth == 0 => {
+                    // A candidate close: valid iff it is a marker (not intra-word).
+                    if self.is_emphasis_marker(i as u32) {
+                        return Some(i as u32);
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        None
+    }
+
+    /// Push a single literal byte (an ASCII sigil that turned out to be non-significant) as text.
+    fn push_literal_byte(&self, items: &mut Vec<BodyItem<'a>>, b: u8) {
+        let s: &'a str = match b {
+            b'*' => "*",
+            b'_' => "_",
+            b'#' => "#",
+            b'-' => "-",
+            b'+' => "+",
+            _ => {
+                // Fallback: allocate the single char.
+                self.ast.allocator.alloc_str(std::str::from_utf8(&[b]).unwrap_or(""))
+            }
+        };
+        items.push(BodyItem::Text(s));
+    }
+
+    /// The `char` ending at byte `offset` (i.e. the char immediately *before* `offset`), or `None`
+    /// at the start of source. Decodes a full UTF-8 scalar so non-ASCII word chars classify right.
+    fn char_before(&self, offset: u32) -> Option<char> {
+        if offset == 0 {
+            return None;
+        }
+        self.source_text.get(..offset as usize).and_then(|s| s.chars().next_back())
+    }
+
+    /// The `char` starting at byte `offset`, or `None` at/after end of source.
+    fn char_at(&self, offset: u32) -> Option<char> {
+        self.source_text.get(offset as usize..).and_then(|s| s.chars().next())
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Line constructs: headings (`#`) and lists (`-`/`+`/`N.`). Detected at a line start (the
+    // `collect_markup` `\n` arm + the document/body start). Each emits a flat element; the runtime
+    // `struct` coalesces list runs and owns section/paragraph grouping.
+    // ------------------------------------------------------------------------------------------
+
+    /// If the line at `line_start` opens with a heading marker (1–6 `#` then a space), parse it →
+    /// `h("h{n}", {}, [rest-of-line])` and return `(element, end)` where `end` is the offset of the
+    /// line's terminating `\n` (or EOF). Else `None` (the line is ordinary markup).
+    fn try_heading(&mut self, line_start: u32) -> Option<(Expression<'a>, u32)> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = line_start as usize;
+        // Count the `#` run at the very start of the line (no leading indent for headings).
+        let run_start = i;
+        while i < bytes.len() && bytes[i] == b'#' {
+            i += 1;
+        }
+        let level = i - run_start;
+        // 1–6 `#` followed by a single space.
+        if !(1..=6).contains(&level) || i >= bytes.len() || bytes[i] != b' ' {
+            return None;
+        }
+        let body_start = i as u32 + 1; // skip the one separating space
+        let line_end = self.line_content_end(line_start); // offset of the line's `\n` (or EOF)
+
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+        self.collect_markup_range(body_start, line_end, 0, &mut items);
+        let children = self.apply_whitespace(items);
+
+        let span = Span::new(line_start, line_end);
+        let tag_name: &'a str = self.ast.allocator.alloc_str(&format!("h{level}"));
+        let tag = self.ast.expression_string_literal(span, tag_name, None);
+        let element = self.build_h(span, tag, self.ast.vec(), children);
+        Some((element, line_end))
+    }
+
+    /// The offset of the terminating `\n` of the line containing `line_start` (or EOF if none).
+    fn line_content_end(&self, line_start: u32) -> u32 {
+        let bytes = self.source_text.as_bytes();
+        let mut i = line_start as usize;
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        i as u32
+    }
+
+    /// Classify a list marker at the first non-whitespace of the line at `line_start`. Returns the
+    /// marker kind, the marker's *content column* (offset just past the marker + its one space —
+    /// where the item body begins), and the indent (offset of the first non-ws). `None` if the line
+    /// does not open with a list marker.
+    fn list_marker_at(&self, line_start: u32) -> Option<ListMarker> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = line_start as usize;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        let indent = i;
+        if i >= bytes.len() {
+            return None;
+        }
+        match bytes[i] {
+            // `-`+space (bullet) / `+`+space (number).
+            b'-' | b'+' if i + 1 < bytes.len() && bytes[i + 1] == b' ' => {
+                let ordered = bytes[i] == b'+';
+                Some(ListMarker { ordered, indent: indent as u32, body_col: i as u32 + 2 })
+            }
+            // `N.`+space — an explicit ordered marker (digits then `.` then space).
+            b'0'..=b'9' => {
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j < bytes.len()
+                    && bytes[j] == b'.'
+                    && j + 1 < bytes.len()
+                    && bytes[j + 1] == b' '
+                {
+                    Some(ListMarker {
+                        ordered: true,
+                        indent: indent as u32,
+                        body_col: j as u32 + 2,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse a run of list items starting at `line_start` (the first line is known to be a list
+    /// marker). Consecutive marker lines at the *same or deeper* indent form the run; a deeper
+    /// marker nests inside the preceding item (its `struct`-coalesced inner list). Each item →
+    /// `h("ulli"|"olli", {}, [body])`. Returns `(elements, resume)` where `resume` is the offset
+    /// where the run ended (a line that is neither a continuation nor a same-level marker).
+    fn parse_list(&mut self, line_start: u32) -> (Vec<Expression<'a>>, u32) {
+        let base = self.list_marker_at(line_start).expect("parse_list: not a marker line");
+        let base_indent = base.indent;
+        let mut elements: Vec<Expression<'a>> = Vec::new();
+        let mut at = line_start;
+
+        loop {
+            let Some(marker) = self.list_marker_at(at) else { break };
+            if marker.indent < base_indent {
+                break; // a shallower marker belongs to an enclosing list
+            }
+            if marker.indent > base_indent {
+                // Deeper marker with no preceding same-level item to attach to (rare leading-deeper
+                // case): treat as its own run at this indent.
+            }
+            // The item body extent: rest of the marker line + subsequent lines indented strictly
+            // past the marker's *indent* (block-sugar rule). Deeper list markers within that extent
+            // become nested `ulli`/`olli` children via the recursive body collection.
+            let line_end = self.line_content_end(at);
+            let body_start = marker.body_col.min(line_end);
+            let item_end = self.list_item_extent(line_end, marker.indent);
+
+            let children = self.collect_list_item_body(body_start, item_end, marker.indent);
+            let tag = if marker.ordered { "olli" } else { "ulli" };
+            let span = Span::new(marker.indent, item_end);
+            let tag_expr = self.ast.expression_string_literal(span, tag, None);
+            elements.push(self.build_h(span, tag_expr, self.ast.vec(), children));
+
+            at = item_end;
+            // Skip a single trailing newline already consumed by the extent; continue if the next
+            // line is another marker at >= base_indent.
+            if self.list_marker_at(at).is_none() {
+                break;
+            }
+        }
+        (elements, at)
+    }
+
+    /// The end offset of a list item's body: subsequent lines indented strictly past `marker_indent`
+    /// (or blank) are part of the item; the item ends at the first line at/below `marker_indent` that
+    /// is non-blank. Returns the offset of that line's start (the resume point).
+    fn list_item_extent(&self, first_line_end: u32, marker_indent: u32) -> u32 {
+        let bytes = self.source_text.as_bytes();
+        let mut end = self.next_line_start(first_line_end);
+        loop {
+            if end as usize >= bytes.len() {
+                break;
+            }
+            let line_start = end as usize;
+            let mut i = line_start;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            let is_blank = i >= bytes.len() || bytes[i] == b'\n';
+            let indent = (i - line_start) as u32;
+            // A same/shallower-indented *marker* line ends this item (it is a sibling/uncle item).
+            if !is_blank && self.list_marker_at(end).is_some() && indent <= marker_indent {
+                break;
+            }
+            // Non-marker content indented strictly past the marker continues the item; a deeper
+            // marker (nested list) also continues it.
+            if is_blank || indent > marker_indent {
+                end = self.next_line_start(end);
+            } else {
+                break;
+            }
+        }
+        end
+    }
+
+    /// Collect a list item's body over `[start, end)`: the rest-of-marker-line content plus indented
+    /// continuation lines, with nested list markers recursively lowered into `ulli`/`olli` children.
+    fn collect_list_item_body(
+        &mut self,
+        start: u32,
+        end: u32,
+        marker_indent: u32,
+    ) -> ArenaVec<'a, Expression<'a>> {
+        let mut items: Vec<BodyItem<'a>> = Vec::new();
+        self.collect_block_body_range(start, end, marker_indent, &mut items);
+        self.apply_whitespace(items)
+    }
+
+    /// Collect markup over `[start, end)` like [`Self::collect_markup_range`], but **also** detecting
+    /// line-start headings/nested lists (so a list item's continuation can contain a nested list or a
+    /// heading). Used for list-item bodies (and reusable for other block ranges).
+    fn collect_block_body_range(
+        &mut self,
+        start: u32,
+        end: u32,
+        _base_indent: u32,
+        items: &mut Vec<BodyItem<'a>>,
+    ) {
+        self.nota_seek_markup(start);
+        let mut depth = 0u32;
+        loop {
+            if self.has_fatal_error() || self.cur_token().start() >= end {
+                break;
+            }
+            match self.cur_kind() {
+                Kind::MarkupText => {
+                    let token = self.cur_token();
+                    let text_end = token.end().min(end);
+                    let text = &self.source_text[token.start() as usize..text_end as usize];
+                    if !text.is_empty() {
+                        items.push(BodyItem::Text(text));
+                    }
+                    let term_off = token.end();
+                    if term_off >= end {
+                        break;
+                    }
+                    match self.byte_at(term_off) {
+                        Some(b'\n') => {
+                            items.push(BodyItem::Text("\n"));
+                            let next_line = term_off + 1;
+                            // Line-start constructs inside the item body (clipped to `end`).
+                            if next_line < end && self.list_marker_at(next_line).is_some() {
+                                let (els, resume) = self.parse_list(next_line);
+                                for e in els {
+                                    items.push(BodyItem::Child(e));
+                                }
+                                if resume >= end {
+                                    break;
+                                }
+                                self.nota_seek_markup(resume);
+                                continue;
+                            }
+                            if next_line < end
+                                && let Some((h, h_end)) = self.try_heading(next_line)
+                            {
+                                items.push(BodyItem::Child(h));
+                                self.nota_seek_markup(h_end);
+                                continue;
+                            }
+                            self.nota_seek_markup(next_line);
+                        }
+                        Some(b'{') => {
+                            depth += 1;
+                            items.push(BodyItem::Text("{"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') if depth > 0 => {
+                            depth -= 1;
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'}') => {
+                            items.push(BodyItem::Text("}"));
+                            self.nota_seek_markup(term_off + 1);
+                        }
+                        Some(b'@') => {
+                            self.bump_any();
+                            let child = self.parse_nota_form(true);
+                            items.push(BodyItem::Child(child));
+                        }
+                        Some(m @ (b'*' | b'_')) if term_off < end => {
+                            if self.is_emphasis_marker(term_off) {
+                                self.parse_emphasis(m, term_off, items);
+                            } else {
+                                self.push_literal_byte(items, m);
+                                self.nota_seek_markup(term_off + 1);
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                Kind::At => {
+                    let child = self.parse_nota_form(true);
+                    items.push(BodyItem::Child(child));
+                }
+                Kind::Eof => break,
+                _ => self.advance_for_markup_text(),
+            }
+        }
     }
 }
 
@@ -721,6 +1538,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // The file may *open* with statement lines (before any markup). Handle them first.
         if self.is_statement_line(0) {
             self.consume_statements_at(0, module_items, doc_prelude, is_async);
+        } else if self.list_marker_at(0).is_some() {
+            // The file opens directly with a list (no preceding `\n` to trigger the `\n`-arm hook).
+            let (els, resume) = self.parse_list(0);
+            for e in els {
+                items.push(BodyItem::Child(e));
+            }
+            self.nota_seek_markup(resume);
+        } else if let Some((heading, h_end)) = self.try_heading(0) {
+            // The file opens directly with a heading.
+            items.push(BodyItem::Child(heading));
+            self.nota_seek_markup(h_end);
         } else {
             // Re-enter markup from the start (the priming `bump_any` lexed a JS token, not markup).
             self.nota_seek_markup(0);
@@ -1336,6 +2164,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             let child = self.parse_nota_form(true);
                             items.push(BodyItem::Child(child));
                         }
+                        Some(m @ (b'*' | b'_')) if term_off < end => {
+                            // Nested emphasis inside an emphasis / colon-sugar body.
+                            if self.is_emphasis_marker(term_off) {
+                                self.parse_emphasis(m, term_off, items);
+                            } else {
+                                self.push_literal_byte(items, m);
+                                self.nota_seek_markup(term_off + 1);
+                            }
+                        }
                         _ => break,
                     }
                 }
@@ -1459,7 +2296,7 @@ struct NotaHead<'a> {
     colon_escaped: bool,
 }
 
-impl<'a> NotaHead<'a> {
+impl NotaHead<'_> {
     fn kind_was_named(&self) -> bool {
         matches!(self.kind, HeadKind::Named { .. })
     }
@@ -1679,9 +2516,9 @@ mod scribble {
     ///   any *leftover* indent (past the common amount) as its own text child, then the content. For
     ///   the `{`-line (not an indent line), leading whitespace is content (between `{` and text), kept.
     /// * Trim the line-final text run's trailing whitespace unless `is_last` (text&`}` keeps it).
-    fn emit_line<'a>(
+    fn emit_line(
         out: &mut Vec<ChildSpec>,
-        line: &[Piece<'a>],
+        line: &[Piece<'_>],
         strip: usize,
         is_indent_line: bool,
         is_last: bool,
@@ -1750,7 +2587,7 @@ mod scribble {
         for p in line {
             match p {
                 Piece::Text(s) => {
-                    let lead = s.bytes().take_while(|b| b.is_ascii_whitespace()).count();
+                    let lead = s.bytes().take_while(u8::is_ascii_whitespace).count();
                     n += lead;
                     if lead < s.len() {
                         return n;

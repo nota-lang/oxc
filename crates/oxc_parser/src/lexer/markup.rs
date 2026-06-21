@@ -21,12 +21,18 @@ use super::{
 use crate::config::LexerConfig as Config;
 
 /// Bytes that terminate a Nota markup-text run: `}` (body close), `@` (sigil), `{` (nested body),
-/// and `\n` (line boundary — so the parser can detect line-start `%`/`%%%` statements and apply the
-/// Scribble per-line whitespace algorithm). All are left *unconsumed* for the parser to handle.
-static MARKUP_TEXT_END_TABLE: SafeByteMatchTable =
-    safe_byte_match_table!(|b| b == b'}' || b == b'@' || b == b'{' || b == b'\n');
+/// `\n` (line boundary — so the parser can detect line-start `%`/`%%%` statements, headings, and
+/// lists, and apply the Scribble per-line whitespace algorithm), and `*`/`_` (the emphasis sigils —
+/// the parser applies the Typst word-boundary rule to decide marker-vs-literal). All are left
+/// *unconsumed* for the parser to handle.
+static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b == b'}'
+    || b == b'@'
+    || b == b'{'
+    || b == b'\n'
+    || b == b'*'
+    || b == b'_');
 
-impl<'a, C: Config> Lexer<'a, C> {
+impl<C: Config> Lexer<'_, C> {
     /// Scan a run of Nota markup body text, starting at the current source position.
     ///
     /// Advances the source over a maximal run of literal text and returns a [`Token`] spanning it

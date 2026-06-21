@@ -1352,3 +1352,23 @@ pub fn jsx_type_parameter_in_mts_cts(span: Span) -> OxcDiagnostic {
     )
     .with_label(span)
 }
+
+// ===============================================================================================
+// Nota reader (Part 1) diagnostics. The reader is a pure `String → (JS, sourcemap, diagnostics)`
+// function (impl.md §1.6 layer 3): each error fixture asserts `(span, message)`.
+// ===============================================================================================
+
+/// `@for (bind of iter)` requires the `of` keyword (the comprehension form). A C-style or
+/// side-effecting `for` has no `@`-form — write it in `%` (notation.md §Loops).
+#[cold]
+pub fn nota_for_expects_of(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("`@for` expects `of` (write a C-style or side-effecting loop in `%`)")
+        .with_label(span.label("`of` expected here"))
+}
+
+/// `@if`/`@for`/`else` must be followed by a `{ … }` markup body.
+#[cold]
+pub fn nota_control_expects_body(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("expected a `{ … }` body after `@if`/`@for`/`else`")
+        .with_label(span.label("`{` expected here"))
+}
