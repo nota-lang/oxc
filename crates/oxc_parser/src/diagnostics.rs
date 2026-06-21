@@ -1354,12 +1354,12 @@ pub fn jsx_type_parameter_in_mts_cts(span: Span) -> OxcDiagnostic {
 }
 
 // ===============================================================================================
-// Nota reader (Part 1) diagnostics. The reader is a pure `String → (JS, sourcemap, diagnostics)`
-// function (impl.md §1.6 layer 3): each error fixture asserts `(span, message)`.
+// Nota reader diagnostics. The reader is a pure `String → (JS, sourcemap, diagnostics)` function;
+// each error carries a `(span, message)`.
 // ===============================================================================================
 
 /// `@for (bind of iter)` requires the `of` keyword (the comprehension form). A C-style or
-/// side-effecting `for` has no `@`-form — write it in `%` (notation.md §Loops).
+/// side-effecting `for` has no `@`-form — write it in `%`.
 #[cold]
 pub fn nota_for_expects_of(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("`@for` expects `of` (write a C-style or side-effecting loop in `%`)")
@@ -1373,7 +1373,7 @@ pub fn nota_control_expects_body(span: Span) -> OxcDiagnostic {
         .with_label(span.label("`{` expected here"))
 }
 
-/// An unterminated verbatim body `|{ … }|` (no closing `}|` before end of file) (Phase F).
+/// An unterminated verbatim body `|{ … }|` (no closing `}|` before end of file).
 #[cold]
 pub fn nota_unterminated_verbatim(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("unterminated verbatim body (expected a closing `}|`)")

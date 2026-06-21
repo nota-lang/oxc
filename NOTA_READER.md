@@ -21,7 +21,7 @@ implementation memory** — read it before extending the reader. Updated per pha
   injects `_i` as the wrapping-Fragment key). All are expressions; they nest in markup + code.
 - **E** (markup sugar): emphasis `*…*`→`h("strong",…)` / `_…_`→`h("em",…)` (Typst word-boundary:
   marker iff NOT intra-word; `\*`/`\_` suppress; unbalanced → literal); headings `#{1,6}·`→
-  `h("h{n}",…)`; lists `-·`/`+·`/`N.·`→`h("ulli"|"olli",…)` per line (runtime `struct` coalesces
+  `h("h{n}",…)`; lists `-·`/`+·`/`N.·`→`h("nota-ul-li"|"nota-ol-li",…)` per line (runtime `struct` coalesces
   runs), with block-sugar continuation + deeper-marker nesting. The reader emits **flat per-line/
   per-span sentinels**; paragraph/list/section grouping is the runtime's job (contract §7).
 - **F** (verbatim / code / math + general escapes): the final reader phase.
@@ -45,14 +45,14 @@ implementation memory** — read it before extending the reader. Updated per pha
 
 **THE full canonical golden (contract §2) now lowers byte-exact to stage-3** (capstone
 `canonical_golden_matches_stage3`), incl. the keyed `Fragment({ key: _i }, …)`, the
-`["a","b"].map((x, _i) => …)`, and the `-`→`h("ulli",…)` sentinel. Emit (modulo formatting):
+`["a","b"].map((x, _i) => …)`, and the `-`→`h("nota-ul-li",…)` sentinel. Emit (modulo formatting):
 ```js
 export let Colorized = inlineComponent((children) => {
   let [color, setColor] = useState("red");
   return decode(h("span", { onClick: () => setColor("green"), style: { color } }, [children]));
 }, "Colorized");
 export default function Doc() {
-  return decode(Fragment(["a", "b"].map((x, _i) => Fragment({ key: _i }, h("ulli", {}, [h(Colorized, {}, [x])])))));
+  return decode(Fragment(["a", "b"].map((x, _i) => Fragment({ key: _i }, h("nota-ul-li", {}, [h(Colorized, {}, [x])])))));
 }
 ```
 
@@ -129,9 +129,9 @@ end table. The shallow fork stays ≈ the same three sites.
   (bullet/number/explicit-number) returning indent + body-column; `parse_list` walks a run of
   same/deeper markers, each item's body extent = rest-of-line + lines indented past the marker
   (`list_item_extent`, the block-sugar rule), collected by `collect_block_body_range` so a **deeper
-  marker nests** as `ulli`/`olli` children inside the parent item (the runtime `struct` coalesces the
+  marker nests** as `nota-ul-li`/`nota-ol-li` children inside the parent item (the runtime `struct` coalesces the
   inner run into the nested `<ul>`/`<ol>`). The reader does NOT group sibling list runs — it emits one
-  `ulli`/`olli` per line and the runtime coalesces (contract §7). `\#`/`\-`/`\+` at line start are
+  `nota-ul-li`/`nota-ol-li` per line and the runtime coalesces (contract §7). `\#`/`\-`/`\+` at line start are
   already safe (the `\` is the first char, so the marker scanners don't fire).
 - **Diagnostics** (`diagnostics.rs`, new Nota section): `nota_for_expects_of`,
   `nota_control_expects_body`. Contextual-`else` misuse surfaces as no-continuation (the literal

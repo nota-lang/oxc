@@ -1,25 +1,31 @@
 //! Nota `@`-markup → oxc JS AST (the *reader*).
 //!
 //! Nota is a document language whose `@`-markup lowers to hyperscript `h(...)` / `Fragment(...)` /
-//! `decode(...)` call expressions (the cross-team contract, `design/contract.md` §1/§3). Per
-//! locked decision **D1**, lowering happens *at parse time*: this module builds the oxc
+//! `decode(...)` call expressions. Lowering happens *at parse time*: this module builds the oxc
 //! [`Expression`] AST (`CallExpression`) directly while parsing, with no intermediate Nota
-//! AST/CST. Per **D2** it introduces *zero* new oxc AST nodes — an `@`-form is an ordinary
-//! `CallExpression`. Per **D3** all markup state lives in the parser (the `nota_markup` flag).
+//! AST/CST. It introduces *zero* new oxc AST nodes — an `@`-form is an ordinary `CallExpression` —
+//! and all markup state lives in the parser (the `nota_markup` flag).
 //!
 //! Layering (this file):
-//! * **Phase B — element core**: host/component/dynamic tags, `[props]` (string→attr, expr→`{…}`,
+//! * **Element core**: host/component/dynamic tags, `[props]` (string→attr, expr→`{…}`,
 //!   shorthand, spread, markup-valued), bodies (recursive nesting), `@{…}` fragments,
 //!   `@name`/`@(expr)` interpolation. Embedded JS (prop values, `@(expr)` heads) delegates to
 //!   oxc's expression parser via the re-lex seam.
-//! * **Phase C — document mode + whitespace**: a whole file → `export default function Doc()`; the
-//!   Scribble whitespace algorithm (notation.md §Whitespace, contract §7); colon/block sugar;
-//!   `%`/`%%%` statements + module hoisting + F1 (`inlineComponent`/`blockComponent` hoist+export+
-//!   name) + `await`→`async`. Wraps returned markup in `decode(...)` (contract §2 stage-3).
+//! * **Document mode + whitespace**: a whole file → `export default function Doc()`; the
+//!   Scribble whitespace algorithm; colon/block sugar; `%`/`%%%` statements + module hoisting +
+//!   component bindings (`inlineComponent`/`blockComponent` hoist+export+name) + `await`→`async`.
+//!   Wraps returned markup in `decode(...)`.
 //!
-//! The re-lex seam (`advance_for_markup_text` / `expect_markup_text`) mirrors JSX's
-//! `advance_for_jsx_child`: after a markup delimiter we resume lexing in *markup-text* mode so
-//! significant whitespace is not skipped by the JS lexer.
+//! The re-lex seam (`advance_for_markup_text`) mirrors JSX's `advance_for_jsx_child`: after a markup
+//! delimiter we resume lexing in *markup-text* mode so significant whitespace is not skipped by the
+//! JS lexer.
+
+// Source offsets and substring lengths are cast to `u32` throughout: oxc's `Span` is `u32`-based
+// (sources are bounded to 4 GiB), so these `as u32` casts cannot truncate in practice.
+#![expect(
+    clippy::cast_possible_truncation,
+    reason = "source offsets/lengths fit in u32 (oxc's Span model)"
+)]
 
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
@@ -29,9 +35,11 @@ use oxc_span::{GetSpan, SourceType, Span};
 use crate::{
     ParserConfig as Config, ParserImpl, diagnostics,
     error_handler::FatalError,
-    js::nota_mapping::{NotaMappingKind, NotaMappingMark},
     lexer::Kind,
+    nota::mapping::{NotaMappingKind, NotaMappingMark},
 };
+
+pub mod mapping;
 
 /// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
 const H: &str = "h";
@@ -39,16 +47,16 @@ const FRAGMENT: &str = "Fragment";
 const DECODE: &str = "decode";
 /// The fresh component-cased binding for a dynamic-tag IIFE (`@(getTag()){…}`).
 const DYNAMIC_TAG_BINDING: &str = "_Tag";
-/// The fresh map-index parameter the reader injects as the `@for` body's `Fragment` key (E5). Named
+/// The fresh map-index parameter the reader injects as the `@for` body's `Fragment` key. Named
 /// to avoid colliding with author bindings (an author `_i` would shadow it, but the key still binds
-/// to the innermost — acceptable; the contract pins this exact name).
+/// to the innermost — acceptable; this exact name is fixed by the emit format).
 const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
 const DOC: &str = "Doc";
-/// The F1 component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
+/// The component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
 const INLINE_COMPONENT: &str = "inlineComponent";
 const BLOCK_COMPONENT: &str = "blockComponent";
-/// Phase-F ambient-prelude tags for code/math spans (referenced as identifiers — the compiler shim
+/// Ambient-prelude tags for code/math spans (referenced as identifiers — the caller
 /// prepends their bindings; the reader emits no import, exactly like a component tag).
 const CODE_INLINE: &str = "CodeInline";
 const CODE_BLOCK: &str = "CodeBlock";
@@ -79,12 +87,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // Entry points
     // ===========================================================================================
 
-    /// Parse a whole source string as a single Nota *expression* (expression-mode test hook).
+    /// Parse a whole source string as a single Nota *expression*.
     ///
     /// Mirrors [`ParserImpl::parse_expression`]: enables Nota markup mode (so `@` routes to
     /// markup, not decorators), primes the token stream, parses one `@`-form, and returns the
-    /// lowered [`Expression`] or the collected diagnostics. This is the bulk-fixture entry
-    /// (contract §3 expression-mode cases); document mode is [`Self::parse_nota_document`].
+    /// lowered [`Expression`] or the collected diagnostics. Document mode is
+    /// [`Self::parse_nota_document`].
     ///
     /// # Errors
     /// If the source is not a well-formed Nota expression.
@@ -95,17 +103,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.finish_nota(expr)
     }
 
-    /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`] (contract §2 stage-3).
+    /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
     ///
-    /// The file is markup at the top level (impl.md §1.1). We set `nota_markup`, parse the file as
-    /// a sequence of markup siblings (the body of an implicit fragment), and emit a module:
+    /// The file is markup at the top level. We set `nota_markup`, parse the file as a sequence of
+    /// markup siblings (the body of an implicit fragment), and emit a module:
     /// ```js
-    /// import { ... } from "@nota-lang/runtime";   // (imports added by the compiler shim, not here)
-    /// <hoisted import/export + F1 component bindings>
+    /// import { ... } from "@nota-lang/runtime";   // (imports added by the caller, not here)
+    /// <hoisted import/export + component bindings>
     /// export default function Doc() { <top-level % prelude>; return decode(Fragment(...siblings)); }
     /// ```
-    /// Top-level `%`/`%%%` statements prepend into `Doc` (no IIFE — contract R5); `import`/`export`
-    /// and F1 component bindings hoist to module scope (contract R4/§4). `await` makes `Doc` async.
+    /// Top-level `%`/`%%%` statements prepend into `Doc` (no IIFE); `import`/`export` and component
+    /// bindings hoist to module scope. `await` makes `Doc` async.
     ///
     /// # Errors
     /// If the file is not well-formed Nota.
@@ -127,12 +135,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Parse a `.nota` file in document mode AND collect Volar `CodeMapping` marks (H1).
+    /// Parse a `.nota` file in document mode AND collect Volar `CodeMapping` marks.
     ///
     /// Same lowering as [`Self::parse_nota_document`] with `nota_collect_mappings` on, so the
     /// embedded-JS splice sites and component tags push [`NotaMappingMark`]s into `nota_mappings`.
     /// Returns the lowered `Program` plus the (source-ordered) marks; the generated offsets are
-    /// paired downstream (codegen's offset log). See `js/nota_mapping.rs`.
+    /// paired downstream against codegen's offset log.
     pub(crate) fn parse_nota_document_collecting_mappings(
         mut self,
     ) -> Result<(Program<'a>, Vec<NotaMappingMark>), Vec<OxcDiagnostic>> {
@@ -155,7 +163,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Record a Nota source→generated mapping mark (H1), iff mapping collection is enabled.
+    /// Record a Nota source→generated mapping mark, iff mapping collection is enabled.
     ///
     /// A no-op (and zero-cost) on the build / expression entries (`nota_collect_mappings == false`).
     /// Empty spans are dropped — they carry no source and would alias generated boilerplate.
@@ -180,7 +188,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ===========================================================================================
-    // Element / interpolation core (Phase B)
+    // Element / interpolation core
     // ===========================================================================================
 
     /// Parse one `@`-form: an element (`@tag…`/`@(expr)…`/`@{…}`) or an interpolation
@@ -191,97 +199,72 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// (top-level, prop values, `@(expr)` heads), where normal JS lexing resumes.
     pub(crate) fn parse_nota_form(&mut self, in_body: bool) -> Expression<'a> {
         let span_start = self.start_span();
-        debug_assert!(self.at(Kind::At), "parse_nota_form entered not at `@`");
-        self.bump_any(); // consume `@`; current token is now the head (Ident / `(` / `{`)
+        assert!(self.eat(Kind::At), "parse_nota_form entered not at `@`"); // consume `@`; current token is now the head (Ident / `(` / `{`)
 
-        // `@{…}` — a fragment (no head).
-        if self.at(Kind::LCurly) {
-            return self.parse_fragment(span_start, in_body);
-        }
-
-        // `@if (…)` / `@for (…)` — control flow (Phase D). Intercepted *before* the bare-identifier
-        // head path because `for`/`if` lex as keyword tokens that `is_identifier_name` (the head
-        // parser) would otherwise accept as interpolation identifiers (notation.md: `for`/`if` keep
-        // their `@`). The trigger is the keyword *followed by* `(` (whitespace after `@for`/`@if` is
-        // insignificant — peeked over the raw source). A bare `@if`/`@for` (no `(`) falls through.
-        if self.at(Kind::If) && self.control_head_has_paren() {
-            return self.parse_nota_if(span_start, in_body);
-        }
-        if self.at(Kind::For) && self.control_head_has_paren() {
-            return self.parse_nota_for(span_start, in_body);
-        }
-
-        // Determine the head and the byte immediately after it (the element/interpolation switch).
-        let head = self.parse_nota_head();
-        let head = match head {
-            Some(head) => head,
-            None => return self.unexpected(),
-        };
-
-        match self.byte_at(head.end) {
-            Some(b'{' | b'[') => self.parse_element(span_start, head, in_body),
-            Some(b':') if !head.colon_escaped => {
-                self.parse_colon_element(span_start, head, in_body)
+        match self.cur_kind() {
+            Kind::If => self.parse_nota_if(span_start, in_body),
+            Kind::For => self.parse_nota_for(span_start, in_body),
+            Kind::LCurly => self.parse_fragment(span_start, in_body),
+            _ => {
+                let Some(head) = self.parse_nota_head() else { return self.unexpected() };
+                // Cross the head→body boundary: classify the (whitespace-sensitive) trigger glued to
+                // the head and consume the head's boundary token in the mode that trigger implies —
+                // both inside `commit_head`. The parser then dispatches on the *typed* trigger, never
+                // on raw bytes (the one byte peek lives inside `peek_markup_trigger`).
+                match self.commit_head(&head, in_body) {
+                    MarkupTrigger::Brace | MarkupTrigger::Bracket => {
+                        self.parse_element(span_start, head, in_body)
+                    }
+                    MarkupTrigger::Colon => self.parse_colon_element(span_start, head, in_body),
+                    // `@code|{ … }|` — a *verbatim* body: `|{` opens a raw body that ends at `}|`
+                    // (sigils off, braces literal; the armed escape `|@` re-enters Nota).
+                    MarkupTrigger::Verbatim => {
+                        self.parse_verbatim_element(span_start, head, in_body)
+                    }
+                    // No trigger ⇒ interpolation: the head expression alone.
+                    MarkupTrigger::None => self.finish_interpolation(head),
+                }
             }
-            // `@code|{ … }|` — a *verbatim* body (Phase F): `|{` after a head opens a raw body that
-            // ends at `}|` (sigils off, braces literal; the armed escape `|@` re-enters Nota).
-            Some(b'|') if self.byte_at(head.end + 1) == Some(b'{') => {
-                self.parse_verbatim_element(span_start, head, in_body)
-            }
-            // No element trigger ⇒ interpolation: the head expression alone.
-            _ => self.finish_interpolation(head, in_body),
         }
     }
 
     /// The parsed head of an `@`-form: the tag/interpolation expression plus classification needed
     /// to decide element-vs-interpolation and host-vs-component-vs-dynamic.
     fn parse_nota_head(&mut self) -> Option<NotaHead<'a>> {
-        if self.at(Kind::LParen) {
-            // `@(expr)` — dynamic head. Delegate the inside to oxc's expression parser.
-            self.bump_any(); // consume `(`
+        if self.eat(Kind::LParen) {
             let expr = self.parse_expr();
-            // `self.token` is now `)` (parse_expr stops there). Like the bare-ident head, we do NOT
-            // consume it here: `commit_head` (element) or `finish_interpolation` consumes the `)`,
-            // keeping the lexer positioned for the element/interpolation switch and markup resume.
+            // `self.token` is now `)` (parse_expr stops there). Validate it, but do NOT consume it:
+            // like the bare-ident head, the boundary token is left as one-token lookahead so
+            // `commit_head` can classify the trigger glued to it (`peek_markup_trigger`) and then
+            // consume it in the right lexer mode. `end` is the byte just past `)` — the switch point.
             self.expect_without_advance(Kind::RParen);
             let close_end = self.cur_token().end();
-            Some(NotaHead { kind: HeadKind::Dynamic(expr), end: close_end, colon_escaped: false })
+            Some(NotaHead { kind: HeadKind::Dynamic(expr), end: close_end })
         } else if self.cur_kind().is_identifier_name() {
             // Bare identifier head: host (lowercase) / component (Capitalized) / interpolation.
             // `is_identifier_name` also admits keyword-spelled tags (`@section`, `@title`, …).
             let token = self.cur_token();
             let name = self.token_source(&token);
             let span = token.span();
-            // Do NOT bump: keeps the lexer positioned right after the identifier so the
-            // element/interpolation switch (`byte_at`) and any markup-text resume are exact.
-            Some(NotaHead {
-                kind: HeadKind::Named { name, span },
-                end: span.end,
-                colon_escaped: false,
-            })
+            // Do NOT bump: the identifier is the head's boundary token, left as one-token lookahead
+            // (see the dynamic-head branch). `commit_head` consumes it after classifying the trigger.
+            Some(NotaHead { kind: HeadKind::Named { name, span }, end: span.end })
         } else {
             None
         }
     }
 
-    /// Finish an `@`-form that turned out to be an *interpolation* (no `{`/`[`/`:` trigger).
-    /// `@name` → `name`; `@(expr)` → `expr`. Resumes markup text if `in_body`.
-    fn finish_interpolation(&mut self, head: NotaHead<'a>, in_body: bool) -> Expression<'a> {
-        let was_named = head.kind_was_named();
+    /// Finish an `@`-form that turned out to be an *interpolation* (no `{`/`[`/`:`/`|{` trigger):
+    /// `@name` → `name`; `@(expr)` → `expr`. The head's boundary token (the bare ident or the `)`)
+    /// and the markup-text/JS resume were already handled by [`Self::commit_head`]; this only builds
+    /// the spliced expression from the (already-captured) head.
+    fn finish_interpolation(&mut self, head: NotaHead<'a>) -> Expression<'a> {
         let expr = match head.kind {
             HeadKind::Named { name, span } => self.ast.expression_identifier(span, name),
             HeadKind::Dynamic(expr) => expr,
         };
-        // H1: `@name` / `@(expr)` interpolation is embedded JS spliced verbatim (full caps).
+        // `@name` / `@(expr)` interpolation is embedded JS spliced verbatim (full capabilities).
         self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
-        match was_named {
-            // Bare-ident interpolation: identifier not yet consumed; resume text from its end.
-            true if in_body => self.advance_for_markup_text(),
-            true => self.bump_any(),
-            // `@(expr)`: `)` is the current token. Consume it (re-lexing text if in a body).
-            false if in_body => self.expect_markup_text(Kind::RParen),
-            false => self.bump_any(),
-        }
         expr
     }
 
@@ -292,8 +275,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         head: NotaHead<'a>,
         in_body: bool,
     ) -> Expression<'a> {
-        // The head identifier (if bare) is not yet consumed; consume it now and lex the delimiter.
-        self.commit_head(&head);
+        // `commit_head` already consumed the head's boundary token and left the `{`/`[` delimiter as
+        // the current token.
 
         // Accumulate one or more `[props]` groups (their object properties union together).
         let mut props = self.ast.vec();
@@ -318,7 +301,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.build_element(span, head.kind, props, children)
     }
 
-    /// `@head:` colon/block sugar (Phase C). Handled in the document/colon module.
+    /// `@head:` colon/block sugar. Handled in the document/colon module.
     fn parse_colon_element(
         &mut self,
         span_start: u32,
@@ -335,13 +318,44 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.build_fragment(span, children)
     }
 
-    /// Consume the head's final token — the bare identifier, or the `@(expr)` head's `)` — and lex
-    /// the following `{`/`[`/`:` delimiter. Both leave that delimiter as the current token (no
-    /// whitespace between, guaranteed by the `byte_at` element/interpolation switch).
-    fn commit_head(&mut self, _head: &NotaHead<'a>) {
-        // For a bare-ident head the current token is the identifier; for a dynamic head it is `)`.
-        // In both cases `parse_nota_head` left it un-consumed, so a single bump lexes the delimiter.
-        self.bump_any();
+    /// The element trigger glued to a head: which markup-significant byte(s) immediately follow it.
+    /// `@p{…}`→`Brace`, `@p[…]`→`Bracket`, `@p:…`→`Colon`, `@code|{…}|`→`Verbatim`, else `None`
+    /// (interpolation). This is the typed, whitespace-sensitive analog of Typst's `directly_at`: the
+    /// single site that inspects raw bytes for the head→body decision (the byte after a head is not
+    /// a JS token — a space is significant, and `|{` is not a JS token — so we peek rather than lex).
+    fn peek_markup_trigger(&self, after: u32) -> MarkupTrigger {
+        match self.byte_at(after) {
+            Some(b'{') => MarkupTrigger::Brace,
+            Some(b'[') => MarkupTrigger::Bracket,
+            Some(b':') => MarkupTrigger::Colon,
+            // `|{` opens a verbatim body; a lone `|` is not a trigger.
+            Some(b'|') if self.byte_at(after + 1) == Some(b'{') => MarkupTrigger::Verbatim,
+            _ => MarkupTrigger::None,
+        }
+    }
+
+    /// Cross the head→body boundary: classify the trigger, then consume the head's boundary token
+    /// (the bare identifier, or the `@(expr)` head's `)`) in the lexer mode that trigger implies, and
+    /// return the trigger so the caller can dispatch on it. This is the *one* place the head's
+    /// boundary token is consumed — uniform across named and dynamic heads — so callers never mix
+    /// token and byte consumption at the seam.
+    ///
+    /// * `Brace`/`Bracket`/`Colon` — the trigger is a JS-lexable token glued to the head, so a single
+    ///   `bump` consumes the boundary token and lexes the delimiter (`{`/`[`/`:`) as the next token.
+    /// * `Verbatim` — `parse_verbatim_element` scans the body over raw source from `head.end`, so the
+    ///   boundary token is left current (we must not let the JS lexer eat the `|`).
+    /// * `None` (interpolation) — consume the boundary token, resuming markup text in a body (so
+    ///   significant whitespace after the head is not skipped) or normal JS otherwise.
+    fn commit_head(&mut self, head: &NotaHead<'a>, in_body: bool) -> MarkupTrigger {
+        let trigger = self.peek_markup_trigger(head.end);
+        match trigger {
+            MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => self.bump_any(),
+            // Boundary token stays current; the verbatim body is scanned by absolute offset.
+            MarkupTrigger::Verbatim => {}
+            MarkupTrigger::None if in_body => self.advance_for_markup_text(),
+            MarkupTrigger::None => self.bump_any(),
+        }
+        trigger
     }
 
     // ===========================================================================================
@@ -417,16 +431,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             let next_line = term_off + 1;
                             if self.is_statement_line(next_line) {
                                 if document {
-                                    // Top-level: hand back to the driver (no IIFE — contract R5).
+                                    // Top-level: hand back to the driver (no IIFE).
                                     return MarkupClose::AtStatement { offset: next_line };
                                 }
                                 // Nested in an element body: a `%` statement scopes the REMAINING
-                                // siblings, which become the body of an IIFE (notation.md §Statements).
+                                // siblings, which become the body of an IIFE.
                                 let (iife, close) = self.nested_statement_iife(next_line, *depth);
                                 items.push(BodyItem::Child(iife));
                                 return close;
                             }
-                            // Line-start markup sugar (Phase E): lists (`-`/`+`/`N.`) and headings
+                            // Line-start markup sugar: lists (`-`/`+`/`N.`) and headings
                             // (`#`). Only at brace depth 0 (a balanced `{…}` is literal body text).
                             if *depth == 0 && self.list_marker_at(next_line).is_some() {
                                 let (els, resume) = self.parse_list(next_line);
@@ -472,7 +486,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             items.push(BodyItem::Child(child));
                         }
                         Some(m @ (b'*' | b'_')) => {
-                            // Emphasis sigil (Phase E). Marker iff NOT intra-word (Typst rule); else
+                            // Emphasis sigil. Marker iff NOT intra-word (Typst rule); else
                             // literal. An *opening* marker recurses into the emphasis body.
                             if self.is_emphasis_marker(term_off) {
                                 self.parse_emphasis(m, term_off, items);
@@ -482,16 +496,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             }
                         }
                         Some(b'\\') => {
-                            // General backslash escape (Phase F): `\<c>` → literal `<c>`, `\` dropped.
+                            // General backslash escape: `\<c>` → literal `<c>`, `\` dropped.
                             let resume = self.push_escape(items, term_off);
                             self.nota_seek_markup(resume);
                         }
                         Some(b'`') => {
-                            // Code (Phase F): inline `` `…` `` / fenced ```` ```…``` ````.
+                            // Code: inline `` `…` `` / fenced ```` ```…``` ````.
                             self.parse_code_or_literal(items, term_off);
                         }
                         Some(b'$') => {
-                            // Math (Phase F): `$…$` / `$$…$$`.
+                            // Math: `$…$` / `$$…$$`.
                             self.parse_math_or_literal(items, term_off);
                         }
                         Some(b'|') => {
@@ -524,11 +538,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Apply the Scribble whitespace algorithm (notation.md §Whitespace, contract §7) to the
-    /// collected body items, producing the final child expressions.
+    /// Apply the Scribble whitespace algorithm to the collected body items, producing the final
+    /// child expressions.
     ///
-    /// Hard contract (§7): one `"\n"` child per interior newline, never pre-coalesced — so a blank
-    /// source line surfaces as ≥2 adjacent `"\n"` (the runtime paragraph-break marker). Empty /
+    /// Invariant: one `"\n"` child per interior newline, never pre-coalesced — so a blank source
+    /// line surfaces as ≥2 adjacent `"\n"` (the runtime paragraph-break marker). Empty /
     /// whitespace-only-without-newline body → `[]`; body that is only newlines → N × `"\n"`.
     fn apply_whitespace(&self, items: Vec<BodyItem<'a>>) -> ArenaVec<'a, Expression<'a>> {
         // Split into Copy-able segments (text slices / element indices) + the owned elements, so the
@@ -562,12 +576,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ===========================================================================================
-    // Props (Phase B)
+    // Props
     // ===========================================================================================
 
     /// Parse one `[ k:v, bare, ...spread, k:@markup ]` group, pushing each into `props`.
     ///
-    /// Hyperscript collapses notation.md's "string→attr vs expr→{…}" into object properties:
+    /// Hyperscript collapses the "string→attr vs expr→{…}" distinction into object properties:
     /// `[href:"/x"]`→`{href:"/x"}`, `[href:url]`→`{href:url}`, bare `disabled`→shorthand,
     /// `...rest`→spread, markup value `cap:@em{hi}`→`{cap: h("em",{},["hi"])}`. Multiple groups
     /// accumulate (union). Entered with the current token at `[`.
@@ -580,7 +594,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 let span_start = self.start_span();
                 self.bump_any();
                 let argument = self.parse_assignment_expression_or_higher();
-                // H1: the spread argument is embedded JS (full caps).
+                // The spread argument is embedded JS (full capabilities).
                 self.record_nota_mapping(argument.span(), NotaMappingKind::EmbeddedJs);
                 let span = self.end_span(span_start);
                 let spread = self.ast.spread_element(span, argument);
@@ -620,7 +634,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 // records its own mappings (component tag / nested embedded JS).
                 self.parse_nota_form(false)
             } else {
-                // Embedded-JS prop value (`[href: url]`, `[style: {color}]`, …) — full caps (H1).
+                // Embedded-JS prop value (`[href: url]`, `[style: {color}]`, …) — full capabilities.
                 let value = self.parse_assignment_expression_or_higher();
                 self.record_nota_mapping(value.span(), NotaMappingKind::EmbeddedJs);
                 value
@@ -648,8 +662,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 );
                 return self.fatal_error(error);
             };
-            // H1: the shorthand value is an identifier reference (embedded JS, full caps). Map the
-            // key span — the shorthand emits the same name byte-for-byte at that source location.
+            // The shorthand value is an identifier reference (embedded JS, full capabilities). Map
+            // the key span — the shorthand emits the same name byte-for-byte at that source location.
             self.record_nota_mapping(key_span, NotaMappingKind::EmbeddedJs);
             let value = self.ast.expression_identifier(key_span, name);
             let span = self.end_span(span_start);
@@ -669,7 +683,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // AST builders
     // ===========================================================================================
 
-    /// Build `h(tag, { props }, [children])`, dispatching on the head kind (contract §3):
+    /// Build `h(tag, { props }, [children])`, dispatching on the head kind:
     /// host (lowercase) → string tag; component (Capitalized) → identifier tag; dynamic `@(expr)`
     /// → either the expression directly (if a valid tag: Capitalized ident / member expr) or an
     /// IIFE introducing a fresh `_Tag` binding.
@@ -683,7 +697,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         match head {
             HeadKind::Named { name, span: tag_span } => {
                 let tag = if is_component_name(name) {
-                    // H1: a component tag (`@Aside` → `h(Aside, …)`) is a navigation/hover range. A
+                    // A component tag (`@Aside` → `h(Aside, …)`) is a navigation/hover range. A
                     // host tag (`@p` → `h("p", …)`) is NOT a TS symbol — leave it unmapped.
                     self.record_nota_mapping(tag_span, NotaMappingKind::ComponentIdentifier);
                     self.ast.expression_identifier(tag_span, name)
@@ -695,12 +709,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             HeadKind::Dynamic(expr) => {
                 if is_valid_tag_expr(&expr) {
                     // `@(Box){…}` / `@(ui.Card){…}` — emit the expression directly as the tag. The
-                    // expr is a tag reference (H1: navigation/hover, like a component identifier).
+                    // expr is a tag reference (navigation/hover, like a component identifier).
                     self.record_nota_mapping(expr.span(), NotaMappingKind::ComponentIdentifier);
                     self.build_h(span, expr, props, children)
                 } else {
                     // `@(getTag()){…}` — IIFE: `(() => { const _Tag = expr; return h(_Tag, …); })()`.
-                    // The head is arbitrary embedded JS (full caps).
+                    // The head is arbitrary embedded JS (full capabilities).
                     self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
                     self.build_dynamic_iife(span, expr, props, children)
                 }
@@ -727,7 +741,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         ast.expression_call(span, callee, NONE, arguments, false)
     }
 
-    /// `Fragment(...children)` — variadic call (no props, no array wrap), per contract §3.
+    /// `Fragment(...children)` — variadic call (no props, no array wrap).
     fn build_fragment(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
         let ast = self.ast;
         let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
@@ -810,9 +824,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ===========================================================================================
-    // Document mode + statements + colon sugar (Phase C) — implemented below this point.
+    // Document mode + statements + colon sugar — implemented in the impl block further down.
     // ===========================================================================================
-    // (see the `// Phase C` impl block further down)
 
     // ===========================================================================================
     // Diagnostics
@@ -831,29 +844,29 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 }
 
 // ===============================================================================================
-// Phase D — control flow (`@if` / `else` / `@for`). All are expressions, so they nest in markup
-// and embedded code alike (impl.md §1.5 D). `@if` lowers to a (nested) ternary; `@for` lowers to
-// `iter.map((bind, _i) => Fragment({ key: _i }, ...body))` (contract §4 E5). `else`/`else if` are
-// contextual continuations (only as the next token after `}`, no blank line between).
+// Control flow (`@if` / `else` / `@for`). All are expressions, so they nest in markup and embedded
+// code alike. `@if` lowers to a (nested) ternary; `@for` lowers to
+// `iter.map((bind, _i) => Fragment({ key: _i }, ...body))`. `else`/`else if` are contextual
+// continuations (only as the next token after `}`, no blank line between).
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
-    /// Peek (over the raw source) whether the control keyword at the current token is followed by
-    /// `(` — the `@if (`/`@for (` trigger. Whitespace (incl. newlines) between the keyword and `(`
-    /// is insignificant (notation.md §"whitespace after `@for`/`@if` is insignificant").
-    fn control_head_has_paren(&self) -> bool {
-        let after_kw = self.cur_token().end();
-        matches!(self.skip_ws_byte(after_kw), Some((b'(', _)))
-    }
-
     /// `@if (cond) {branch}` with optional `else`/`else if` continuations → a (nested) ternary
     /// (`cond ? Fragment(...branch) : <alt-or-null>`). `@if` is keyless (single branch, no list
     /// reconciliation), so its branch `Fragment`s carry no `key`.
     fn parse_nota_if(&mut self, span_start: u32, in_body: bool) -> Expression<'a> {
         // current token: the `if` keyword. Parse the `(cond)` test (JS expression).
-        self.bump_any(); // → `(`
+        assert!(self.eat(Kind::If));
+        if !self.at(Kind::LParen) {
+            let error = diagnostics::expect_token(
+                Kind::LParen.to_str(),
+                self.cur_kind().to_str(),
+                self.cur_token().span(),
+            );
+            return self.fatal_error(error);
+        }
         let cond = self.parse_paren_expression();
-        // H1: the `@if` condition is embedded JS (full caps).
+        // The `@if` condition is embedded JS (full capabilities).
         self.record_nota_mapping(cond.span(), NotaMappingKind::EmbeddedJs);
         // After `)` the next JS token is the branch-body `{` (whitespace skipped by the JS lexer).
         let cons = self.parse_branch_fragment(span_start);
@@ -902,9 +915,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// `@for (bind of iter) {body}` → `iter.map((bind, _i) => Fragment({ key: _i }, ...body))`
-    /// (contract §4 E5: the reader adds a fresh map-index param `_i` as the wrapping `Fragment`'s
-    /// `key`). `bind` is any binding pattern.
+    /// `@for (bind of iter) {body}` → `iter.map((bind, _i) => Fragment({ key: _i }, ...body))`:
+    /// the reader adds a fresh map-index param `_i` as the wrapping `Fragment`'s `key`. `bind` is
+    /// any binding pattern.
     fn parse_nota_for(&mut self, span_start: u32, in_body: bool) -> Expression<'a> {
         // current token: the `for` keyword.
         self.bump_any(); // → `(`
@@ -919,7 +932,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
         self.bump_any(); // consume `of`
         let iter = self.parse_assignment_expression_or_higher();
-        // H1: the `@for` binding pattern + iterable are embedded JS (full caps).
+        // The `@for` binding pattern + iterable are embedded JS (full capabilities).
         self.record_nota_mapping(bind.span(), NotaMappingKind::EmbeddedJs);
         self.record_nota_mapping(iter.span(), NotaMappingKind::EmbeddedJs);
         self.expect_closing(Kind::RParen, open);
@@ -935,7 +948,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         map_call
     }
 
-    /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))` (contract §4 E5).
+    /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))`.
     fn build_for_map(
         &self,
         span: Span,
@@ -1015,8 +1028,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         ast.expression_call(span, map_member, NONE, args, false)
     }
 
-    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg (contract §1:
-    /// `Fragment(props?, ...children)`; §4 E5 key mechanism).
+    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg
+    /// (`Fragment(props?, ...children)`; the `key` is the list-reconciliation mechanism).
     fn build_keyed_fragment(
         &self,
         span: Span,
@@ -1122,20 +1135,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             ElsePeek::None
         }
     }
-
-    /// Skip horizontal+vertical whitespace from `offset`; return the first non-ws byte and its
-    /// offset, or `None` at EOF.
-    fn skip_ws_byte(&self, offset: u32) -> Option<(u8, u32)> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = offset as usize;
-        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
-            i += 1;
-        }
-        bytes.get(i).map(|b| (*b, i as u32))
-    }
 }
 
-/// A list marker found at a line start (Phase E).
+/// A list marker found at a line start.
 struct ListMarker {
     /// `true` for an ordered marker (`+` / `N.`); `false` for a bullet (`-`).
     ordered: bool,
@@ -1195,9 +1197,9 @@ fn matches_keyword(bytes: &[u8], at: usize, kw: &[u8]) -> bool {
 }
 
 // ===============================================================================================
-// Phase E — markup sugar (emphasis `*`/`_`, headings `#`, lists `-`/`+`/`N.`). Each lowers to an
-// ordinary element; the runtime `decode`/`struct` does the grouping (the reader emits the flat
-// per-line/per-span sentinels). Escaped `\* \_ \# \- \+` are the literal char (Phase F).
+// Markup sugar (emphasis `*`/`_`, headings `#`, lists `-`/`+`/`N.`). Each lowers to an ordinary
+// element; the runtime `decode`/`struct` does the grouping (the reader emits the flat
+// per-line/per-span sentinels). Escaped `\* \_ \# \- \+` are the literal char.
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
@@ -1209,8 +1211,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `_italic_` and `*a _b_ c*` use them as markers. The open-vs-close determination is the
     /// matcher's job ([`Self::find_emphasis_close`]); this only gates marker-vs-literal.
     fn is_emphasis_marker(&self, marker_off: u32) -> bool {
-        // An escaped marker (`\*`/`\_`, odd run of preceding `\`) is literal (notation.md §Verbatim;
-        // the `\`-stripping itself is Phase F — here we only suppress the marker).
+        // An escaped marker (`\*`/`\_`, odd run of preceding `\`) is literal (the `\`-stripping
+        // itself happens elsewhere — here we only suppress the marker).
         if self.is_escaped(marker_off) {
             return false;
         }
@@ -1295,12 +1297,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     depth -= 1;
                     i += 1;
                 }
-                // Phase F: skip over a raw span (code/math/verbatim) so a `*`/`_` *inside* raw content
+                // Skip over a raw span (code/math/verbatim) so a `*`/`_` *inside* raw content
                 // cannot close the emphasis (the raw span owns its own markers).
                 b'`' | b'$' => i = self.skip_raw_span_for_emphasis(i),
                 b'|' if bytes.get(i + 1) == Some(&b'{') => {
                     i = self.skip_raw_span_for_emphasis(i);
                 }
+                // Skip over an `@`-form's head and any `(…)`/`[…]` group so a `*`/`_` *inside* an
+                // embedded expression cannot close the emphasis (the embedded JS owns its own
+                // markers), and a stray `(`/`{`/`}` inside that JS cannot perturb `depth`. A trailing
+                // `{…}` markup body is left to the brace arms above (depth-tracked, escape-aware).
+                b'@' => i = self.skip_at_form_for_emphasis(i),
                 _ if b == marker && depth == 0 => {
                     // A candidate close: valid iff it is a marker (not intra-word).
                     if self.is_emphasis_marker(i as u32) {
@@ -1359,6 +1366,61 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             _ => at + 1,
         }
+    }
+
+    /// Skip an `@`-form whose `@` byte is at `at` (raw offset), returning the offset just past the
+    /// form's *head* and any immediately-following `(…)`/`[…]` group — the parenthesized
+    /// interpolation `@(expr)` or an attribute list `@name[…]`. Used by [`Self::find_emphasis_close`]
+    /// so a `*`/`_` *inside* an embedded expression cannot be mistaken for the emphasis close, and a
+    /// stray bracket inside that JS cannot perturb the caller's `{…}` depth counter.
+    ///
+    /// A trailing `{…}` markup body is deliberately left to the caller's main scan (its depth/escape/
+    /// raw-span machinery already handles markup braces). The group skip ([`Self::skip_balanced`])
+    /// matches brackets only — it does not interpret JS string/template literals, so a bracket char
+    /// inside a string inside `@(…)` (e.g. `@(")")`) can mis-scan. That is vanishingly rare inside
+    /// inline emphasis and was never handled before; the realistic case (`@(a * b)`) is exact.
+    fn skip_at_form_for_emphasis(&self, at: usize) -> usize {
+        let bytes = self.source_text.as_bytes();
+        let mut i = at + 1; // past '@'
+        // `@name` head: identifier bytes plus `.`-member chains (non-ASCII bytes are identifier
+        // continuations, e.g. `@café`). `@(expr)` has no identifier head — the group loop below skips
+        // the `(…)`. Over-consuming a trailing `.` is harmless: only `*`/`_` matter as close markers.
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric()
+                || matches!(bytes[i], b'_' | b'$' | b'.')
+                || bytes[i] >= 0x80)
+        {
+            i += 1;
+        }
+        // Adjacent `(…)`/`[…]` groups (the interpolation expr, attribute lists, call/index chains).
+        while matches!(bytes.get(i), Some(b'(' | b'[')) {
+            i = self.skip_balanced(i);
+        }
+        i
+    }
+
+    /// Skip a balanced bracket group (`(…)`/`[…]`/`{…}`, nesting all three) whose opener is at `at`,
+    /// returning the offset just past the matching closer, or `at + 1` if unterminated so the caller
+    /// makes progress. Brackets only — string/comment contents are not interpreted (see
+    /// [`Self::skip_at_form_for_emphasis`]).
+    fn skip_balanced(&self, at: usize) -> usize {
+        let bytes = self.source_text.as_bytes();
+        let mut depth = 0u32;
+        let mut i = at;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return i + 1;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        at + 1 // unterminated → caller advances past the opener
     }
 
     /// Push a single literal byte (an ASCII sigil that turned out to be non-significant) as text.
@@ -1484,7 +1546,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse a run of list items starting at `line_start` (the first line is known to be a list
     /// marker). Consecutive marker lines at the *same or deeper* indent form the run; a deeper
     /// marker nests inside the preceding item (its `struct`-coalesced inner list). Each item →
-    /// `h("ulli"|"olli", {}, [body])`. Returns `(elements, resume)` where `resume` is the offset
+    /// `h("nota-ul-li"|"nota-ol-li", {}, [body])`. Returns `(elements, resume)` where `resume` is the offset
     /// where the run ended (a line that is neither a continuation nor a same-level marker).
     fn parse_list(&mut self, line_start: u32) -> (Vec<Expression<'a>>, u32) {
         let base = self.list_marker_at(line_start).expect("parse_list: not a marker line");
@@ -1492,8 +1554,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let mut elements: Vec<Expression<'a>> = Vec::new();
         let mut at = line_start;
 
-        loop {
-            let Some(marker) = self.list_marker_at(at) else { break };
+        while let Some(marker) = self.list_marker_at(at) {
             if marker.indent < base_indent {
                 break; // a shallower marker belongs to an enclosing list
             }
@@ -1503,13 +1564,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             // The item body extent: rest of the marker line + subsequent lines indented strictly
             // past the marker's *indent* (block-sugar rule). Deeper list markers within that extent
-            // become nested `ulli`/`olli` children via the recursive body collection.
+            // become nested `nota-ul-li`/`nota-ol-li` children via the recursive body collection.
             let line_end = self.line_content_end(at);
             let body_start = marker.body_col.min(line_end);
             let item_end = self.list_item_extent(line_end, marker.indent);
 
             let children = self.collect_list_item_body(body_start, item_end, marker.indent);
-            let tag = if marker.ordered { "olli" } else { "ulli" };
+            let tag = if marker.ordered { "nota-ol-li" } else { "nota-ul-li" };
             let span = Span::new(marker.indent, item_end);
             let tag_expr = self.ast.expression_string_literal(span, tag, None);
             elements.push(self.build_h(span, tag_expr, self.ast.vec(), children));
@@ -1557,7 +1618,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Collect a list item's body over `[start, end)`: the rest-of-marker-line content plus indented
-    /// continuation lines, with nested list markers recursively lowered into `ulli`/`olli` children.
+    /// continuation lines, with nested list markers recursively lowered into `nota-ul-li`/`nota-ol-li` children.
     fn collect_list_item_body(
         &mut self,
         start: u32,
@@ -1674,37 +1735,33 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 }
 
 // ===============================================================================================
-// Phase F — verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), and the
-// general backslash escape. Raw spans are scanned over the raw source (the D/E line-construct
-// pattern) and lowered to `String.raw` tagged-template literals so `\` and `{}` survive verbatim
-// (contract §3 last rows, notation.md §Verbatim/§Math/§Code). Math `@`-interpolation becomes a
-// `${…}` substitution in the one template; verbatim `|@` re-enters Nota as a *sibling* child.
-// The raw spans are pushed as pre-lowered `BodyItem::Child`, so the Scribble whitespace pass
-// (`apply_whitespace`) never touches their content (NOTA_READER Phase-F guidance).
+// Verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), and the general
+// backslash escape. Raw spans are scanned over the raw source (the line-construct pattern) and
+// lowered to `String.raw` tagged-template literals so `\` and `{}` survive verbatim. Math
+// `@`-interpolation becomes a `${…}` substitution in the one template; verbatim `|@` re-enters
+// Nota as a *sibling* child. The raw spans are pushed as pre-lowered `BodyItem::Child`, so the
+// Scribble whitespace pass (`apply_whitespace`) never touches their content.
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
     // ------------------------------------------------------------------------------------------
-    // General backslash escape (step 1). `\<c>` → literal `<c>` (the `\` dropped); a trailing lone
-    // `\` at EOF is itself literal. Hooked from the markup collectors' byte-peek `\` arm.
+    // General backslash escape. `\<c>` → literal `<c>` (the `\` dropped); a trailing lone `\` at
+    // EOF is itself literal. Hooked from the markup collectors' byte-peek `\` arm.
     // ------------------------------------------------------------------------------------------
 
     /// Handle a `\` at raw offset `esc_off` (the run stopped there): push the escaped character as a
     /// literal text item (backslash dropped) and return the offset to resume markup text from. A
     /// lone trailing `\` (EOF after it) is pushed literally as `\`.
     fn push_escape(&self, items: &mut Vec<BodyItem<'a>>, esc_off: u32) -> u32 {
-        match self.char_at(esc_off + 1) {
-            Some(c) => {
-                // Emit the escaped char verbatim (the `\` is dropped); resume past `\<c>`.
-                let lit: &'a str = self.alloc_char(c);
-                items.push(BodyItem::Text(lit));
-                esc_off + 1 + c.len_utf8() as u32
-            }
-            None => {
-                // Trailing lone backslash at EOF: literal `\`.
-                items.push(BodyItem::Text("\\"));
-                esc_off + 1
-            }
+        if let Some(c) = self.char_at(esc_off + 1) {
+            // Emit the escaped char verbatim (the `\` is dropped); resume past `\<c>`.
+            let lit: &'a str = self.alloc_char(c);
+            items.push(BodyItem::Text(lit));
+            esc_off + 1 + c.len_utf8() as u32
+        } else {
+            // Trailing lone backslash at EOF: literal `\`.
+            items.push(BodyItem::Text("\\"));
+            esc_off + 1
         }
     }
 
@@ -1715,7 +1772,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ------------------------------------------------------------------------------------------
-    // `String.raw` tagged-template builders (the one AST shape D/E never built).
+    // `String.raw` tagged-template builders.
     // ------------------------------------------------------------------------------------------
 
     /// `String.raw\`<raw>\`` — a tagged template over a single raw quasi (no substitutions). Used for
@@ -1757,8 +1814,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// only the two characters that would otherwise break the template *syntax* — a backtick (closes
     /// the template) and a `${` (opens a substitution) — by prefixing a `\`. Those two cannot round-
     /// trip *exactly* through `String.raw` (JS has no raw escape for a bare backtick), but they are
-    /// degenerate in verbatim/code/math content; the escape keeps the emitted JS valid (the §1.6
-    /// validity invariant) at the cost of a leaked `\` on those rare bytes.
+    /// degenerate in verbatim/code/math content; the escape keeps the emitted JS valid at the cost
+    /// of a leaked `\` on those rare bytes.
     fn raw_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
         let escaped = self.escape_raw_template_syntax(raw);
         let value = TemplateElementValue { raw: self.ast.str(escaped), cooked: None };
@@ -1818,8 +1875,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Verbatim `|{ … }|` (step 2). Raw body: ends at `}|`; the armed escape `|@` re-enters Nota to
-    // produce a *sibling* element child. Lowers to `h("code", {}, [String.raw`…`, <child>, …])`.
+    // Verbatim `|{ … }|`. Raw body: ends at `}|`; the armed escape `|@` re-enters Nota to produce a
+    // *sibling* element child. Lowers to `h("code", {}, [String.raw`…`, <child>, …])`.
     // ------------------------------------------------------------------------------------------
 
     /// Parse `@head|{ … }|` — a verbatim-body element. `head.end` points at the `|` of `|{`.
@@ -1901,7 +1958,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Code — inline `` `…` `` and fenced ```` ```lang⏎…⏎``` ````  (step 3). Fully raw, no
+    // Code — inline `` `…` `` and fenced ```` ```lang⏎…⏎``` ````. Fully raw, no
     // interpolation. The fence length is the opening backtick-run length; a shorter run inside is
     // literal. Inline (run on one line / 1–2 backticks) → `CodeInline`; a `≥3` run whose opener line
     // is otherwise blank (modulo a lang tag) → fenced `CodeBlock`.
@@ -1947,7 +2004,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// there). Pushes the lowered `h(CodeInline|CodeBlock, …)` child into `items` and returns the
     /// resume offset, or returns `None` if this is not a valid code opener (run shorter than any
     /// close → the backticks are literal; the caller emits them as text).
-    fn parse_code_span(&mut self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) -> Option<u32> {
+    fn parse_code_span(&self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) -> Option<u32> {
         let bytes = self.source_text.as_bytes();
         let mut i = tick_off as usize;
         while i < bytes.len() && bytes[i] == b'`' {
@@ -1958,13 +2015,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         // A `≥3` run that is the last non-whitespace on its line (modulo a trailing language tag) is
         // a *fenced* block: ```lang⏎ … ⏎```. Otherwise it is inline code.
-        if fence_len >= 3 {
-            if let Some((element, resume)) =
+        if fence_len >= 3
+            && let Some((element, resume)) =
                 self.parse_fenced_code(tick_off, fence_len, content_start)
-            {
-                items.push(BodyItem::Child(element));
-                return Some(resume);
-            }
+        {
+            items.push(BodyItem::Child(element));
+            return Some(resume);
         }
 
         // Inline code: content up to the next run of exactly `fence_len` backticks on the same scope
@@ -2008,7 +2064,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// fence_len` backticks. Returns `(h(CodeBlock,…), resume)`, or `None` if the opening run is not
     /// a bare fence line (then it is treated as inline code by the caller).
     fn parse_fenced_code(
-        &mut self,
+        &self,
         tick_off: u32,
         fence_len: usize,
         content_start: usize,
@@ -2052,7 +2108,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             if k - run_start >= fence_len {
                 // Closing fence. Code body is [body_start, closing-line-start), dropping the `\n`
-                // immediately before the fence line (notation.md fenced example). Resume right after
+                // immediately before the fence line. Resume right after
                 // the backtick run (NOT the rest of the line): trailing content — e.g. the `}` that
                 // closes an enclosing `@d{ … }` body — is left for the collector to handle.
                 let mut code_end = line_start;
@@ -2102,7 +2158,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Math — `$…$` (inline) and `$$…$$` (display) (step 4). Raw LaTeX; `@name`/`@(expr)` interpolate
+    // Math — `$…$` (inline) and `$$…$$` (display). Raw LaTeX; `@name`/`@(expr)` interpolate
     // a *string value* as a `${…}` substitution in the one `String.raw` template; `\$`/`\@` are
     // literal but KEEP the backslash (it is LaTeX's own escape).
     // ------------------------------------------------------------------------------------------
@@ -2191,7 +2247,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Parse one math `@`-interpolation at raw offset `at_off` (the `@`) → `(expr, after)` where
     /// `after` is the offset just past the interpolation. The interpolation is a *string value*
-    /// (notation.md §Math; `String.raw` coerces it at runtime — the reader just splices the expr).
+    /// (`String.raw` coerces it at runtime — the reader just splices the expr).
     ///
     /// `@(expr)` delegates to the JS parser (the parens bound it). `@name` is scanned over the **raw
     /// source** (NOT via the JS lexer) so the closing math `$` delimiter is not swallowed — `$` is a
@@ -2206,7 +2262,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let expr = self.parse_expr();
             self.expect(Kind::RParen);
             let after = self.prev_token_end;
-            // H1: a math `@(expr)` interpolation is embedded JS (full caps).
+            // A math `@(expr)` interpolation is embedded JS (full capabilities).
             self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
             (expr, after)
         } else {
@@ -2234,7 +2290,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             let name: &'a str = &self.source_text[name_start..j];
             let name_span = Span::new(name_start as u32, j as u32);
-            // H1: a math `@name` interpolation is an identifier reference (embedded JS, full caps).
+            // A math `@name` interpolation is an identifier reference (embedded JS, full capabilities).
             self.record_nota_mapping(name_span, NotaMappingKind::EmbeddedJs);
             let expr = self.ast.expression_identifier(name_span, name);
             (expr, j as u32)
@@ -2243,15 +2299,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 }
 
 // ===============================================================================================
-// Phase C — document mode, `%`/`%%%` statements, F1 hoisting, await→async, colon/block sugar.
+// Document mode, `%`/`%%%` statements, component hoisting, await→async, colon/block sugar.
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse the whole file body: top-level markup siblings interleaved with `%`/`%%%` statements.
     ///
-    /// Statements are routed: `import`/`export` and F1 component bindings (`%const/%let X =
-    /// inlineComponent(...)|blockComponent(...)`) hoist to `module_items` (module scope, exported
-    /// for F1); other top-level `%` statements prepend into `doc_prelude` (contract R5, no IIFE).
+    /// Statements are routed: `import`/`export` and component bindings (`%const/%let X =
+    /// inlineComponent(...)|blockComponent(...)`) hoist to `module_items` (module scope, exported);
+    /// other top-level `%` statements prepend into `doc_prelude` (no IIFE).
     /// `await` anywhere in a top-level statement makes `Doc` async. Returns the markup siblings.
     fn parse_document_body(
         &mut self,
@@ -2286,8 +2342,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             let mut depth = 0u32;
             match self.collect_markup(&mut items, &mut depth, /* document */ true) {
-                MarkupClose::Eof => break,
-                MarkupClose::Curly { .. } => break, // not produced in document mode
+                // `Curly` is not produced in document mode; `Eof` ends the doc.
+                MarkupClose::Eof | MarkupClose::Curly { .. } => break,
                 MarkupClose::AtStatement { offset } => {
                     self.consume_statements_at(offset, module_items, doc_prelude, is_async);
                     if self.at(Kind::Eof) {
@@ -2312,10 +2368,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let mut at = offset;
         loop {
             let line_start = at;
-            let (content, is_fence) = match self.statement_kind(line_start) {
-                Some(v) => v,
-                None => break,
-            };
+            let Some((content, is_fence)) = self.statement_kind(line_start) else { break };
             // Track await-context: a top-level statement using `await` makes `Doc` async. The
             // simplest sound signal is whether the statement's source contains `await`.
             let end = if is_fence {
@@ -2380,9 +2433,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         after_fence
     }
 
-    /// Route a parsed top-level statement: `import`/`export`/F1 component bindings hoist to module
-    /// scope (F1 adds `export` + the name argument); everything else prepends into `Doc`. Sets
-    /// `is_async` if the statement uses `await`.
+    /// Route a parsed top-level statement: `import`/`export`/component bindings hoist to module
+    /// scope (component bindings add `export` + the name argument); everything else prepends into
+    /// `Doc`. Sets `is_async` if the statement uses `await`.
     fn route_statement(
         &mut self,
         stmt: Statement<'a>,
@@ -2393,7 +2446,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if statement_uses_await(&stmt) {
             *is_async = true;
         }
-        // H1: a `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full caps). Map the
+        // A `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full capabilities). Map the
         // whole statement span — the language server runs TS over its leaf nodes (each carrying its
         // own source span), and the statement-level mark anchors the embedded region for Volar.
         self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
@@ -2403,9 +2456,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             | Statement::ExportNamedDeclaration(_)
             | Statement::ExportDefaultDeclaration(_)
             | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
-            // F1: a `let/const X = inlineComponent(...)|blockComponent(...)` binding → hoist+export,
+            // A `let/const X = inlineComponent(...)|blockComponent(...)` binding → hoist+export,
             // and pass `X` as the constructor's 2nd argument (the manifest `comp` name).
-            Statement::VariableDeclaration(mut decl) if self.is_f1_component_decl(&decl) => {
+            Statement::VariableDeclaration(mut decl) if Self::is_f1_component_decl(&decl) => {
                 self.attach_f1_name(&mut decl);
                 let export = self.make_export_named_decl(Declaration::VariableDeclaration(decl));
                 module_items.push(export);
@@ -2473,8 +2526,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// A `%` statement nested in an element body scopes the *remaining* siblings: parse the
     /// statement(s) at `stmt_line`, collect the rest of the body, and wrap them in an IIFE
-    /// `(() => { …stmts…; return Fragment(...rest); })()` (notation.md §Statements). `await` in a
-    /// statement makes the IIFE `async`. Returns the IIFE expression and how the body closed.
+    /// `(() => { …stmts…; return Fragment(...rest); })()`. `await` in a statement makes the IIFE
+    /// `async`. Returns the IIFE expression and how the body closed.
     fn nested_statement_iife(
         &mut self,
         stmt_line: u32,
@@ -2582,15 +2635,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         head: NotaHead<'a>,
         in_body: bool,
     ) -> Expression<'a> {
-        self.commit_head(&head); // consume the head ident / the `:` delimiter context
-        // After `commit_head`, the `:` is the current token (for a bare head) — its end is the body
-        // start. For a dynamic head, `parse_nota_head` consumed `)`, and `:` is current.
+        // `commit_head` already consumed the head's boundary token and left `:` as the current
+        // token; its end is the body start.
         debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
         let colon_end = self.cur_token().end();
         let head_line_indent = self.line_indent_of(span_start);
 
         // Determine the sugar's source extent: rest of the `@head:` line + lines indented strictly
-        // past `head_line_indent` (notation.md §Colon & block sugar).
+        // past `head_line_indent`.
         let (body_src_start, body_src_end) = self.colon_block_extent(colon_end, head_line_indent);
 
         // Collect props from leading `|` lines, and the markup body (text + `@`-forms).
@@ -2904,7 +2956,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             }
                         }
                         Some(b'\\') if term_off < end => {
-                            // General backslash escape (Phase F), inside an emphasis / colon body.
+                            // General backslash escape, inside an emphasis / colon body.
                             let resume = self.push_escape(items, term_off);
                             self.nota_seek_markup(resume);
                         }
@@ -2928,11 +2980,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ------------------------------------------------------------------------------------------
-    // F1 (component hoist + export + name) and module helpers
+    // Component hoist + export + name, and module helpers
     // ------------------------------------------------------------------------------------------
 
-    /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding? (F1)
-    fn is_f1_component_decl(&self, decl: &VariableDeclaration<'a>) -> bool {
+    /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding?
+    fn is_f1_component_decl(decl: &VariableDeclaration<'a>) -> bool {
         decl.declarations.len() == 1
             && decl.declarations[0].id.get_binding_identifier().is_some()
             && decl.declarations[0]
@@ -2941,8 +2993,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 .is_some_and(|init| f1_constructor_name(init).is_some())
     }
 
-    /// F1: pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`),
-    /// and wrap the component body's returned markup in `decode(...)` (contract §2 stage-3 (b)).
+    /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`),
+    /// and wrap the component body's returned markup in `decode(...)`.
     fn attach_f1_name(&self, decl: &mut VariableDeclaration<'a>) {
         let declarator = &mut decl.declarations[0];
         let Some(name) = declarator.id.get_binding_identifier().map(|id| id.name) else {
@@ -2953,7 +3005,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             if let Some(arg0) = call.arguments.first_mut() {
                 self.wrap_component_returns(arg0);
             }
-            // Append the F1 name (idempotent).
+            // Append the component name (idempotent).
             if call.arguments.len() < 2 {
                 let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
                 call.arguments.push(Argument::from(name_lit));
@@ -2965,8 +3017,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ///
     /// `inlineComponent((c) => @span{…})` → arrow expression body wrapped; `inlineComponent((c) => {
     /// …; return @span{…}; })` → the `return` argument wrapped. Only markup (`h(...)`/`Fragment(...)`)
-    /// is wrapped, and never double-wrapped (`decode(...)` is left alone). (Contract §2 stage-3 (b);
-    /// `decode` with the runtime `▸=true` inside a component is identity, so this is the seam.)
+    /// is wrapped, and never double-wrapped (`decode(...)` is left alone). (`decode` with the
+    /// runtime `▸=true` inside a component is identity, so this is the seam.)
     fn wrap_component_returns(&self, arg: &mut Argument<'a>) {
         let Some(expr) = arg.as_expression_mut() else { return };
         match expr {
@@ -3033,14 +3085,22 @@ struct NotaHead<'a> {
     kind: HeadKind<'a>,
     /// Byte offset immediately after the head (the element/interpolation switch position).
     end: u32,
-    /// `true` if the head was written with an escaped trailing colon (`@foo\:`) — not an element.
-    colon_escaped: bool,
 }
 
-impl NotaHead<'_> {
-    fn kind_was_named(&self) -> bool {
-        matches!(self.kind, HeadKind::Named { .. })
-    }
+/// The element trigger immediately following an `@`-form head — the typed result of the
+/// whitespace-sensitive head→body switch (see [`ParserImpl::peek_markup_trigger`]).
+#[derive(Clone, Copy)]
+enum MarkupTrigger {
+    /// `@head{…}` — a `{`-body element.
+    Brace,
+    /// `@head[…]` — a `[props]` element (body optional).
+    Bracket,
+    /// `@head:…` — colon / block sugar.
+    Colon,
+    /// `@head|{…}|` — a verbatim body.
+    Verbatim,
+    /// No trigger glued to the head ⇒ interpolation (`@name` / `@(expr)`).
+    None,
 }
 
 enum HeadKind<'a> {
@@ -3051,15 +3111,15 @@ enum HeadKind<'a> {
 }
 
 /// A tag name is a *component* (identifier) iff it starts with an uppercase ASCII letter;
-/// otherwise it is a *host* element (string tag). (notation.md §Host vs. component.)
+/// otherwise it is a *host* element (string tag).
 fn is_component_name(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
 }
 
 /// A dynamic-tag head expression is "already a valid tag" (emit directly, no `_Tag` binding) iff it
 /// is a Capitalized identifier or a *static* member expression — i.e. a name JSX would also accept
-/// as a tag (contract §3: `@(Box)` → `h(Box,…)`, `@(ui.Card)` → `h(ui.Card,…)`). A *computed*
-/// member (`@(comps[k])`) or any other expression goes through the `_Tag` IIFE.
+/// as a tag (`@(Box)` → `h(Box,…)`, `@(ui.Card)` → `h(ui.Card,…)`). A *computed* member
+/// (`@(comps[k])`) or any other expression goes through the `_Tag` IIFE.
 fn is_valid_tag_expr(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(id) => is_component_name(&id.name),
@@ -3077,7 +3137,8 @@ fn is_markup_call(expr: &Expression) -> bool {
     matches!(callee.name.as_str(), H | FRAGMENT)
 }
 
-/// The F1 constructor name if `init` is a call to `inlineComponent`/`blockComponent`, else `None`.
+/// The component constructor name if `init` is a call to `inlineComponent`/`blockComponent`, else
+/// `None`.
 fn f1_constructor_name<'a>(init: &Expression<'a>) -> Option<&'a str> {
     let Expression::CallExpression(call) = init else { return None };
     let Expression::Identifier(callee) = &call.callee else { return None };
@@ -3136,7 +3197,7 @@ fn arg_has_top_await(arg: &Argument) -> bool {
 }
 
 // ===============================================================================================
-// The Scribble whitespace algorithm (pure; unit-tested against the reference reader table).
+// The Scribble whitespace algorithm (pure; unit-tested against the reference Scribble reader).
 // ===============================================================================================
 
 mod scribble {
@@ -3163,15 +3224,15 @@ mod scribble {
         Elem(usize),
     }
 
-    /// Lower body segments to final child specs via the Scribble algorithm (notation.md
-    /// §Whitespace; verified against `references/scribble/.../reader.rkt`):
+    /// Lower body segments to final child specs via the Scribble algorithm (verified against
+    /// Scribble's own reader):
     /// 1. Split into logical lines (`\n` in text splits lines; elements are non-ws content).
     /// 2. Whitespace-only body: no newline → `[]`; else → one `"\n"` per newline.
     /// 3. Drop the single newline right after `{` (leading all-ws line) and before `}` (trailing
     ///    all-ws line) — *unless* the body is only newlines (step 2).
     /// 4. Strip the common indentation of the indent lines, keeping the leftover indent as its own
     ///    text child; trim each interior line's trailing whitespace (keep the `}`-line's).
-    /// 5. Emit one `"\n"` per inter-line newline — never coalesced (contract §7).
+    /// 5. Emit one `"\n"` per inter-line newline — never coalesced.
     pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
         // --- Step 1: split into lines of pieces, counting newlines. ---
         let mut lines: Vec<Vec<Piece<'a>>> = vec![Vec::new()];
@@ -3205,7 +3266,9 @@ mod scribble {
             if newline_count == 0 {
                 return Vec::new(); // `@p{}` / `@p{   }` → []
             }
-            return (0..newline_count).map(|_| ChildSpec::Text("\n".to_string())).collect();
+            return std::iter::repeat_with(|| ChildSpec::Text("\n".to_string()))
+                .take(newline_count)
+                .collect();
         }
 
         // --- Step 3: drop `{`-newline / `}`-newline. ---
@@ -3235,7 +3298,7 @@ mod scribble {
         let last_idx = lines.len() - 1;
         for (i, line) in lines.iter().enumerate() {
             if i > 0 {
-                out.push(ChildSpec::Text("\n".to_string())); // one "\n" per inter-line newline (§7)
+                out.push(ChildSpec::Text("\n".to_string())); // one "\n" per inter-line newline
             }
             let is_indent_line = i >= indent_from;
             emit_line(
@@ -3345,7 +3408,7 @@ mod scribble {
         use super::{ChildSpec, Seg, lower};
 
         /// Render the whitespace algorithm's output in Scribble's `(foo …)` notation for assertion:
-        /// text children quoted, element children as `E`. Mirrors `references/.../reader.rkt`.
+        /// text children quoted, element children as `E`. Mirrors Scribble's own reader output.
         fn render(segs: &[Seg]) -> String {
             let mut parts: Vec<String> = Vec::new();
             for child in lower(segs) {
@@ -3388,7 +3451,7 @@ mod scribble {
 
         #[test]
         fn blank_line_is_two_newlines() {
-            // contract §7: a blank line surfaces as ≥2 adjacent "\n".
+            // a blank line surfaces as ≥2 adjacent "\n".
             assert_eq!(render(&[t("\n  bar\n\n  baz\n")]), r#""bar" "\n" "\n" "baz""#);
             // leading + trailing blank → "⏎","bar","⏎"
             assert_eq!(render(&[t("\n\n  bar\n\n")]), r#""\n" "bar" "\n""#);
@@ -3417,9 +3480,9 @@ mod scribble {
 }
 
 // ===============================================================================================
-// H1 — `NotaMappingMark` collection (the reader side of the Volar CodeMappings). Verifies the
-// reader records the right *source* spans + kinds; the source→generated join + capability mapping
-// lives in `oxc::nota` (tested there, where codegen is available).
+// `NotaMappingMark` collection (the reader side of the Volar code mappings). Verifies the reader
+// records the right *source* spans + kinds; the source→generated join + capability mapping lives
+// in `oxc::nota` (tested there, where codegen is available).
 // ===============================================================================================
 #[cfg(test)]
 mod mapping_collection_tests {

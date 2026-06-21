@@ -1,17 +1,19 @@
 //! Compile a `.nota` file to a JS module string and print it to stdout.
 //!
-//! The minimal CLI form of `oxc::nota::compile` — used by the cross-stream integration loop
-//! (`integration/run.mjs`) and as a demo. The proper CLI is `@nota-lang/cli` (Part 4); the proper
-//! library bridge is `@nota-lang/compiler` (Part 3, wasm/napi). This just exposes the entry.
+#![expect(clippy::exit, reason = "CLI example: exit non-zero on compile error")]
+//!
+//! The minimal CLI form of `oxc::nota::compile`, for demos and integration testing. The proper CLI
+//! is `@nota-lang/cli`; the proper library bridge is `@nota-lang/compiler` (wasm/napi). This just
+//! exposes the entry.
 //!
 //! ```sh
 //! cargo run -q -p oxc --example nota_compile --features codegen -- path/to/doc.nota
 //! ```
 //!
-//! ## `--virtual` mode (binary ↔ shim ↔ language-server contract; contract §9)
+//! ## `--virtual` mode (binary ↔ wrapper ↔ language-server JSON protocol)
 //!
-//! With `--virtual <file>` it instead calls [`oxc::nota::compile_virtual`] (the H2 type-preserving
-//! `.tsx` emit + H1 [`CodeMapping`](oxc::nota::CodeMapping)s) and prints a single JSON object to
+//! With `--virtual <file>` it instead calls [`oxc::nota::compile_virtual`] (the type-preserving
+//! `.tsx` emit + [`CodeMapping`](oxc::nota::CodeMapping)s) and prints a single JSON object to
 //! stdout:
 //!
 //! ```json
@@ -26,11 +28,12 @@
 //! cargo run -q -p oxc --example nota_compile --features codegen -- --virtual path/to/doc.nota
 //! ```
 //!
-//! The `@nota-lang/compiler` shim's `compileVirtual(source) → { code, mappings }` parses this; the
-//! language server's Volar `LanguagePlugin` prepends its runtime+ambient typing preamble to `code`
-//! and shifts every `generatedOffsets` by the preamble length (`sourceOffsets` index the `.nota`,
-//! unchanged). The JSON is hand-rolled (no `serde` dependency added to the published `oxc` crate);
-//! the only value needing escaping is `code` — everything else is integers, booleans, or `null`.
+//! The `@nota-lang/compiler` wrapper's `compileVirtual(source) → { code, mappings }` parses this;
+//! the language server's Volar `LanguagePlugin` prepends its runtime+ambient typing preamble to
+//! `code` and shifts every `generatedOffsets` by the preamble length (`sourceOffsets` index the
+//! `.nota`, unchanged). The JSON is hand-rolled (no `serde` dependency added to the published `oxc`
+//! crate); the only value needing escaping is `code` — everything else is integers, booleans, or
+//! `null`.
 #![expect(clippy::print_stdout, clippy::print_stderr)]
 
 use oxc::nota::{CodeMapping, MappingCapabilities};
@@ -58,7 +61,7 @@ fn main() {
     }
 }
 
-/// `--virtual` path: compile to the virtual `.tsx` + CodeMappings and print the contract §9 JSON.
+/// `--virtual` path: compile to the virtual `.tsx` + code mappings and print the JSON.
 fn run_virtual(source: &str) {
     match oxc::nota::compile_virtual(source) {
         Ok(compiled) => {
@@ -75,7 +78,7 @@ fn run_virtual(source: &str) {
     }
 }
 
-/// Serialize `{ code, mappings }` as the contract §9 JSON into `out`.
+/// Serialize `{ code, mappings }` as JSON into `out`.
 fn write_virtual_json(out: &mut String, code: &str, mappings: &[CodeMapping]) {
     out.push_str("{\"code\":");
     push_json_string(out, code);

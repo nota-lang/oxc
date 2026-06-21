@@ -1,13 +1,12 @@
 //! Nota compiler entry — the `nota source → { code, map }` seam.
 //!
-//! This is the single callable the Wave-3 compiler shim (`@nota-lang/compiler`, the wasm/napi
-//! wrapper) builds on, and the entry used for the cross-stream integration loop (contract §2). It
+//! This is the single callable that `@nota-lang/compiler` (the wasm/napi wrapper) builds on. It
 //! lives in the `oxc` umbrella crate because that is the only place with *both* the Nota reader
 //! (`oxc_parser`, document mode) and `oxc_codegen` available (`oxc_codegen` only dev-depends on
-//! `oxc_parser`, so the combined entry cannot live in either of them — see `NOTA_READER.md`).
+//! `oxc_parser`, so the combined entry cannot live in either of them).
 //!
 //! The runtime import (`import { h, decode, Fragment, inlineComponent, blockComponent } from
-//! "@nota-lang/runtime"`) is *not* emitted here; the shim/integrator prepends it (contract §1).
+//! "@nota-lang/runtime"`) is *not* emitted here; the wrapper prepends it.
 
 use std::path::PathBuf;
 
@@ -26,13 +25,13 @@ pub struct NotaCompiled {
 }
 
 // ===================================================================================================
-// H1 — Volar structured CodeMappings (contract §4 H1; impl.md §5.1/§5.3).
+// Volar structured code mappings.
 // ===================================================================================================
 
 /// Volar `@volar/language-core` `CodeInformation` capability flags for a mapped range.
 ///
 /// Each boolean enables a class of IDE feature for the range when the TS service result is mapped
-/// back to the `.nota` source (impl.md §5.1):
+/// back to the `.nota` source:
 /// * `completion` — autocomplete is offered when the cursor is in this range.
 /// * `format`     — the range participates in formatting/document edits.
 /// * `navigation` — go-to-definition / find-references / rename cross this range.
@@ -61,7 +60,7 @@ pub struct MappingCapabilities {
 impl MappingCapabilities {
     /// Full capabilities — for an **embedded-JS/TS** range (prop value, `@(expr)`/`@name`
     /// interpolation, `%`/`%%%` body, math interpolation, `@if`/`@for` head). Every TS feature
-    /// applies (impl.md §5.3: "full capabilities for embedded-JS ranges").
+    /// applies to embedded-JS ranges.
     #[must_use]
     pub const fn full() -> Self {
         Self {
@@ -77,8 +76,8 @@ impl MappingCapabilities {
     /// Navigation + hover only — for a **component-identifier** range (`@Aside` → `h(Aside, …)`).
     /// The TS service resolves it like any identifier reference (hover, go-to-def, find-references,
     /// rename, and the `@Unknown{}` "Cannot find name" diagnostic), but it is not a completion-,
-    /// formatting-, or structure-region (impl.md §5.3: "navigation/hover for component-identifier
-    /// ranges"). `verification` stays on so the scope error is reported at the tag.
+    /// formatting-, or structure-region. `verification` stays on so the scope error is reported at
+    /// the tag.
     #[must_use]
     pub const fn navigation_hover() -> Self {
         Self {
@@ -129,16 +128,16 @@ pub struct NotaCompiledWithMappings {
     pub code: String,
     /// The source map, if `source_map_path` was provided.
     pub map: Option<oxc_sourcemap::SourceMap>,
-    /// The Volar `CodeMapping`s (H1): source⇄generated ranges with capability flags.
+    /// The Volar `CodeMapping`s: source⇄generated ranges with capability flags.
     pub mappings: Vec<CodeMapping>,
 }
 
-/// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + CodeMappings (H2).
+/// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + code mappings.
 pub struct NotaVirtualCompiled {
     /// The emitted **virtual TypeScript** (`.tsx`) module source — TS types preserved, for the
     /// language server's TS service.
     pub code: String,
-    /// The Volar `CodeMapping`s (H1) for the virtual `.tsx`.
+    /// The Volar `CodeMapping`s for the virtual `.tsx`.
     pub mappings: Vec<CodeMapping>,
 }
 
@@ -146,17 +145,16 @@ pub struct NotaVirtualCompiled {
 ///
 /// Parses the whole file in Nota *document mode* (markup at the top level → `Doc`) and runs
 /// `oxc_codegen`. On a parse error, returns the collected diagnostics (`Err`); the reader is a pure
-/// function `String → (JS, map, diagnostics)` (impl.md §1.6).
+/// function `String → (JS, map, diagnostics)`.
 ///
 /// `source_map_path` controls whether a source map is generated (it names the source in the map);
 /// pass `None` to skip map generation (faster).
 ///
-/// **Parse mode (cross-stream note):** this build entry parses with [`SourceType::default`] (= `mjs`,
-/// plain JavaScript) for back-compatibility, so embedded **TypeScript** (e.g. `% const n: number =
-/// …`) is *not* accepted here. The H1/H2 entries [`compile_with_mappings`] and [`compile_virtual`]
-/// parse with [`SourceType::tsx`] (TS-aware). To make the build path accept embedded TS too, switch
-/// this to `SourceType::tsx()` (verified to leave the all-JS fixtures byte-identical) — an
-/// orchestrator decision, as the build emit feeds the runtime integration loop.
+/// **Parse mode:** this build entry parses with [`SourceType::default`] (= `mjs`, plain JavaScript)
+/// for back-compatibility, so embedded **TypeScript** (e.g. `% const n: number = …`) is *not*
+/// accepted here. The mapping entries [`compile_with_mappings`] and [`compile_virtual`] parse with
+/// [`SourceType::tsx`] (TS-aware). To make the build path accept embedded TS too, switch this to
+/// `SourceType::tsx()` (verified to leave the all-JS fixtures byte-identical).
 ///
 /// # Errors
 /// If the source is not well-formed Nota.
@@ -174,12 +172,12 @@ pub fn compile(
     Ok(NotaCompiled { code, map })
 }
 
-/// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s (H1).
+/// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s.
 ///
 /// The build-path companion to [`compile`] that additionally exposes the per-range source⇄generated
-/// CodeMappings the language server (Part 5 V) consumes (contract §4 H1). Parses in
-/// [`SourceType::tsx`] so embedded **TypeScript** (in `%`/`[props]`/`@(expr)`) parses; codegen
-/// preserves whatever is in the AST (it does not strip types — see [`compile_virtual`]).
+/// code mappings the language server consumes. Parses in [`SourceType::tsx`] so embedded
+/// **TypeScript** (in `%`/`[props]`/`@(expr)`) parses; codegen preserves whatever is in the AST (it
+/// does not strip types — see [`compile_virtual`]).
 ///
 /// # Errors
 /// If the source is not well-formed Nota.
@@ -199,23 +197,23 @@ pub fn compile_with_mappings(
     Ok(NotaCompiledWithMappings { code, map, mappings })
 }
 
-/// Compile a `.nota` source to the **type-preserving virtual `.tsx`** emit + CodeMappings (H2).
+/// Compile a `.nota` source to the **type-preserving virtual `.tsx`** emit + code mappings.
 ///
-/// The language-server emit (contract §4 H2; impl.md §5.3). Same parse as the build path, but:
+/// The language-server emit. Same parse as the build path, but:
 /// * parsed in [`SourceType::tsx`] so embedded TS in `%`/`[props]`/`@(expr)`/`@for` heads is in the
 ///   AST, and
 /// * codegen **preserves** those TS type annotations verbatim (it prints what is in the AST — the
 ///   reader/codegen path has *no* type-stripping step; stripping lives in `oxc_transformer`, which
 ///   the reader never invokes). The result is framed as a `.tsx` virtual file for the TS service.
 ///
-/// Returns the virtual code + the H1 [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
+/// Returns the virtual code + the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
 ///
-/// **For the Volar `LanguagePlugin` (Part 5 V):** like the build path, the runtime `import { h,
-/// decode, Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Math`
-/// declarations are *not* emitted here (contract §1) — the plugin prepends that typing preamble to
-/// the virtual `.tsx` so `h`/`decode`/component refs type-check (impl.md §5.2). When it does, it must
-/// shift every mapping's `generated_offsets` by the prepended prefix length (the `source_offsets`
-/// are unchanged — they index the `.nota`).
+/// **For the Volar `LanguagePlugin`:** like the build path, the runtime `import { h, decode,
+/// Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Math`
+/// declarations are *not* emitted here — the plugin prepends that typing preamble to the virtual
+/// `.tsx` so `h`/`decode`/component refs type-check. When it does, it must shift every mapping's
+/// `generated_offsets` by the prepended prefix length (the `source_offsets` are unchanged — they
+/// index the `.nota`).
 ///
 /// # Errors
 /// If the source is not well-formed Nota.
@@ -224,8 +222,8 @@ pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<Oxc
     let (program, marks) = Parser::new(&allocator, source_text, SourceType::tsx())
         .parse_nota_document_collecting_mappings()?;
 
-    // No sourcemap path: the virtual emit ships CodeMappings (H1), not a flat sourcemap. Codegen
-    // prints TS annotations verbatim, so the emit is the type-preserving `.tsx` (H2).
+    // No sourcemap path: the virtual emit ships code mappings, not a flat sourcemap. Codegen
+    // prints TS annotations verbatim, so the emit is the type-preserving `.tsx`.
     let CodegenReturn { code, nota_offset_log, .. } =
         Codegen::new().with_nota_offset_log().build(&program);
 
@@ -276,7 +274,7 @@ fn build_code_mappings(
         })
         .collect();
 
-    // A leaf segment is valid iff its source slice and generated slice are byte-identical (the H1
+    // A leaf segment is valid iff its source slice and generated slice are byte-identical (the
     // verbatim-splice premise). Guards against host-tag string reinterpretation and out-of-range.
     let byte_exact = |src_start: u32, src_end: u32, gen_start: u32| -> bool {
         let (ss, se, gs) = (src_start as usize, src_end as usize, gen_start as usize);
@@ -347,9 +345,13 @@ mod tests {
 }
 
 // ===============================================================================================
-// H1 (CodeMappings) + H2 (type-preserving virtual emit) tests.
+// Code-mapping + type-preserving virtual emit tests.
 // ===============================================================================================
 #[cfg(test)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test fixtures: substring offsets/lengths fit in u32 (oxc's Span model)"
+)]
 mod h1_h2 {
     use super::{CodeMapping, MappingCapabilities, compile_virtual, compile_with_mappings};
 
@@ -357,10 +359,7 @@ mod h1_h2 {
     #[track_caller]
     fn offset_of(hay: &str, needle: &str) -> u32 {
         let i = hay.find(needle).unwrap_or_else(|| panic!("{needle:?} not found in {hay:?}"));
-        assert!(
-            hay[i + needle.len()..].find(needle).is_none(),
-            "{needle:?} is not unique in {hay:?}"
-        );
+        assert!(!hay[i + needle.len()..].contains(needle), "{needle:?} is not unique in {hay:?}");
         u32::try_from(i).unwrap()
     }
 
@@ -385,11 +384,11 @@ mod h1_h2 {
 
     /// Is `src_off` covered by *any* mapping segment?
     fn is_mapped(mappings: &[CodeMapping], src_off: u32) -> bool {
-        mappings.iter().any(|m| m.source_offsets.iter().any(|&o| o == src_off))
+        mappings.iter().any(|m| m.source_offsets.contains(&src_off))
     }
 
     /// Every mapping segment must round-trip byte-for-byte: the source slice equals the generated
-    /// slice (the H1 invariant — leaves are spliced verbatim, contract §4 H1 / impl.md §1.6).
+    /// slice (the core invariant — leaves are spliced verbatim).
     #[track_caller]
     fn assert_segments_byte_exact(src: &str, code: &str, mappings: &[CodeMapping]) {
         for m in mappings {
@@ -410,11 +409,11 @@ mod h1_h2 {
     #[test]
     fn embedded_js_in_percent_statement_maps_with_full_caps() {
         // A `%` statement with embedded TS: the identifiers `n` and `count` are byte-exact leaves
-        // with full caps; the TS annotation `: number` survives in the emit (H2).
+        // with full caps; the TS annotation `: number` survives in the emit.
         let src = "% const n: number = count();\n@p{hi}\n";
         let out = compile_with_mappings(src, None).expect("compiles");
 
-        // The TS type annotation is preserved (codegen does not strip — see compile_virtual / H2).
+        // The TS type annotation is preserved (codegen does not strip — see compile_virtual).
         assert!(out.code.contains(": number"), "type annotation preserved:\n{}", out.code);
 
         // `count` (a unique identifier) maps to its emitted location with full capabilities.
@@ -469,7 +468,7 @@ mod h1_h2 {
 
         // The host tag name `p` in the source is not mapped (its source offset 1).
         let p_src = 1u32; // `@p` → the `p`
-        assert_eq!(&src[p_src as usize..p_src as usize + 1], "p");
+        assert_eq!(&src[p_src as usize..=p_src as usize], "p");
         assert!(!is_mapped(&out.mappings, p_src), "host tag `p` must be unmapped");
 
         // The only mapped source offset is the embedded `x`.
@@ -483,7 +482,7 @@ mod h1_h2 {
 
     #[test]
     fn virtual_emit_preserves_ts_annotation_and_frames_tsx() {
-        // H2: the virtual emit keeps the TS type annotation `: number` (no strip step) and the
+        // The virtual emit keeps the TS type annotation `: number` (no strip step) and the
         // `@for` head `as` cast, ready for the language server's `.tsx` TS service.
         let src = "% const n: number = count();\n@for (x of xs as string[]) {@x}\n";
         let out = compile_virtual(src).expect("compiles");
@@ -499,8 +498,8 @@ mod h1_h2 {
 
     #[test]
     fn round_trip_source_offset_inside_embedded_js() {
-        // The headline H1 invariant (contract §5.8 layer 1 / §4 H1): a source offset *inside* an
-        // embedded-JS span maps to the correct generated offset, and back.
+        // The headline invariant: a source offset *inside* an embedded-JS span maps to the correct
+        // generated offset, and back.
         let src = "@p[onClick: () => go()]{hi}\n";
         let out = compile_with_mappings(src, None).expect("compiles");
 
@@ -515,7 +514,7 @@ mod h1_h2 {
     #[test]
     fn build_and_virtual_share_mappings_modulo_code() {
         // Same parse, two tails: `compile_with_mappings` (build) and `compile_virtual` (.tsx)
-        // produce the same mapping structure over the same source ranges (H2 "same parse").
+        // produce the same mapping structure over the same source ranges.
         let src = "@p[id: theId]{@(user)}\n";
         let build = compile_with_mappings(src, None).expect("compiles");
         let virt = compile_virtual(src).expect("compiles");
@@ -527,16 +526,16 @@ mod h1_h2 {
         assert_eq!(build_srcs, virt_srcs, "same source ranges mapped in both emits");
     }
 
-    /// The contract §2 canonical golden, exercised through H1: the F1 component binding, the
-    /// `@Colorized` tag reference, the `@for` iterable + binding, the `@x`/`@children` interps —
-    /// all map byte-exactly, with the right capabilities, and no boilerplate leaks in.
+    /// The canonical golden, exercising the code mappings: the component binding, the `@Colorized`
+    /// tag reference, the `@for` iterable + binding, the `@x`/`@children` interps — all map
+    /// byte-exactly, with the right capabilities, and no boilerplate leaks in.
     const CANONICAL_NOTA: &str = "%let Colorized = inlineComponent((children) => {\n  let [color, setColor] = useState(\"red\");\n  return @span[onClick: () => setColor(\"green\")][style: {color}]{@children};\n})\n\n@for (x of items) {\n  - @Colorized{@x}\n}\n";
 
     #[test]
     fn canonical_golden_mappings_are_byte_exact() {
         let out = compile_with_mappings(CANONICAL_NOTA, None).expect("compiles");
 
-        // Every segment round-trips byte-for-byte (the core H1 invariant).
+        // Every segment round-trips byte-for-byte (the core invariant).
         assert_segments_byte_exact(CANONICAL_NOTA, &out.code, &out.mappings);
 
         // The `@Colorized{…}` tag reference (in the `@for` body) maps as a component identifier.
@@ -553,7 +552,7 @@ mod h1_h2 {
         assert_eq!(&out.code[gi as usize..gi as usize + 5], "items");
         assert_eq!(capsi, MappingCapabilities::full());
 
-        // The F1 `%let` binding name `Colorized` (its *declaration*, the 1st occurrence) is part of
+        // The `%let` binding name `Colorized` (its *declaration*, the 1st occurrence) is part of
         // the hoisted statement → embedded JS, full caps.
         let colorized_decl = offset_of(CANONICAL_NOTA, "Colorized = ") as usize; // unique form
         let (gd, _, capsd) = segment_at(&out.mappings, colorized_decl as u32);

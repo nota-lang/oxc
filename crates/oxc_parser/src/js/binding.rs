@@ -14,7 +14,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.context_add(Context::In, |p| p.parse_initializer(span, pattern))
     }
 
-    pub(super) fn parse_binding_pattern(&mut self) -> BindingPattern<'a> {
+    pub(crate) fn parse_binding_pattern(&mut self) -> BindingPattern<'a> {
         self.parse_binding_pattern_kind()
     }
 

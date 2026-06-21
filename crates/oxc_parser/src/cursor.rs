@@ -119,17 +119,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = self.lexer.next_markup_text();
     }
 
-    /// Assert the current token is `kind`, then re-lex the *next* token as Nota markup body text.
-    ///
-    /// The Nota analog of [`Self::expect_jsx_child`]: used when a markup-body delimiter (a closing
-    /// `}` of a nested element, or a head delimiter) must be followed by literal body text, so the
-    /// lexer resumes in markup mode rather than lexing the following characters as JS. (Whitespace
-    /// after the delimiter is significant in markup, so we must not let the JS lexer skip it.)
-    pub(crate) fn expect_markup_text(&mut self, kind: Kind) {
-        self.expect_without_advance(kind);
-        self.advance_for_markup_text();
-    }
-
     /// Reposition the lexer to byte `offset` and lex the token there (Nota reader).
     ///
     /// Used after a raw markup-text scan to resume normal JS lexing at a known offset — e.g. the

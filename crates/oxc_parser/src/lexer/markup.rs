@@ -7,12 +7,11 @@
 //!
 //! A markup-body text run is returned as a dedicated [`Kind::MarkupText`] token whose value is the
 //! *raw source slice* (the parser reads it via `token_source`, never `cur_string`): escape and
-//! whitespace processing (the Scribble algorithm, notation.md §Whitespace) is owned by the Nota
-//! parser layer (`js/nota.rs`), which keeps embedded spans byte-identical (the §1.6 span-fidelity
-//! invariant). The run ends *at* (does not consume) the first markup-significant byte (`}`, `@`, or
-//! `{`); those are left for the parser to lex normally, so the parser can track brace depth (a
-//! balanced `{…}` inside a body is literal text — Scribble `@foo{f{o}o}` → `"f{o}o"`) and recurse
-//! into `@`-forms.
+//! whitespace processing (the Scribble algorithm) is owned by the Nota parser layer
+//! (the `nota` module), which keeps embedded spans byte-identical with the source. The run ends *at*
+//! (does not consume) the first markup-significant byte (`}`, `@`, or `{`); those are left for the
+//! parser to lex normally, so the parser can track brace depth (a balanced `{…}` inside a body is
+//! literal text — Scribble `@foo{f{o}o}` → `"f{o}o"`) and recurse into `@`-forms.
 
 use super::{
     Kind, Lexer, Token,
@@ -25,7 +24,7 @@ use crate::config::LexerConfig as Config;
 /// lists, and apply the Scribble per-line whitespace algorithm), `*`/`_` (the emphasis sigils — the
 /// parser applies the Typst word-boundary rule to decide marker-vs-literal), `\` (the general
 /// backslash escape — the parser consumes `\<c>` and emits `<c>` literally, the `\` dropped), and the
-/// Phase-F raw-span openers `` ` `` (inline/fenced code), `$` (math), and `|` (the `|{ … }|` verbatim
+/// raw-span openers `` ` `` (inline/fenced code), `$` (math), and `|` (the `|{ … }|` verbatim
 /// body). All are left *unconsumed* for the parser to handle.
 static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b == b'}'
     || b == b'@'

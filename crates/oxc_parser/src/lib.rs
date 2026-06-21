@@ -76,6 +76,7 @@ mod state;
 
 mod js;
 mod jsx;
+mod nota;
 mod ts;
 
 mod diagnostics;
@@ -96,8 +97,8 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
-pub use crate::js::nota_mapping::{NotaMappingKind, NotaMappingMark};
 pub use crate::lexer::{Kind, Token};
+pub use crate::nota::mapping::{NotaMappingKind, NotaMappingMark};
 use crate::{
     config::{
         LexerConfig, NoTokensParserConfig, ParserConfig, RuntimeParserConfig, TokensParserConfig,
@@ -442,12 +443,12 @@ mod parser_parse {
             }
         }
 
-        /// Parse a single Nota `@`-markup expression (Phase-A spike entry / test hook).
+        /// Parse a single Nota `@`-markup expression.
         ///
         /// Parses the source as ONE Nota element (e.g. `@p{Hello}`) and returns the lowered oxc
         /// JS [`Expression`] — a `CallExpression` such as `h("p", {}, ["Hello"])`. This is the
-        /// minimal "markup in expression position" entry; the real whole-file document mode is a
-        /// later phase. Generic over config (monomorphizes per caller), as it is test-facing.
+        /// "markup in expression position" entry; whole-file document mode is
+        /// [`Parser::parse_nota_document`]. Generic over config (monomorphizes per caller).
         ///
         /// # Errors
         /// If the source is not a well-formed Nota expression.
@@ -463,14 +464,14 @@ mod parser_parse {
             .parse_nota_expression()
         }
 
-        /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`] (contract §2 stage-3).
+        /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
         ///
         /// The file is markup at the top level; this returns the lowered module:
         /// `export default function Doc() { …prelude…; return decode(Fragment(...siblings)); }` plus
-        /// hoisted `import`/`export` and F1 component bindings. The runtime `import { h, decode,
+        /// hoisted `import`/`export` and component bindings. The runtime `import { h, decode,
         /// Fragment, inlineComponent, blockComponent } from "@nota-lang/runtime"` is injected by the
-        /// compiler shim (Part 3), not here. Use [`Parser::parse_nota_expression`] for the bulk
-        /// expression-mode fixtures (contract §3).
+        /// caller, not here. Use [`Parser::parse_nota_expression`] to parse a single
+        /// expression-position markup element instead.
         ///
         /// # Errors
         /// If the file is not well-formed Nota.
@@ -486,15 +487,14 @@ mod parser_parse {
             .parse_nota_document()
         }
 
-        /// Parse a whole `.nota` file in document mode AND collect Volar `CodeMapping` marks (H1).
+        /// Parse a whole `.nota` file in document mode AND collect Volar `CodeMapping` marks.
         ///
         /// Identical lowering to [`Parser::parse_nota_document`], but additionally returns the flat
         /// list of [`NotaMappingMark`]s — the *source* spans of embedded-JS regions (prop values,
         /// `@(expr)`/`@name` interpolation, `%`/`%%%` bodies, math interpolation, `@if`/`@for` heads)
-        /// and component-tag identifiers, each tagged with its [`NotaMappingKind`]. The
-        /// `@nota-lang/compiler` shim / language server pairs each mark's source offset with the
-        /// generated offset (codegen's offset log) to build the structured `CodeMapping`s the Volar
-        /// `LanguagePlugin` consumes (contract §4 H1; impl.md §5.1/§5.3). Parse with
+        /// and component-tag identifiers, each tagged with its [`NotaMappingKind`]. The language
+        /// server pairs each mark's source offset with the generated offset (codegen's offset log)
+        /// to build the structured `CodeMapping`s the Volar `LanguagePlugin` consumes. Parse with
         /// [`SourceType::tsx`] so embedded TS in the marks type-checks in the virtual `.tsx`.
         ///
         /// # Errors
@@ -702,19 +702,19 @@ struct ParserImpl<'a, C: ParserConfig> {
     is_ts: bool,
 
     /// `true` while parsing Nota `@`-markup. When set, `Kind::At` in expression position is a
-    /// Nota markup sigil (routed to `parse_nota`), NOT a JS/TS decorator. See `js/nota.rs` and
-    /// the `@` arm of `parse_primary_expression`. (Nota's `@` and the decorator `@` are
-    /// disambiguated purely by this parser-owned flag — D3: markup state lives in the parser.)
+    /// Nota markup sigil (routed to `parse_nota`), NOT a JS/TS decorator. See `nota/mod.rs` and
+    /// the `@` arm of `parse_primary_expression`. Nota's `@` and the decorator `@` are
+    /// disambiguated purely by this parser-owned flag.
     nota_markup: bool,
 
-    /// `true` while parsing a `.nota` document for the **language-server** path (H1): collect
+    /// `true` while parsing a `.nota` document for the language-server path: collect
     /// [`NotaMappingMark`]s for embedded-JS regions and component tags into `nota_mappings`. Off by
-    /// default so the build / expression entries stay allocation-free. See `js/nota_mapping.rs`.
+    /// default so the build / expression entries stay allocation-free. See `nota/mapping.rs`.
     nota_collect_mappings: bool,
 
-    /// The Nota source→generated mapping marks accumulated when `nota_collect_mappings` is on
-    /// (H1). Each mark is a *source* span + kind; the generated offset is paired downstream by the
-    /// `oxc::nota` compile entry against codegen's byte-offset log.
+    /// The Nota source→generated mapping marks accumulated when `nota_collect_mappings` is on.
+    /// Each mark is a *source* span + kind; the generated offset is paired downstream against
+    /// codegen's byte-offset log.
     nota_mappings: Vec<NotaMappingMark>,
 }
 

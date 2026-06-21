@@ -238,7 +238,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Expression::RegExpLiteral(self.alloc(literal))
             }
             // `@` is overloaded: a Nota markup sigil in Nota markup mode, otherwise a JS/TS
-            // decorator. Disambiguated solely by the parser-owned `nota_markup` flag (D3). In
+            // decorator. Disambiguated solely by the parser-owned `nota_markup` flag. In
             // expression position the form is not a body child (`in_body = false`).
             Kind::At if self.nota_markup => self.parse_nota_form(false),
             Kind::At => self.parse_decorated_expression(),
