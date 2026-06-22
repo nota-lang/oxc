@@ -39,6 +39,7 @@ use crate::{
     nota::mapping::{NotaMappingKind, NotaMappingMark},
 };
 
+mod lower;
 pub mod mapping;
 
 /// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
