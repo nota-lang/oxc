@@ -1,20 +1,25 @@
-//! Nota `@`-markup → oxc JS AST (the *reader*).
+//! Nota `@`-markup → a faithful Nota AST (the *reader*).
 //!
-//! Nota is a document language whose `@`-markup lowers to hyperscript `h(...)` / `Fragment(...)` /
-//! `decode(...)` call expressions. Lowering happens *at parse time*: this module builds the oxc
-//! [`Expression`] AST (`CallExpression`) directly while parsing, with no intermediate Nota
-//! AST/CST. It introduces *zero* new oxc AST nodes — an `@`-form is an ordinary `CallExpression` —
-//! and all markup state lives in the parser (the `nota_markup` flag).
+//! Nota is a document language whose `@`-markup ultimately lowers to hyperscript `h(...)` /
+//! `Fragment(...)` / `decode(...)` calls — but that lowering is **deferred**. This module is the
+//! *reader*: it parses `@`-markup into the faithful Nota AST nodes ([`NotaMarkup`] & friends, in
+//! `oxc_ast::ast::nota`), leaving every `@`-form in place as `Expression::NotaMarkup` and a whole
+//! `.nota` file as a single `NotaMarkupKind::Document` statement. The hyperscript lowering runs
+//! *separately*, as an [`oxc_ast_visit::VisitMut`] pass in `oxc_transformer` (`nota::NotaLowering`) —
+//! the deferred-pass analog of how `oxc_transformer` lowers JSX. All markup *lexing* state still
+//! lives in the parser (the `nota_markup` flag + the markup-text re-lex seam).
 //!
 //! Layering (this file):
-//! * **Element core**: host/component/dynamic tags, `[props]` (string→attr, expr→`{…}`,
+//! * **Element core**: host/component/dynamic tags, `[props]` (string attr, `{…}` expr value,
 //!   shorthand, spread, markup-valued), bodies (recursive nesting), `@{…}` fragments,
 //!   `@name`/`@(expr)` interpolation. Embedded JS (prop values, `@(expr)` heads) delegates to
-//!   oxc's expression parser via the re-lex seam.
-//! * **Document mode + whitespace**: a whole file → `export default function Doc()`; the
-//!   Scribble whitespace algorithm; colon/block sugar; `%`/`%%%` statements + module hoisting +
-//!   component bindings (`inlineComponent`/`blockComponent` hoist+export+name) + `await`→`async`.
-//!   Wraps returned markup in `decode(...)`.
+//!   oxc's expression parser via the re-lex seam, and is stored verbatim in the Nota nodes.
+//! * **Document mode + raw text**: a whole file → a `NotaDocument`. Body text is collected as raw
+//!   `NotaText` runs (whitespace is *not* processed here — the Scribble whitespace algorithm runs
+//!   later, in the lowering pass). Colon/block sugar is desugared to faithful nodes; `%`/`%%%`
+//!   statements and `@`-markup are kept as faithful nodes for the lowering pass to route (module
+//!   hoisting, `inlineComponent`/`blockComponent` bindings, `await`→`async`, and the `decode(...)`
+//!   wrap all happen there, not here).
 //!
 //! The re-lex seam (`advance_for_markup_text`) mirrors JSX's `advance_for_jsx_child`: after a markup
 //! delimiter we resume lexing in *markup-text* mode so significant whitespace is not skipped by the
@@ -28,40 +33,13 @@
 )]
 
 use oxc_allocator::Vec as ArenaVec;
-use oxc_ast::{NONE, ast::*};
+use oxc_ast::ast::*;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use crate::{
-    ParserConfig as Config, ParserImpl, diagnostics,
-    error_handler::FatalError,
-    lexer::Kind,
-    nota::mapping::{NotaMappingKind, NotaMappingMark},
+    ParserConfig as Config, ParserImpl, diagnostics, error_handler::FatalError, lexer::Kind,
 };
-
-mod lower;
-pub mod mapping;
-
-/// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
-const H: &str = "h";
-const FRAGMENT: &str = "Fragment";
-const DECODE: &str = "decode";
-/// The fresh component-cased binding for a dynamic-tag IIFE (`@(getTag()){…}`).
-const DYNAMIC_TAG_BINDING: &str = "_Tag";
-/// The fresh map-index parameter the reader injects as the `@for` body's `Fragment` key. Named
-/// to avoid colliding with author bindings (an author `_i` would shadow it, but the key still binds
-/// to the innermost — acceptable; this exact name is fixed by the emit format).
-const FOR_KEY_PARAM: &str = "_i";
-/// The default-export document component name.
-const DOC: &str = "Doc";
-/// The component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
-const INLINE_COMPONENT: &str = "inlineComponent";
-const BLOCK_COMPONENT: &str = "blockComponent";
-/// Ambient-prelude tags for code/math spans (referenced as identifiers — the caller
-/// prepends their bindings; the reader emits no import, exactly like a component tag).
-const CODE_INLINE: &str = "CodeInline";
-const CODE_BLOCK: &str = "CodeBlock";
-const MATH: &str = "Math";
 
 /// One piece of an element body, collected during the body-segment loop, *before* the Scribble
 /// whitespace pass turns it into the final child expressions.
@@ -114,21 +92,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.nota_markup = true;
         self.bump_any(); // prime `token` onto the first token
         let markup = self.parse_nota_form(false);
-        let expr = self.lower_markup(markup);
+        let expr = Expression::NotaMarkup(self.ast.alloc(markup));
         self.finish_nota(expr)
     }
 
-    /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
+    /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`] holding the **un-lowered**
+    /// Nota document.
     ///
-    /// The file is markup at the top level. We set `nota_markup`, parse the file as a sequence of
-    /// markup siblings (the body of an implicit fragment), and emit a module:
+    /// The file is markup at the top level. The document is emitted as a single
+    /// `Expression::NotaMarkup(NotaMarkupKind::Document(..))` statement; the separate lowering pass
+    /// ([`NotaLowering`](oxc_ast::ast::NotaMarkup)) turns it into the runtime module:
     /// ```js
-    /// import { ... } from "@nota-lang/runtime";   // (imports added by the caller, not here)
     /// <hoisted import/export + component bindings>
     /// export default function Doc() { <top-level % prelude>; return decode(Fragment(...siblings)); }
     /// ```
-    /// Top-level `%`/`%%%` statements prepend into `Doc` (no IIFE); `import`/`export` and component
-    /// bindings hoist to module scope. `await` makes `Doc` async.
     ///
     /// # Errors
     /// If the file is not well-formed Nota.
@@ -137,48 +114,31 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // Do NOT prime with a JS `bump_any` here: the file starts as markup (or a `%` line), and a
         // leading `\`/`%`/etc. would make the JS lexer choke. `parse_document_body` seeks the lexer
         // into the right mode (markup, or a statement) from offset 0 itself.
-        // The whole file is the body of an implicit fragment; parse to EOF.
         let document = self.parse_document_body();
-        let program = self.lower_document(document);
+        let program = self.wrap_document_program(document);
         match self.finish_nota(()) {
             Ok(()) => Ok(program),
             Err(errors) => Err(errors),
         }
     }
 
-    /// Parse a `.nota` file in document mode AND collect Volar `CodeMapping` marks.
-    ///
-    /// Same lowering as [`Self::parse_nota_document`] with `nota_collect_mappings` on, so the
-    /// embedded-JS splice sites and component tags push [`NotaMappingMark`]s into `nota_mappings`.
-    /// Returns the lowered `Program` plus the (source-ordered) marks; the generated offsets are
-    /// paired downstream against codegen's offset log.
-    pub(crate) fn parse_nota_document_collecting_mappings(
-        mut self,
-    ) -> Result<(Program<'a>, Vec<NotaMappingMark>), Vec<OxcDiagnostic>> {
-        self.nota_markup = true;
-        self.nota_collect_mappings = true;
-        let document = self.parse_document_body();
-        let program = self.lower_document(document);
-        // Take the marks out before `finish_nota` consumes `self`.
-        let mut marks = std::mem::take(&mut self.nota_mappings);
-        // Source-order the marks (the parse visits children before some siblings; downstream Volar
-        // wants ascending source offsets for a stable binary search).
-        marks.sort_by_key(|m| (m.span.start, m.span.end));
-        match self.finish_nota(()) {
-            Ok(()) => Ok((program, marks)),
-            Err(errors) => Err(errors),
-        }
-    }
-
-    /// Record a Nota source→generated mapping mark, iff mapping collection is enabled.
-    ///
-    /// A no-op (and zero-cost) on the build / expression entries (`nota_collect_mappings == false`).
-    /// Empty spans are dropped — they carry no source and would alias generated boilerplate.
-    #[inline]
-    pub(crate) fn record_nota_mapping(&mut self, span: Span, kind: NotaMappingKind) {
-        if self.nota_collect_mappings && !span.is_empty() {
-            self.nota_mappings.push(NotaMappingMark::new(span, kind));
-        }
+    /// Wrap a parsed [`NotaDocument`] into a `Program` carrying it as a single
+    /// `Expression::NotaMarkup(Document)` statement — the un-lowered reader output the lowering pass
+    /// consumes.
+    fn wrap_document_program(&self, document: NotaDocument<'a>) -> Program<'a> {
+        let span = document.span;
+        let markup = self.ast.nota_markup(span, NotaMarkupKind::Document(self.ast.alloc(document)));
+        let expr = Expression::NotaMarkup(self.ast.alloc(markup));
+        let stmt = self.ast.statement_expression(span, expr);
+        self.ast.program(
+            span,
+            SourceType::default().with_module(true),
+            self.source_text,
+            self.ast.vec(),
+            None,
+            self.ast.vec(),
+            self.ast.vec1(stmt),
+        )
     }
 
     /// Shared finalize for the Nota entries: collect fatal/lexer/parser diagnostics.
@@ -447,10 +407,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Materialize collected body items into the faithful child list (raw — the Scribble whitespace
     /// pass runs at lowering time). Text runs become [`NotaText`] children (spans are not tracked for
     /// literal text — it is never a navigation target).
-    fn body_items_to_children(
-        &self,
-        items: Vec<BodyItem<'a>>,
-    ) -> ArenaVec<'a, NotaChild<'a>> {
+    fn body_items_to_children(&self, items: Vec<BodyItem<'a>>) -> ArenaVec<'a, NotaChild<'a>> {
         let mut out = self.ast.vec_with_capacity(items.len());
         for item in items {
             out.push(match item {
@@ -475,8 +432,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 self.collect_fence_statements(content, items)
             } else {
                 self.nota_seek_to(content);
-                let stmt = self
-                    .parse_statement_list_item(crate::context::StatementContext::StatementList);
+                let stmt =
+                    self.parse_statement_list_item(crate::context::StatementContext::StatementList);
                 let e = self.prev_token_end;
                 self.push_statement(items, stmt);
                 e
@@ -559,7 +516,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             if *depth == 0 && self.list_marker_at(next_line).is_some() {
                                 let (els, resume) = self.parse_list(next_line);
                                 for e in els {
-                                    items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
+                                    items.push(BodyItem::Child(NotaChild::ListItem(
+                                        self.ast.alloc(e),
+                                    )));
                                 }
                                 self.nota_seek_markup(resume);
                                 continue;
@@ -567,7 +526,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             if *depth == 0
                                 && let Some((heading, h_end)) = self.try_heading(next_line)
                             {
-                                items.push(BodyItem::Child(NotaChild::Heading(self.ast.alloc(heading))));
+                                items.push(BodyItem::Child(NotaChild::Heading(
+                                    self.ast.alloc(heading),
+                                )));
                                 self.nota_seek_markup(h_end);
                                 continue;
                             }
@@ -736,111 +697,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     // ===========================================================================================
-    // AST builders
-    // ===========================================================================================
-
-    /// `h(tag, { props }, [children])`.
-    fn build_h(
-        &self,
-        span: Span,
-        tag: Expression<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), H);
-        let props_obj = ast.expression_object(Span::empty(span.start), props);
-        let children_arr = self.children_array(span, children);
-        let mut arguments = ast.vec_with_capacity(3);
-        arguments.push(Argument::from(tag));
-        arguments.push(Argument::from(props_obj));
-        arguments.push(Argument::from(children_arr));
-        ast.expression_call(span, callee, NONE, arguments, false)
-    }
-
-    /// `Fragment(...children)` — variadic call (no props, no array wrap).
-    fn build_fragment(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
-        let mut arguments = ast.vec_with_capacity(children.len());
-        for child in children {
-            arguments.push(Argument::from(child));
-        }
-        ast.expression_call(span, callee, NONE, arguments, false)
-    }
-
-    /// `[children]` array-expression for the third `h(...)` argument.
-    fn children_array(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
-        let ast = self.ast;
-        let mut elements = ast.vec_with_capacity(children.len());
-        for child in children {
-            elements.push(ArrayExpressionElement::from(child));
-        }
-        ast.expression_array(Span::empty(span.end), elements)
-    }
-
-    /// `(() => { const _Tag = <expr>; return h(_Tag, { props }, [children]); })()` — dynamic tag.
-    fn build_dynamic_iife(
-        &self,
-        span: Span,
-        tag_expr: Expression<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(span.start);
-
-        // `const _Tag = <expr>;`
-        let binding = ast.binding_pattern_binding_identifier(empty, DYNAMIC_TAG_BINDING);
-        let declarator = ast.variable_declarator(
-            empty,
-            VariableDeclarationKind::Const,
-            binding,
-            NONE,
-            Some(tag_expr),
-            false,
-        );
-        let decl = ast.declaration_variable(
-            empty,
-            VariableDeclarationKind::Const,
-            ast.vec1(declarator),
-            false,
-        );
-        let const_stmt = Statement::from(decl);
-
-        // `return h(_Tag, { props }, [children]);`
-        let tag_ref = ast.expression_identifier(empty, DYNAMIC_TAG_BINDING);
-        let h_call = self.build_h(span, tag_ref, props, children);
-        let return_stmt = ast.statement_return(empty, Some(h_call));
-
-        // `() => { … }`
-        let body = ast.function_body(empty, ast.vec(), {
-            let mut stmts = ast.vec_with_capacity(2);
-            stmts.push(const_stmt);
-            stmts.push(return_stmt);
-            stmts
-        });
-        let arrow = ast.expression_arrow_function(
-            empty,
-            false, // not an expression body
-            false, // not async
-            NONE,
-            ast.formal_parameters(
-                empty,
-                FormalParameterKind::ArrowFormalParameters,
-                ast.vec(),
-                NONE,
-            ),
-            NONE,
-            body,
-        );
-
-        // `(<arrow>)()`
-
-        ast.expression_call(span, arrow, NONE, ast.vec(), false)
-    }
-
-    // ===========================================================================================
     // Document mode + statements + colon sugar — implemented in the impl block further down.
     // ===========================================================================================
 
@@ -956,105 +812,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // Resume the outer context past the body's `}`.
         self.resume_after_control(body_end, in_body);
         self.ast.nota_for(span, bind, iter, body)
-    }
-
-    /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))`.
-    fn build_for_map(
-        &self,
-        span: Span,
-        bind: BindingPattern<'a>,
-        iter: Expression<'a>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(span.start);
-
-        // The arrow's wrapping `Fragment({ key: _i }, ...children)`.
-        let key_props = {
-            let key_name = ast.expression_identifier(empty, FOR_KEY_PARAM);
-            let key = PropertyKey::StaticIdentifier(ast.alloc_identifier_name(empty, "key"));
-            let prop = ast.alloc_object_property(
-                empty,
-                PropertyKind::Init,
-                key,
-                key_name,
-                false,
-                false,
-                false,
-            );
-            ast.vec1(ObjectPropertyKind::ObjectProperty(prop))
-        };
-        let fragment = self.build_keyed_fragment(span, key_props, children);
-
-        // `(bind, _i) => Fragment(...)`.
-        let mut params = ast.vec_with_capacity(2);
-        params.push(ast.formal_parameter(
-            empty,
-            ast.vec(),
-            bind,
-            NONE,
-            NONE,
-            false,
-            None,
-            false,
-            false,
-        ));
-        let index_pat = ast.binding_pattern_binding_identifier(empty, FOR_KEY_PARAM);
-        params.push(ast.formal_parameter(
-            empty,
-            ast.vec(),
-            index_pat,
-            NONE,
-            NONE,
-            false,
-            None,
-            false,
-            false,
-        ));
-        let body = ast.function_body(
-            empty,
-            ast.vec(),
-            ast.vec1(ast.statement_expression(empty, fragment)),
-        );
-        let arrow = ast.expression_arrow_function(
-            empty,
-            true, // expression body
-            false,
-            NONE,
-            ast.formal_parameters(empty, FormalParameterKind::ArrowFormalParameters, params, NONE),
-            NONE,
-            body,
-        );
-
-        // `iter.map(<arrow>)`.
-        let map_member = Expression::StaticMemberExpression(ast.alloc_static_member_expression(
-            empty,
-            iter,
-            ast.identifier_name(empty, "map"),
-            false,
-        ));
-        let mut args = ast.vec_with_capacity(1);
-        args.push(Argument::from(arrow));
-        ast.expression_call(span, map_member, NONE, args, false)
-    }
-
-    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg
-    /// (`Fragment(props?, ...children)`; the `key` is the list-reconciliation mechanism).
-    fn build_keyed_fragment(
-        &self,
-        span: Span,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
-        let props_obj = ast.expression_object(Span::empty(span.start), props);
-        let mut arguments = ast.vec_with_capacity(children.len() + 1);
-        arguments.push(Argument::from(props_obj));
-        for child in children {
-            arguments.push(Argument::from(child));
-        }
-        ast.expression_call(span, callee, NONE, arguments, false)
     }
 
     /// Parse an `@if`/`else if`/`else` branch body `{ … }` and wrap it in `Fragment(...children)`
@@ -1253,11 +1010,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let mut body: Vec<BodyItem<'a>> = Vec::new();
             self.collect_markup_range(open + 1, close, 0, &mut body);
             let children = self.body_items_to_children(body);
-            let marker = if marker == b'*' {
-                NotaEmphasisMarker::Strong
-            } else {
-                NotaEmphasisMarker::Em
-            };
+            let marker =
+                if marker == b'*' { NotaEmphasisMarker::Strong } else { NotaEmphasisMarker::Em };
             let span = Span::new(open, close + 1);
             let element = self.ast.nota_emphasis(span, marker, children);
             items.push(BodyItem::Child(NotaChild::Emphasis(self.ast.alloc(element))));
@@ -1675,7 +1429,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             if next_line < end && self.list_marker_at(next_line).is_some() {
                                 let (els, resume) = self.parse_list(next_line);
                                 for e in els {
-                                    items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
+                                    items.push(BodyItem::Child(NotaChild::ListItem(
+                                        self.ast.alloc(e),
+                                    )));
                                 }
                                 if resume >= end {
                                     break;
@@ -1778,109 +1534,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn alloc_char(&self, c: char) -> &'a str {
         let mut buf = [0u8; 4];
         self.ast.allocator.alloc_str(c.encode_utf8(&mut buf))
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // `String.raw` tagged-template builders.
-    // ------------------------------------------------------------------------------------------
-
-    /// `String.raw\`<raw>\`` — a tagged template over a single raw quasi (no substitutions). Used for
-    /// inline/fenced code, verbatim raw runs, and substitution-free math.
-    fn build_string_raw(&self, span: Span, raw: &'a str) -> Expression<'a> {
-        let ast = self.ast;
-        let mut quasis = ast.vec_with_capacity(1);
-        quasis.push(self.raw_quasi(span, raw, true));
-        let quasi = ast.template_literal(span, quasis, ast.vec());
-        self.tag_string_raw(span, quasi)
-    }
-
-    /// `String.raw\`q0${e0}q1${e1}…\`` — a tagged template with substitutions (math `@`-interp). The
-    /// `quasis` are the raw text chunks (one more than `exprs`); `exprs` are the interpolations.
-    fn build_string_raw_interp(
-        &self,
-        span: Span,
-        quasis_raw: Vec<&'a str>,
-        exprs: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        debug_assert_eq!(quasis_raw.len(), exprs.len() + 1);
-        let last = quasis_raw.len() - 1;
-        let mut quasis = ast.vec_with_capacity(quasis_raw.len());
-        for (i, q) in quasis_raw.into_iter().enumerate() {
-            quasis.push(self.raw_quasi(span, q, i == last));
-        }
-        let quasi = ast.template_literal(span, quasis, exprs);
-        self.tag_string_raw(span, quasi)
-    }
-
-    /// One template-literal quasi carrying `raw` as its **raw** value with `cooked: None` (so a
-    /// `String.raw` tag reproduces `raw`: `\` and `{}` are NOT interpreted — that is the whole point
-    /// of `String.raw`).
-    ///
-    /// Crucially we do **not** use codegen's `escape_raw` (which doubles every `\`): for `String.raw`
-    /// the emitted *source* between the backticks must equal the runtime string, so a single LaTeX/
-    /// code backslash must print as a single `\` (`String.raw\`\sum\`` → the string `\sum`). We escape
-    /// only the two characters that would otherwise break the template *syntax* — a backtick (closes
-    /// the template) and a `${` (opens a substitution) — by prefixing a `\`. Those two cannot round-
-    /// trip *exactly* through `String.raw` (JS has no raw escape for a bare backtick), but they are
-    /// degenerate in verbatim/code/math content; the escape keeps the emitted JS valid at the cost
-    /// of a leaked `\` on those rare bytes.
-    fn raw_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
-        let escaped = self.escape_raw_template_syntax(raw);
-        let value = TemplateElementValue { raw: self.ast.str(escaped), cooked: None };
-        self.ast.template_element(span, value, tail, false)
-    }
-
-    /// Prefix a `\` before each backtick and each `${` in `raw` (the only template-syntax breakers),
-    /// returning the original slice unchanged when neither occurs (the common case — no allocation).
-    fn escape_raw_template_syntax(&self, raw: &'a str) -> &'a str {
-        let bytes = raw.as_bytes();
-        let needs = bytes
-            .iter()
-            .enumerate()
-            .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')));
-        if !needs {
-            return raw;
-        }
-        let mut out = String::with_capacity(bytes.len() + 8);
-        let mut i = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            if b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')) {
-                out.push('\\');
-            }
-            // Push the full UTF-8 char (advance by its byte length).
-            let ch_len =
-                if b < 0x80 { 1 } else { raw[i..].chars().next().map_or(1, char::len_utf8) };
-            out.push_str(&raw[i..i + ch_len]);
-            i += ch_len;
-        }
-        self.ast.allocator.alloc_str(&out)
-    }
-
-    /// `String.raw` — the member-expression callee for the raw tagged template.
-    fn tag_string_raw(&self, span: Span, quasi: TemplateLiteral<'a>) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(span.start);
-        let object = ast.expression_identifier(empty, "String");
-        let property = ast.identifier_name(empty, "raw");
-        let tag = Expression::StaticMemberExpression(
-            ast.alloc_static_member_expression(empty, object, property, false),
-        );
-        ast.expression_tagged_template(span, tag, NONE, quasi)
-    }
-
-    /// Build the ambient-prelude element `h(<Name>, { <props> }, [<raw-children>])` for a code/math
-    /// span (`CodeInline`/`CodeBlock`/`Math` — referenced as identifiers, no import emitted).
-    fn build_raw_element(
-        &self,
-        span: Span,
-        name: &'a str,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let tag = self.ast.expression_identifier(Span::new(span.start, span.start), name);
-        self.build_h(span, tag, props, children)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2146,8 +1799,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         raw: &'a str,
     ) -> (NotaCode<'a>, u32) {
         let span = Span::new(tick_off, resume);
-        let language =
-            (!lang.is_empty()).then(|| self.ast.str(self.ast.allocator.alloc_str(lang)));
+        let language = (!lang.is_empty()).then(|| self.ast.str(self.ast.allocator.alloc_str(lang)));
         let element = self.ast.nota_code(span, language, raw, true);
         (element, resume)
     }
@@ -2318,106 +1970,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let children = self.body_items_to_children(items);
         let span = Span::new(0, self.source_text.len() as u32);
         self.ast.nota_document(span, children)
-    }
-
-    /// Route a parsed top-level statement: `import`/`export`/component bindings hoist to module
-    /// scope (component bindings add `export` + the name argument); everything else prepends into
-    /// `Doc`. Sets `is_async` if the statement uses `await`.
-    fn route_statement(
-        &mut self,
-        stmt: Statement<'a>,
-        module_items: &mut ArenaVec<'a, Statement<'a>>,
-        doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
-        is_async: &mut bool,
-    ) {
-        if statement_uses_await(&stmt) {
-            *is_async = true;
-        }
-        // A `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full capabilities). Map the
-        // whole statement span — the language server runs TS over its leaf nodes (each carrying its
-        // own source span), and the statement-level mark anchors the embedded region for Volar.
-        self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
-        match stmt {
-            // `import …` / `export …` hoist to module scope unchanged.
-            Statement::ImportDeclaration(_)
-            | Statement::ExportNamedDeclaration(_)
-            | Statement::ExportDefaultDeclaration(_)
-            | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
-            // A `let/const X = inlineComponent(...)|blockComponent(...)` binding → hoist+export,
-            // and pass `X` as the constructor's 2nd argument (the manifest `comp` name).
-            Statement::VariableDeclaration(mut decl) if Self::is_f1_component_decl(&decl) => {
-                self.attach_f1_name(&mut decl);
-                let export = self.make_export_named_decl(Declaration::VariableDeclaration(decl));
-                module_items.push(export);
-            }
-            // Everything else: prepend into Doc's body.
-            other => doc_prelude.push(other),
-        }
-    }
-
-    /// Build the `export default function Doc() { …prelude…; return decode(Fragment(...)); }` module.
-    fn build_document(
-        &self,
-        siblings: ArenaVec<'a, Expression<'a>>,
-        module_items: ArenaVec<'a, Statement<'a>>,
-        doc_prelude: ArenaVec<'a, Statement<'a>>,
-        is_async: bool,
-    ) -> Program<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(0);
-
-        // `Fragment(...siblings)` → `decode(Fragment(...))`.
-        let fragment = self.build_fragment(empty, siblings);
-        let decoded = self.build_decode(empty, fragment);
-        let return_stmt = ast.statement_return(empty, Some(decoded));
-
-        // Doc body = prelude statements ++ [return decode(Fragment(...))].
-        let mut body_stmts = doc_prelude;
-        body_stmts.push(return_stmt);
-        let body = ast.function_body(empty, ast.vec(), body_stmts);
-
-        // `export default function Doc() { … }`
-        let func = ast.function(
-            empty,
-            FunctionType::FunctionDeclaration,
-            Some(ast.binding_identifier(empty, DOC)),
-            false,
-            is_async,
-            false,
-            NONE,
-            NONE,
-            ast.formal_parameters(empty, FormalParameterKind::FormalParameter, ast.vec(), NONE),
-            NONE,
-            Some(body),
-        );
-        let default_decl = ast.module_declaration_export_default_declaration(
-            empty,
-            ExportDefaultDeclarationKind::FunctionDeclaration(ast.alloc(func)),
-        );
-        let doc_stmt = Statement::from(default_decl);
-
-        // Module body = hoisted module items ++ [export default function Doc].
-        let mut program_body = module_items;
-        program_body.push(doc_stmt);
-
-        ast.program(
-            empty,
-            SourceType::default().with_module(true),
-            self.source_text,
-            ast.vec(),
-            None,
-            ast.vec(),
-            program_body,
-        )
-    }
-
-    /// `decode(<expr>)`.
-    fn build_decode(&self, span: Span, expr: Expression<'a>) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), DECODE);
-        let mut args = ast.vec_with_capacity(1);
-        args.push(Argument::from(expr));
-        ast.expression_call(span, callee, NONE, args, false)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2781,105 +2333,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
         }
     }
-
-    // ------------------------------------------------------------------------------------------
-    // Component hoist + export + name, and module helpers
-    // ------------------------------------------------------------------------------------------
-
-    /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding?
-    fn is_f1_component_decl(decl: &VariableDeclaration<'a>) -> bool {
-        decl.declarations.len() == 1
-            && decl.declarations[0].id.get_binding_identifier().is_some()
-            && decl.declarations[0]
-                .init
-                .as_ref()
-                .is_some_and(|init| f1_constructor_name(init).is_some())
-    }
-
-    /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`),
-    /// and wrap the component body's returned markup in `decode(...)`.
-    fn attach_f1_name(&self, decl: &mut VariableDeclaration<'a>) {
-        let declarator = &mut decl.declarations[0];
-        let Some(name) = declarator.id.get_binding_identifier().map(|id| id.name) else {
-            return; // not a simple identifier binding (guarded by `is_f1_component_decl`)
-        };
-        if let Some(Expression::CallExpression(call)) = declarator.init.as_mut() {
-            // Wrap the constructor's function-arg returned markup in `decode(...)`.
-            if let Some(arg0) = call.arguments.first_mut() {
-                self.wrap_component_returns(arg0);
-            }
-            // Append the component name (idempotent).
-            if call.arguments.len() < 2 {
-                let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
-                call.arguments.push(Argument::from(name_lit));
-            }
-        }
-    }
-
-    /// Wrap a component-constructor function argument's returned markup in `decode(...)`.
-    ///
-    /// `inlineComponent((c) => @span{…})` → arrow expression body wrapped; `inlineComponent((c) => {
-    /// …; return @span{…}; })` → the `return` argument wrapped. Only markup (`h(...)`/`Fragment(...)`)
-    /// is wrapped, and never double-wrapped (`decode(...)` is left alone). (`decode` with the
-    /// runtime `▸=true` inside a component is identity, so this is the seam.)
-    fn wrap_component_returns(&self, arg: &mut Argument<'a>) {
-        let Some(expr) = arg.as_expression_mut() else { return };
-        match expr {
-            Expression::ArrowFunctionExpression(arrow) => {
-                if arrow.expression {
-                    // Expression body: a single return statement holding the markup.
-                    if let Some(Statement::ExpressionStatement(es)) =
-                        arrow.body.statements.first_mut()
-                    {
-                        self.wrap_expr_in_decode(&mut es.expression);
-                    }
-                } else {
-                    self.wrap_return_statements(&mut arrow.body.statements);
-                }
-            }
-            Expression::FunctionExpression(func) => {
-                if let Some(body) = func.body.as_mut() {
-                    self.wrap_return_statements(&mut body.statements);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Wrap the argument of each top-level `return <markup>;` in `decode(...)`.
-    fn wrap_return_statements(&self, stmts: &mut ArenaVec<'a, Statement<'a>>) {
-        for stmt in stmts.iter_mut() {
-            if let Statement::ReturnStatement(ret) = stmt
-                && let Some(arg) = ret.argument.as_mut()
-            {
-                self.wrap_expr_in_decode(arg);
-            }
-        }
-    }
-
-    /// Replace `expr` with `decode(expr)` iff it is unwrapped markup (`h(...)`/`Fragment(...)`).
-    fn wrap_expr_in_decode(&self, expr: &mut Expression<'a>) {
-        if !is_markup_call(expr) {
-            return;
-        }
-        // Move out the current expression and wrap it. (Use a cheap placeholder swap.)
-        let taken = std::mem::replace(expr, self.ast.expression_null_literal(Span::empty(0)));
-        *expr = self.build_decode(Span::empty(0), taken);
-    }
-
-    /// `export <decl>;` (named export of a declaration).
-    fn make_export_named_decl(&self, decl: Declaration<'a>) -> Statement<'a> {
-        let ast = self.ast;
-        let export = ast.module_declaration_export_named_declaration(
-            Span::empty(0),
-            Some(decl),
-            ast.vec(),
-            None,
-            ImportOrExportKind::Value,
-            NONE,
-        );
-        Statement::from(export)
-    }
 }
 
 /// A parsed `@`-form head, with the classification needed to branch element-vs-interpolation and
@@ -2917,453 +2370,4 @@ enum HeadKind<'a> {
 /// otherwise it is a *host* element (string tag).
 fn is_component_name(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
-}
-
-/// A dynamic-tag head expression is "already a valid tag" (emit directly, no `_Tag` binding) iff it
-/// is a Capitalized identifier or a *static* member expression — i.e. a name JSX would also accept
-/// as a tag (`@(Box)` → `h(Box,…)`, `@(ui.Card)` → `h(ui.Card,…)`). A *computed* member
-/// (`@(comps[k])`) or any other expression goes through the `_Tag` IIFE.
-fn is_valid_tag_expr(expr: &Expression) -> bool {
-    match expr {
-        Expression::Identifier(id) => is_component_name(&id.name),
-        // Static member chains only (`a.b.c`); the object side may be anything name-like.
-        Expression::StaticMemberExpression(_) => true,
-        _ => false,
-    }
-}
-
-/// Is `expr` an *unwrapped* markup call — `h(...)` or `Fragment(...)` (NOT already `decode(...)`)?
-/// Used to decide whether a component body's return value needs a `decode(...)` wrap.
-fn is_markup_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else { return false };
-    let Expression::Identifier(callee) = &call.callee else { return false };
-    matches!(callee.name.as_str(), H | FRAGMENT)
-}
-
-/// The component constructor name if `init` is a call to `inlineComponent`/`blockComponent`, else
-/// `None`.
-fn f1_constructor_name<'a>(init: &Expression<'a>) -> Option<&'a str> {
-    let Expression::CallExpression(call) = init else { return None };
-    let Expression::Identifier(callee) = &call.callee else { return None };
-    match callee.name.as_str() {
-        INLINE_COMPONENT => Some(INLINE_COMPONENT),
-        BLOCK_COMPONENT => Some(BLOCK_COMPONENT),
-        _ => None,
-    }
-}
-
-/// Does a top-level statement use top-level `await` (so its host `Doc` must be `async`)? Checked by
-/// inspecting the parsed statement shape: the common Nota form is `%const x = await …`. We look for
-/// an `AwaitExpression` in a variable-declaration initializer or an expression statement, without
-/// descending into nested function/arrow bodies (whose `await` belongs to that function).
-fn statement_uses_await(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::VariableDeclaration(decl) => {
-            decl.declarations.iter().any(|d| d.init.as_ref().is_some_and(expr_has_top_await))
-        }
-        Statement::ExpressionStatement(es) => expr_has_top_await(&es.expression),
-        _ => false,
-    }
-}
-
-/// Recursively check an expression for an `await` not under a nested function/arrow boundary.
-fn expr_has_top_await(expr: &Expression) -> bool {
-    match expr {
-        Expression::AwaitExpression(_) => true,
-        Expression::ParenthesizedExpression(p) => expr_has_top_await(&p.expression),
-        Expression::CallExpression(c) => {
-            expr_has_top_await(&c.callee) || c.arguments.iter().any(arg_has_top_await)
-        }
-        Expression::SequenceExpression(s) => s.expressions.iter().any(expr_has_top_await),
-        Expression::BinaryExpression(b) => {
-            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
-        }
-        Expression::LogicalExpression(b) => {
-            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
-        }
-        Expression::ConditionalExpression(c) => {
-            expr_has_top_await(&c.test)
-                || expr_has_top_await(&c.consequent)
-                || expr_has_top_await(&c.alternate)
-        }
-        Expression::AssignmentExpression(a) => expr_has_top_await(&a.right),
-        // Do NOT descend into function/arrow bodies (their await is theirs).
-        _ => false,
-    }
-}
-
-fn arg_has_top_await(arg: &Argument) -> bool {
-    match arg {
-        Argument::SpreadElement(s) => expr_has_top_await(&s.argument),
-        _ => arg.as_expression().is_some_and(expr_has_top_await),
-    }
-}
-
-// ===============================================================================================
-// The Scribble whitespace algorithm (pure; unit-tested against the reference Scribble reader).
-// ===============================================================================================
-
-mod scribble {
-    /// A body segment fed to the whitespace algorithm. Both variants are `Copy` (no `Expression`
-    /// is held here — elements are referenced by index), so lines can be re-walked without clones.
-    #[derive(Clone, Copy)]
-    pub(super) enum Seg<'a> {
-        /// A literal text run (raw source slice).
-        Text(&'a str),
-        /// A (whitespace-opaque) element, by index into the caller's element vec.
-        Elem(usize),
-    }
-
-    /// A final body child spec: processed text, or an element index (the caller moves it out).
-    pub(super) enum ChildSpec {
-        Text(String),
-        Elem(usize),
-    }
-
-    /// One piece within a logical body line.
-    #[derive(Clone, Copy)]
-    enum Piece<'a> {
-        Text(&'a str),
-        Elem(usize),
-    }
-
-    /// Lower body segments to final child specs via the Scribble algorithm (verified against
-    /// Scribble's own reader):
-    /// 1. Split into logical lines (`\n` in text splits lines; elements are non-ws content).
-    /// 2. Whitespace-only body: no newline → `[]`; else → one `"\n"` per newline.
-    /// 3. Drop the single newline right after `{` (leading all-ws line) and before `}` (trailing
-    ///    all-ws line) — *unless* the body is only newlines (step 2).
-    /// 4. Strip the common indentation of the indent lines, keeping the leftover indent as its own
-    ///    text child; trim each interior line's trailing whitespace (keep the `}`-line's).
-    /// 5. Emit one `"\n"` per inter-line newline — never coalesced.
-    pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
-        // --- Step 1: split into lines of pieces, counting newlines. ---
-        let mut lines: Vec<Vec<Piece<'a>>> = vec![Vec::new()];
-        let mut newline_count = 0usize;
-        let mut has_nonws = false;
-        for seg in segs {
-            match *seg {
-                Seg::Text(text) => {
-                    for (k, part) in text.split('\n').enumerate() {
-                        if k > 0 {
-                            lines.push(Vec::new());
-                            newline_count += 1;
-                        }
-                        if !part.is_empty() {
-                            if part.bytes().any(|b| !b.is_ascii_whitespace()) {
-                                has_nonws = true;
-                            }
-                            lines.last_mut().unwrap().push(Piece::Text(part));
-                        }
-                    }
-                }
-                Seg::Elem(idx) => {
-                    has_nonws = true;
-                    lines.last_mut().unwrap().push(Piece::Elem(idx));
-                }
-            }
-        }
-
-        // --- Step 2: whitespace-only body. ---
-        if !has_nonws {
-            if newline_count == 0 {
-                return Vec::new(); // `@p{}` / `@p{   }` → []
-            }
-            return std::iter::repeat_with(|| ChildSpec::Text("\n".to_string()))
-                .take(newline_count)
-                .collect();
-        }
-
-        // --- Step 3: drop `{`-newline / `}`-newline. ---
-        // `first_line_is_indent`: did the body open with a newline (so the new first line is an
-        // indentation line that participates in common-indent)? Set on dropping a leading all-ws line.
-        let mut first_line_is_indent = false;
-        if lines.len() >= 2 && line_is_blank(&lines[0]) {
-            lines.remove(0);
-            first_line_is_indent = true;
-        }
-        if lines.len() >= 2 && line_is_blank(lines.last().unwrap()) {
-            lines.pop();
-        }
-
-        // --- Step 4: common indentation over the indent lines. ---
-        let indent_from = usize::from(!first_line_is_indent); // skip the `{`-line if it is content
-        let common = lines
-            .iter()
-            .enumerate()
-            .filter(|(i, line)| *i >= indent_from && !line_is_blank(line))
-            .map(|(_, line)| leading_ws_len(line))
-            .min()
-            .unwrap_or(0);
-
-        // --- Step 5: emit. ---
-        let mut out = Vec::new();
-        let last_idx = lines.len() - 1;
-        for (i, line) in lines.iter().enumerate() {
-            if i > 0 {
-                out.push(ChildSpec::Text("\n".to_string())); // one "\n" per inter-line newline
-            }
-            let is_indent_line = i >= indent_from;
-            emit_line(
-                &mut out,
-                line,
-                if is_indent_line { common } else { 0 },
-                is_indent_line,
-                i == last_idx,
-            );
-        }
-        out
-    }
-
-    /// Emit one line.
-    ///
-    /// Consecutive text pieces are first merged into a single run (balanced braces split text into
-    /// `f`/`{`/`o`/… pieces — `@code{f{o}o}` must surface as one `"f{o}o"` child). Then:
-    /// * For an *indent line*: strip `strip` leading whitespace bytes (the common indent), emitting
-    ///   any *leftover* indent (past the common amount) as its own text child, then the content. For
-    ///   the `{`-line (not an indent line), leading whitespace is content (between `{` and text), kept.
-    /// * Trim the line-final text run's trailing whitespace unless `is_last` (text&`}` keeps it).
-    fn emit_line(
-        out: &mut Vec<ChildSpec>,
-        line: &[Piece<'_>],
-        strip: usize,
-        is_indent_line: bool,
-        is_last: bool,
-    ) {
-        // --- Merge consecutive text into runs. ---
-        enum Run {
-            Text(String),
-            Elem(usize),
-        }
-        let mut runs: Vec<Run> = Vec::new();
-        for piece in line {
-            match *piece {
-                Piece::Text(s) => {
-                    if let Some(Run::Text(buf)) = runs.last_mut() {
-                        buf.push_str(s);
-                    } else {
-                        runs.push(Run::Text(s.to_string()));
-                    }
-                }
-                Piece::Elem(idx) => runs.push(Run::Elem(idx)),
-            }
-        }
-        if runs.is_empty() {
-            return;
-        }
-        let last = runs.len() - 1;
-
-        // --- Leading common-indent strip (indent lines only), emitting leftover indent separately. ---
-        for (i, run) in runs.into_iter().enumerate() {
-            match run {
-                Run::Text(mut s) => {
-                    if i == 0 && is_indent_line {
-                        let lead = s.bytes().take_while(|b| *b == b' ' || *b == b'\t').count();
-                        let drop = strip.min(lead);
-                        let leftover = s[drop..lead].to_string();
-                        if !leftover.is_empty() {
-                            out.push(ChildSpec::Text(leftover));
-                        }
-                        s = s[lead..].to_string();
-                    }
-                    // Trailing-trim the line-final text run of a non-`}` line.
-                    if i == last && !is_last {
-                        let trimmed = s.trim_end_matches([' ', '\t']);
-                        s.truncate(trimmed.len());
-                    }
-                    if !s.is_empty() {
-                        out.push(ChildSpec::Text(s));
-                    }
-                }
-                Run::Elem(idx) => out.push(ChildSpec::Elem(idx)),
-            }
-        }
-    }
-
-    /// True if a line has no content (no elements; all text whitespace/empty).
-    fn line_is_blank(line: &[Piece]) -> bool {
-        line.iter().all(|p| match p {
-            Piece::Text(s) => s.bytes().all(|b| b.is_ascii_whitespace()),
-            Piece::Elem(_) => false,
-        })
-    }
-
-    /// Leading whitespace length (bytes) before the first content piece of a line.
-    fn leading_ws_len(line: &[Piece]) -> usize {
-        let mut n = 0;
-        for p in line {
-            match p {
-                Piece::Text(s) => {
-                    let lead = s.bytes().take_while(u8::is_ascii_whitespace).count();
-                    n += lead;
-                    if lead < s.len() {
-                        return n;
-                    }
-                }
-                Piece::Elem(_) => return n,
-            }
-        }
-        n
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{ChildSpec, Seg, lower};
-
-        /// Render the whitespace algorithm's output in Scribble's `(foo …)` notation for assertion:
-        /// text children quoted, element children as `E`. Mirrors Scribble's own reader output.
-        fn render(segs: &[Seg]) -> String {
-            let mut parts: Vec<String> = Vec::new();
-            for child in lower(segs) {
-                match child {
-                    ChildSpec::Text(s) => parts.push(format!("{s:?}")),
-                    ChildSpec::Elem(_) => parts.push("E".to_string()),
-                }
-            }
-            parts.join(" ")
-        }
-
-        const E: Seg<'static> = Seg::Elem(0);
-        fn t(s: &str) -> Seg<'_> {
-            Seg::Text(s)
-        }
-
-        #[test]
-        fn empty_and_ws_only() {
-            assert_eq!(render(&[]), "");
-            assert_eq!(render(&[t("   ")]), ""); // ws-only, no newline → []
-            assert_eq!(render(&[t("\n")]), r#""\n""#); // only newline → one "\n"
-            assert_eq!(render(&[t("\n\n\n")]), r#""\n" "\n" "\n""#);
-        }
-
-        #[test]
-        fn single_line_spaces_kept() {
-            assert_eq!(render(&[t(" bar ")]), r#"" bar ""#);
-        }
-
-        #[test]
-        fn drop_open_close_newline_strip_indent() {
-            // `@foo{⏎  bar⏎}` → "bar"
-            assert_eq!(render(&[t("\n  bar\n")]), r#""bar""#);
-            // `@foo{⏎  begin⏎    x⏎  end}` → "begin","⏎","  ","x","⏎","end"
-            assert_eq!(
-                render(&[t("\n  begin\n    x\n  end")]),
-                r#""begin" "\n" "  " "x" "\n" "end""#
-            );
-        }
-
-        #[test]
-        fn blank_line_is_two_newlines() {
-            // a blank line surfaces as ≥2 adjacent "\n".
-            assert_eq!(render(&[t("\n  bar\n\n  baz\n")]), r#""bar" "\n" "\n" "baz""#);
-            // leading + trailing blank → "⏎","bar","⏎"
-            assert_eq!(render(&[t("\n\n  bar\n\n")]), r#""\n" "bar" "\n""#);
-        }
-
-        #[test]
-        fn common_indent_keeps_leftover() {
-            assert_eq!(
-                render(&[t("bar\n       baz\n     bbb")]),
-                r#""bar" "\n" "  " "baz" "\n" "bbb""#
-            );
-        }
-
-        #[test]
-        fn balanced_braces_merge_to_one_text() {
-            // `@code{f{o}o}` → "f{o}o" (balanced braces arrive as separate Text segs, must merge).
-            assert_eq!(render(&[t("f"), t("{"), t("o"), t("}"), t("o")]), r#""f{o}o""#);
-        }
-
-        #[test]
-        fn element_keeps_preceding_space() {
-            // `@foo{bar @baz …⏎     blah}` line: "bar " <E> ; trailing space before E kept.
-            assert_eq!(render(&[t("bar "), E, t("\n     blah")]), r#""bar " E "\n" "blah""#);
-        }
-    }
-}
-
-// ===============================================================================================
-// `NotaMappingMark` collection (the reader side of the Volar code mappings). Verifies the reader
-// records the right *source* spans + kinds; the source→generated join + capability mapping lives
-// in `oxc::nota` (tested there, where codegen is available).
-// ===============================================================================================
-#[cfg(test)]
-mod mapping_collection_tests {
-    use oxc_allocator::Allocator;
-    use oxc_span::SourceType;
-
-    use super::{NotaMappingKind, NotaMappingMark};
-    use crate::Parser;
-
-    /// Parse `src` in document mode collecting marks; return them (source-ordered).
-    fn marks(src: &str) -> Vec<NotaMappingMark> {
-        let allocator = Allocator::default();
-        let (_program, marks) = Parser::new(&allocator, src, SourceType::tsx())
-            .parse_nota_document_collecting_mappings()
-            .unwrap_or_else(|e| panic!("parse failed for {src:?}: {e:?}"));
-        marks
-    }
-
-    /// The byte offset of the unique substring `needle` in `src`.
-    fn off(src: &str, needle: &str) -> u32 {
-        u32::try_from(src.find(needle).expect("needle present")).unwrap()
-    }
-
-    fn kind_at(marks: &[NotaMappingMark], start: u32) -> Option<NotaMappingKind> {
-        marks.iter().find(|m| m.span.start == start).map(|m| m.kind)
-    }
-
-    #[test]
-    fn component_tag_is_component_identifier() {
-        let src = "@Aside{hi}\n";
-        let m = marks(src);
-        assert_eq!(kind_at(&m, off(src, "Aside")), Some(NotaMappingKind::ComponentIdentifier));
-    }
-
-    #[test]
-    fn host_tag_is_not_marked() {
-        let src = "@p{hi}\n";
-        let m = marks(src);
-        // `@p` host tag → no mark (offset 1 is the `p`).
-        assert!(kind_at(&m, 1).is_none(), "host tag must not be marked: {m:?}");
-    }
-
-    #[test]
-    fn interpolation_and_prop_and_statement_are_embedded_js() {
-        let src = "% const n: number = x;\n@p[id: theId]{@(user)}\n";
-        let m = marks(src);
-        // `@(user)` interpolation.
-        assert_eq!(kind_at(&m, off(src, "user")), Some(NotaMappingKind::EmbeddedJs));
-        // prop value `theId`.
-        assert_eq!(kind_at(&m, off(src, "theId")), Some(NotaMappingKind::EmbeddedJs));
-        // the `%` statement (its span starts at `const`).
-        assert_eq!(kind_at(&m, off(src, "const")), Some(NotaMappingKind::EmbeddedJs));
-    }
-
-    #[test]
-    fn for_head_binding_and_iterable_are_embedded_js() {
-        let src = "@for (item of items) {@item}\n";
-        let m = marks(src);
-        assert_eq!(kind_at(&m, off(src, "item of")), Some(NotaMappingKind::EmbeddedJs)); // binding
-        assert_eq!(kind_at(&m, off(src, "items")), Some(NotaMappingKind::EmbeddedJs)); // iterable
-    }
-
-    #[test]
-    fn marks_are_source_ordered() {
-        let src = "@p[a: x][b: y]{@(z)}\n";
-        let m = marks(src);
-        let starts: Vec<u32> = m.iter().map(|mk| mk.span.start).collect();
-        let mut sorted = starts.clone();
-        sorted.sort_unstable();
-        assert_eq!(starts, sorted, "marks must be source-ordered: {starts:?}");
-    }
-
-    #[test]
-    fn non_mapping_entry_collects_nothing() {
-        // The plain `parse_nota_document` entry must NOT collect (allocation-free build path).
-        let allocator = Allocator::default();
-        let prog = Parser::new(&allocator, "@p{@(x)}\n", SourceType::tsx()).parse_nota_document();
-        assert!(prog.is_ok());
-        // (No marks are returned by this entry; the collecting entry is a distinct method.)
-    }
 }

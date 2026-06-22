@@ -98,7 +98,6 @@ use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
 pub use crate::lexer::{Kind, Token};
-pub use crate::nota::mapping::{NotaMappingKind, NotaMappingMark};
 use crate::{
     config::{
         LexerConfig, NoTokensParserConfig, ParserConfig, RuntimeParserConfig, TokensParserConfig,
@@ -486,32 +485,6 @@ mod parser_parse {
             )
             .parse_nota_document()
         }
-
-        /// Parse a whole `.nota` file in document mode AND collect Volar `CodeMapping` marks.
-        ///
-        /// Identical lowering to [`Parser::parse_nota_document`], but additionally returns the flat
-        /// list of [`NotaMappingMark`]s — the *source* spans of embedded-JS regions (prop values,
-        /// `@(expr)`/`@name` interpolation, `%`/`%%%` bodies, math interpolation, `@if`/`@for` heads)
-        /// and component-tag identifiers, each tagged with its [`NotaMappingKind`]. The language
-        /// server pairs each mark's source offset with the generated offset (codegen's offset log)
-        /// to build the structured `CodeMapping`s the Volar `LanguagePlugin` consumes. Parse with
-        /// [`SourceType::tsx`] so embedded TS in the marks type-checks in the virtual `.tsx`.
-        ///
-        /// # Errors
-        /// If the file is not well-formed Nota.
-        pub fn parse_nota_document_collecting_mappings(
-            self,
-        ) -> Result<(Program<'a>, Vec<NotaMappingMark>), Vec<OxcDiagnostic>> {
-            ParserImpl::<C>::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                self.config,
-                UniquePromise::new(),
-            )
-            .parse_nota_document_collecting_mappings()
-        }
     }
 
     // ===========================================================================
@@ -706,16 +679,6 @@ struct ParserImpl<'a, C: ParserConfig> {
     /// the `@` arm of `parse_primary_expression`. Nota's `@` and the decorator `@` are
     /// disambiguated purely by this parser-owned flag.
     nota_markup: bool,
-
-    /// `true` while parsing a `.nota` document for the language-server path: collect
-    /// [`NotaMappingMark`]s for embedded-JS regions and component tags into `nota_mappings`. Off by
-    /// default so the build / expression entries stay allocation-free. See `nota/mapping.rs`.
-    nota_collect_mappings: bool,
-
-    /// The Nota source→generated mapping marks accumulated when `nota_collect_mappings` is on.
-    /// Each mark is a *source* span + kind; the generated offset is paired downstream against
-    /// codegen's byte-offset log.
-    nota_mappings: Vec<NotaMappingMark>,
 }
 
 impl<'a, C: ParserConfig> ParserImpl<'a, C> {
@@ -749,8 +712,6 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
             is_ts: source_type.is_typescript(),
             nota_markup: false,
-            nota_collect_mappings: false,
-            nota_mappings: Vec::new(),
         }
     }
 

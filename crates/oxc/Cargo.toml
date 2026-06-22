@@ -66,7 +66,9 @@ full = [
 semantic = ["oxc_semantic"]
 transformer = ["oxc_transformer", "oxc_transformer_plugins"]
 minifier = ["oxc_mangler", "oxc_minifier"]
-codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap"]
+# `codegen` is the Nota compile path (`oxc::nota`), which lowers the Nota AST via `oxc_transformer`
+# before codegen — so it pulls the transformer in too.
+codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap", "oxc_transformer"]
 mangler = ["oxc_mangler"]
 cfg = ["oxc_cfg", "oxc_semantic/cfg"]
 isolated_declarations = ["oxc_isolated_declarations"]

@@ -1,33 +1,107 @@
-//! Nota AST → hyperscript lowering.
+//! Nota AST → hyperscript lowering — a standalone pass over the parsed Program.
 //!
-//! The parser ([`super`]) builds a faithful Nota AST ([`oxc_ast::ast::NotaMarkup`] & friends); this
-//! module *lowers* those nodes to the hyperscript `h()` / `Fragment()` / `decode()` `Expression`
-//! AST — the same output the reader used to build inline. Lowering **consumes** owned Nota values
-//! (`unbox`-ing boxed children to descend), exactly the ownership model the eventual standalone
-//! transform pass (P3, via `take_in`) will use. The leaf emit-primitives (`build_h`,
-//! `build_fragment`, `build_for_map`, `build_string_raw`, `build_document`, …) and the routing
-//! helpers (`route_statement`, …) live in [`super`] and are reused here unchanged.
+//! The parser ([`super`]) builds a faithful Nota AST: a document is a single
+//! `Expression::NotaMarkup(NotaMarkupKind::Document(..))` statement, and every embedded-JS `@`-form
+//! is an `Expression::NotaMarkup` left in place. This module *lowers* those to the hyperscript
+//! `h`/`Fragment`/`decode` `Expression` AST, in a deferred pass (no longer inline in the parser):
 //!
-//! Phase 2: lowering is invoked *inline* by the parser entry points (so `compile()` output stays
-//! byte-identical and the fixtures remain a complete oracle). Phase 3 moves this behind a single
-//! `Expression::NotaMarkup` traverse pass.
+//! * [`NotaLowering::lower_document_program`] rebuilds the document `Program` (Doc skeleton, `%`
+//!   routing/F1 hoist+export, decode-wraps) then walks it for any remaining embedded `NotaMarkup`.
+//! * [`NotaLowering::lower_expression`] lowers a single expression-mode form (and its embedded forms).
+//!
+//! The embedded-form walk is a [`VisitMut`] that replaces each `Expression::NotaMarkup` with its
+//! lowering bottom-up (the lowered result is re-walked so a `@`-form nested inside embedded JS inside
+//! another `@`-form lowers too). Lowering **consumes** owned Nota nodes via `unbox()`. The emit
+//! primitives (`build_*`) and document/F1 helpers live in [`super::build`]; Scribble in
+//! [`super::scribble`].
 
-use oxc_allocator::Vec as ArenaVec;
-use oxc_ast::{NONE, ast::*};
+use oxc_allocator::{Allocator, Vec as ArenaVec};
+use oxc_ast::{AstBuilder, ast::*};
+use oxc_ast_visit::{VisitMut, walk_mut};
 use oxc_span::{GetSpan, Span};
 
-use super::{
-    CODE_BLOCK, CODE_INLINE, Config, MATH, is_valid_tag_expr, scribble, statement_uses_await,
-};
-use crate::{ParserImpl, nota::mapping::NotaMappingKind};
+use super::mapping::{NotaMappingKind, NotaMappingMark};
+use super::{is_valid_tag_expr, scribble, statement_uses_await};
 
-impl<'a, C: Config> ParserImpl<'a, C> {
+/// The Nota lowering pass: lowers a parsed Nota AST `Program`/`Expression` to hyperscript, optionally
+/// collecting Volar `CodeMapping` marks.
+pub struct NotaLowering<'a> {
+    pub(super) ast: AstBuilder<'a>,
+    pub(super) source_text: &'a str,
+    mappings: Vec<NotaMappingMark>,
+    collect_mappings: bool,
+}
+
+impl<'a> NotaLowering<'a> {
+    /// Create a lowering pass over `allocator`. `collect_mappings` gates H1/H2 mark collection (off
+    /// for the plain build path → allocation-free).
+    pub fn new(allocator: &'a Allocator, source_text: &'a str, collect_mappings: bool) -> Self {
+        Self {
+            ast: AstBuilder::new(allocator),
+            source_text,
+            mappings: Vec::new(),
+            collect_mappings,
+        }
+    }
+
+    /// Lower a parsed document `Program` in place; return the source-ordered mapping marks.
+    pub fn lower_document_program(mut self, program: &mut Program<'a>) -> Vec<NotaMappingMark> {
+        if let Some(document) = self.take_document(program) {
+            *program = self.lower_document(document);
+        }
+        self.visit_program(program);
+        self.finish()
+    }
+
+    /// Lower a parsed expression-mode form in place; return the source-ordered mapping marks.
+    pub fn lower_expression(mut self, expr: &mut Expression<'a>) -> Vec<NotaMappingMark> {
+        self.visit_expression(expr);
+        self.finish()
+    }
+
+    fn finish(self) -> Vec<NotaMappingMark> {
+        let mut marks = self.mappings;
+        // Volar wants ascending source offsets (the walk visits children before some siblings).
+        marks.sort_by_key(|m| (m.span.start, m.span.end));
+        marks
+    }
+
+    /// Record a Nota source→generated mapping mark, iff collection is on. Empty spans (synthesized
+    /// boilerplate) carry no source and are dropped.
+    pub(super) fn record_nota_mapping(&mut self, span: Span, kind: NotaMappingKind) {
+        if self.collect_mappings && !span.is_empty() {
+            self.mappings.push(NotaMappingMark::new(span, kind));
+        }
+    }
+
+    /// Extract the `NotaDocument` from the parser's un-lowered wrapper program
+    /// (`[ExpressionStatement(Expression::NotaMarkup(Document(..)))]`), replacing it with a
+    /// placeholder. Returns `None` if the program is not that shape (e.g. an already-lowered program).
+    fn take_document(&self, program: &mut Program<'a>) -> Option<NotaDocument<'a>> {
+        if program.body.len() != 1 {
+            return None;
+        }
+        let Statement::ExpressionStatement(es) = &mut program.body[0] else { return None };
+        let is_document = matches!(
+            &es.expression,
+            Expression::NotaMarkup(markup) if matches!(markup.kind, NotaMarkupKind::Document(_))
+        );
+        if !is_document {
+            return None;
+        }
+        let taken =
+            std::mem::replace(&mut es.expression, self.ast.expression_null_literal(Span::empty(0)));
+        let Expression::NotaMarkup(markup) = taken else { unreachable!() };
+        let NotaMarkupKind::Document(document) = markup.unbox().kind else { unreachable!() };
+        Some(document.unbox())
+    }
+
     // ===========================================================================================
     // Umbrella dispatch
     // ===========================================================================================
 
     /// Lower a markup form in expression position to its hyperscript `Expression`.
-    pub(crate) fn lower_markup(&mut self, markup: NotaMarkup<'a>) -> Expression<'a> {
+    fn lower_markup(&mut self, markup: NotaMarkup<'a>) -> Expression<'a> {
         let span = markup.span;
         match markup.kind {
             NotaMarkupKind::Element(e) => self.lower_element(e.unbox()),
@@ -38,11 +112,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             NotaMarkupKind::Code(c) => self.lower_code(c.unbox()),
             NotaMarkupKind::Math(m) => self.lower_math(m.unbox()),
             NotaMarkupKind::Verbatim(v) => self.lower_verbatim(v.unbox()),
-            // The document lowers to a `Program` via `lower_document`, never as an expression. The
-            // only way a `Document` reaches here is the `Dummy` placeholder a parse error returns
-            // (its `kind` defaults to the first variant) — emit an inert placeholder; the fatal
-            // error already set means the result is discarded.
-            NotaMarkupKind::Document(_) => self.ast.expression_null_literal(Span::empty(span.start)),
+            // The document lowers via `lower_document`, never as an expression. The only way a
+            // `Document` reaches here is a `Dummy` placeholder from a parse error — emit an inert
+            // placeholder (the fatal error already set means the result is discarded).
+            NotaMarkupKind::Document(_) => {
+                self.ast.expression_null_literal(Span::empty(span.start))
+            }
         }
     }
 
@@ -73,8 +148,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Lower a body's children to the hyperscript child expressions, applying the Scribble
     /// whitespace algorithm. A `%`/`%%%` statement child scopes the *remaining* siblings into an
-    /// IIFE (`(() => { …stmts…; return Fragment(...rest); })()`), exactly as the old
-    /// `nested_statement_iife`.
+    /// IIFE (`(() => { …stmts…; return Fragment(...rest); })()`).
     fn lower_children(&mut self, items: Vec<NotaChild<'a>>) -> ArenaVec<'a, Expression<'a>> {
         match items.iter().position(|c| matches!(c, NotaChild::Statement(_))) {
             None => {
@@ -138,9 +212,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         (segs, elems)
     }
 
-    /// Run the Scribble algorithm over the segments and materialize the child expressions: processed
-    /// text → string literals (one `"\n"` per interior newline, never coalesced); elements moved out
-    /// of `elems` exactly once. (The old `apply_whitespace` tail, shared by children + document.)
+    /// Run the Scribble algorithm over the segments and materialize the child expressions.
     fn scribble_emit(
         &self,
         segs: &[scribble::Seg<'a>],
@@ -162,30 +234,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         out
     }
 
-    /// `(() => { …stmts…; return Fragment(...rest); })()` (async iff a statement used `await`).
-    fn build_statement_iife(
-        &self,
-        mut stmts: ArenaVec<'a, Statement<'a>>,
-        is_async: bool,
-        rest: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(0);
-        let fragment = self.build_fragment(empty, rest);
-        stmts.push(ast.statement_return(empty, Some(fragment)));
-        let body = ast.function_body(empty, ast.vec(), stmts);
-        let arrow = ast.expression_arrow_function(
-            empty,
-            false,
-            is_async,
-            NONE,
-            ast.formal_parameters(empty, FormalParameterKind::ArrowFormalParameters, ast.vec(), NONE),
-            NONE,
-            body,
-        );
-        ast.expression_call(empty, arrow, NONE, ast.vec(), false)
-    }
-
     // ===========================================================================================
     // Element + props
     // ===========================================================================================
@@ -197,8 +245,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.lower_tagged(span, tag, props, children)
     }
 
-    /// Shared host/component/dynamic tag dispatch (used by elements and verbatim bodies): build
-    /// `h(tag, { props }, [children])`, or the dynamic-tag IIFE for a non-trivial `@(expr)` head.
+    /// Shared host/component/dynamic tag dispatch: build `h(tag, { props }, [children])`, or the
+    /// dynamic-tag IIFE for a non-trivial `@(expr)` head.
     fn lower_tagged(
         &mut self,
         span: Span,
@@ -214,7 +262,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             NotaTag::Component(id) => {
                 let id = id.unbox();
-                // A component tag is a navigation/hover range (a TS symbol).
                 self.record_nota_mapping(id.span, NotaMappingKind::ComponentIdentifier);
                 let tag = Expression::Identifier(self.ast.alloc(id));
                 self.build_h(span, tag, props, children)
@@ -271,7 +318,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     );
                     let value = Expression::Identifier(self.ast.alloc(id));
                     ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
-                        key_span, PropertyKind::Init, key, value, false, true, false,
+                        key_span,
+                        PropertyKind::Init,
+                        key,
+                        value,
+                        false,
+                        true,
+                        false,
                     ))
                 }
                 NotaProp::Spread(sp) => {
@@ -290,8 +343,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // ===========================================================================================
 
     fn lower_fragment(&mut self, f: NotaFragment<'a>) -> Expression<'a> {
+        let span = f.span;
         let children = self.lower_children(f.children.into_iter().collect());
-        self.build_fragment(f.span, children)
+        self.build_fragment(span, children)
     }
 
     fn lower_interpolation(&mut self, i: NotaInterpolation<'a>) -> Expression<'a> {
@@ -302,20 +356,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn lower_if(&mut self, n: NotaIf<'a>) -> Expression<'a> {
         let NotaIf { span, test, consequent, alternate, .. } = n;
         self.record_nota_mapping(test.span(), NotaMappingKind::EmbeddedJs);
-        let cons = self.lower_fragment_node(consequent.unbox());
+        let cons = self.lower_fragment(consequent.unbox());
         let alt = match alternate {
             None => self.ast.expression_null_literal(Span::empty(span.end)),
             Some(NotaElse::ElseIf(b)) => self.lower_if(b.unbox()),
-            Some(NotaElse::Else(b)) => self.lower_fragment_node(b.unbox()),
+            Some(NotaElse::Else(b)) => self.lower_fragment(b.unbox()),
         };
         self.ast.expression_conditional(span, test, cons, alt)
-    }
-
-    /// Lower a `NotaFragment` to a (keyless) `Fragment(...children)` — for `@if`/`else` branch bodies.
-    fn lower_fragment_node(&mut self, f: NotaFragment<'a>) -> Expression<'a> {
-        let span = f.span;
-        let children = self.lower_children(f.children.into_iter().collect());
-        self.build_fragment(span, children)
     }
 
     fn lower_for(&mut self, n: NotaFor<'a>) -> Expression<'a> {
@@ -351,18 +398,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     false,
                 )));
             }
-            self.build_raw_element(span, CODE_BLOCK, props, children)
+            self.build_raw_element(span, super::CODE_BLOCK, props, children)
         } else {
-            self.build_raw_element(span, CODE_INLINE, self.ast.vec(), children)
+            self.build_raw_element(span, super::CODE_INLINE, self.ast.vec(), children)
         }
     }
 
     fn lower_math(&mut self, m: NotaMath<'a>) -> Expression<'a> {
         let NotaMath { span, display, parts, .. } = m;
-
-        // Reconstruct the `String.raw` quasis (raw chunks) + substitution expressions from the
-        // alternating parts (canonical form starts with a raw run; pad empty quasis as needed so
-        // `quasis.len() == exprs.len() + 1`).
         let mut quasis: Vec<&'a str> = Vec::new();
         let mut exprs = self.ast.vec();
         for part in parts {
@@ -370,7 +413,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 NotaMathPart::Raw(t) => quasis.push(t.unbox().value.as_str()),
                 NotaMathPart::Interpolation(i) => {
                     if quasis.len() == exprs.len() {
-                        quasis.push(""); // no raw immediately before this substitution
+                        quasis.push("");
                     }
                     let expr = i.unbox().expression;
                     self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
@@ -381,13 +424,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         while quasis.len() < exprs.len() + 1 {
             quasis.push("");
         }
-
         let raw_child = if exprs.is_empty() {
             self.build_string_raw(span, quasis.first().copied().unwrap_or(""))
         } else {
             self.build_string_raw_interp(span, quasis, exprs)
         };
-
         let mut props = self.ast.vec();
         if display {
             let key = PropertyKey::StaticIdentifier(
@@ -404,7 +445,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 false,
             )));
         }
-        self.build_raw_element(span, MATH, props, self.ast.vec1(raw_child))
+        self.build_raw_element(span, super::MATH, props, self.ast.vec1(raw_child))
     }
 
     fn lower_verbatim(&mut self, v: NotaVerbatim<'a>) -> Expression<'a> {
@@ -460,10 +501,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // Document
     // ===========================================================================================
 
-    /// Lower a whole `.nota` document to its `Program`: route `%`/`%%%` statements (import/export +
-    /// F1 component hoist+export → module scope; others → `Doc` prelude), Scribble the markup
-    /// siblings, and assemble `export default function Doc() { …; return decode(Fragment(...)); }`.
-    pub(super) fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {
+    /// Lower a whole `.nota` document to its `Program`: route `%`/`%%%` statements, Scribble the
+    /// markup siblings, and assemble `export default function Doc() { …; return decode(Fragment); }`.
+    /// Embedded `@`-forms in `%` initializers are left as `NotaMarkup` for the post-step walk.
+    fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {
         let mut module_items = self.ast.vec();
         let mut doc_prelude = self.ast.vec();
         let mut is_async = false;
@@ -498,5 +539,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
         }
         self.scribble_emit(&segs, elems)
+    }
+}
+
+impl<'a> VisitMut<'a> for NotaLowering<'a> {
+    /// Lower an embedded `Expression::NotaMarkup` in place, then walk the lowered result so a
+    /// `@`-form nested inside its embedded JS lowers too (bottom-up).
+    fn visit_expression(&mut self, expr: &mut Expression<'a>) {
+        if matches!(expr, Expression::NotaMarkup(_)) {
+            let taken = std::mem::replace(expr, self.ast.expression_null_literal(Span::empty(0)));
+            let Expression::NotaMarkup(markup) = taken else { unreachable!() };
+            *expr = self.lower_markup(markup.unbox());
+        }
+        walk_mut::walk_expression(self, expr);
     }
 }

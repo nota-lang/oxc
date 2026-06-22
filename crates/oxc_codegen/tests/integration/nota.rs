@@ -39,9 +39,10 @@ fn assert_js_eq(emitted: &str, expected: &str) {
 #[track_caller]
 fn nota_expr_raw(source: &str) -> String {
     let allocator = Allocator::default();
-    let expr = Parser::new(&allocator, source, SourceType::default())
+    let mut expr = Parser::new(&allocator, source, SourceType::default())
         .parse_nota_expression()
         .unwrap_or_else(|errors| panic!("Nota parse failed for {source:?}: {errors:?}"));
+    oxc_transformer::NotaLowering::new(&allocator, source, false).lower_expression(&mut expr);
     let mut codegen = Codegen::new();
     codegen.print_expression(&expr);
     let js = codegen.into_source_text();
@@ -60,9 +61,11 @@ fn nota_expr(source: &str, expected: &str) {
 #[track_caller]
 fn nota_doc(source: &str) -> String {
     let allocator = Allocator::default();
-    let program = Parser::new(&allocator, source, SourceType::default())
+    let mut program = Parser::new(&allocator, source, SourceType::default())
         .parse_nota_document()
         .unwrap_or_else(|errors| panic!("Nota document parse failed for {source:?}: {errors:?}"));
+    oxc_transformer::NotaLowering::new(&allocator, source, false)
+        .lower_document_program(&mut program);
     let js = Codegen::new().build(&program).code;
     assert_valid_js(&js);
     js
@@ -729,9 +732,11 @@ const CANONICAL_NOTA: &str = r#"%let Colorized = inlineComponent((children) => {
 #[track_caller]
 fn nota_doc_no_validity(source: &str) -> String {
     let allocator = Allocator::default();
-    let program = Parser::new(&allocator, source, SourceType::default())
+    let mut program = Parser::new(&allocator, source, SourceType::default())
         .parse_nota_document()
         .expect("document parses");
+    oxc_transformer::NotaLowering::new(&allocator, source, false)
+        .lower_document_program(&mut program);
     Codegen::new().build(&program).code
 }
 

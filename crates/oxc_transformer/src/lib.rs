@@ -38,7 +38,10 @@ mod regexp;
 mod typescript;
 
 mod decorator;
+mod nota;
 mod plugins;
+
+pub use nota::{NotaLowering, NotaMappingKind, NotaMappingMark};
 
 use common::Common;
 use context::TraverseCtx;

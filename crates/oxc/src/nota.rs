@@ -1,9 +1,10 @@
 //! Nota compiler entry — the `nota source → { code, map }` seam.
 //!
 //! This is the single callable that `@nota-lang/compiler` (the wasm/napi wrapper) builds on. It
-//! lives in the `oxc` umbrella crate because that is the only place with *both* the Nota reader
-//! (`oxc_parser`, document mode) and `oxc_codegen` available (`oxc_codegen` only dev-depends on
-//! `oxc_parser`, so the combined entry cannot live in either of them).
+//! lives in the `oxc` umbrella crate because that is the only place with *all three* stages on the
+//! Nota path available together: the reader (`oxc_parser`, document mode → a faithful Nota AST), the
+//! lowering ([`oxc_transformer::NotaLowering`], Nota AST → hyperscript), and `oxc_codegen`. The
+//! lowering is the deferred-pass analog of how `oxc_transformer` lowers JSX.
 //!
 //! The runtime import (`import { h, decode, Fragment, inlineComponent, blockComponent } from
 //! "@nota-lang/runtime"`) is *not* emitted here; the wrapper prepends it.
@@ -13,8 +14,9 @@ use std::path::PathBuf;
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions, CodegenReturn};
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_parser::{NotaMappingKind, NotaMappingMark, Parser};
+use oxc_parser::Parser;
 use oxc_span::SourceType;
+use oxc_transformer::{NotaLowering, NotaMappingKind, NotaMappingMark};
 
 /// The result of compiling a `.nota` source string.
 pub struct NotaCompiled {
@@ -163,8 +165,9 @@ pub fn compile(
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiled, Vec<OxcDiagnostic>> {
     let allocator = Allocator::default();
-    let program =
+    let mut program =
         Parser::new(&allocator, source_text, SourceType::default()).parse_nota_document()?;
+    NotaLowering::new(&allocator, source_text, false).lower_document_program(&mut program);
 
     let options = CodegenOptions { source_map_path, ..CodegenOptions::default() };
     let CodegenReturn { code, map, .. } = Codegen::new().with_options(options).build(&program);
@@ -186,8 +189,10 @@ pub fn compile_with_mappings(
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiledWithMappings, Vec<OxcDiagnostic>> {
     let allocator = Allocator::default();
-    let (program, marks) = Parser::new(&allocator, source_text, SourceType::tsx())
-        .parse_nota_document_collecting_mappings()?;
+    let mut program =
+        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
+    let marks =
+        NotaLowering::new(&allocator, source_text, true).lower_document_program(&mut program);
 
     let options = CodegenOptions { source_map_path, ..CodegenOptions::default() };
     let CodegenReturn { code, map, nota_offset_log, .. } =
@@ -219,8 +224,10 @@ pub fn compile_with_mappings(
 /// If the source is not well-formed Nota.
 pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<OxcDiagnostic>> {
     let allocator = Allocator::default();
-    let (program, marks) = Parser::new(&allocator, source_text, SourceType::tsx())
-        .parse_nota_document_collecting_mappings()?;
+    let mut program =
+        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
+    let marks =
+        NotaLowering::new(&allocator, source_text, true).lower_document_program(&mut program);
 
     // No sourcemap path: the virtual emit ships code mappings, not a flat sourcemap. Codegen
     // prints TS annotations verbatim, so the emit is the type-preserving `.tsx`.
