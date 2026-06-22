@@ -239,8 +239,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
             // `@` is overloaded: a Nota markup sigil in Nota markup mode, otherwise a JS/TS
             // decorator. Disambiguated solely by the parser-owned `nota_markup` flag. In
-            // expression position the form is not a body child (`in_body = false`).
-            Kind::At if self.nota_markup => self.parse_nota_form(false),
+            // expression position the form is not a body child (`in_body = false`). Embedded-JS
+            // `@`-forms lower inline (P2) — the markup tree only spans the top-level reader entry.
+            Kind::At if self.nota_markup => {
+                let markup = self.parse_nota_form(false);
+                self.lower_markup(markup)
+            }
             Kind::At => self.parse_decorated_expression(),
             // Literal, RegularExpressionLiteral
             kind if kind.is_literal() => self.parse_literal_expression(),

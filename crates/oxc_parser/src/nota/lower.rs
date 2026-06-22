@@ -11,7 +11,6 @@
 //! Phase 2: lowering is invoked *inline* by the parser entry points (so `compile()` output stays
 //! byte-identical and the fixtures remain a complete oracle). Phase 3 moves this behind a single
 //! `Expression::NotaMarkup` traverse pass.
-#![allow(dead_code)] // Wired up by the parser-flip half of P2; unused until then.
 
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
@@ -28,7 +27,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // ===========================================================================================
 
     /// Lower a markup form in expression position to its hyperscript `Expression`.
-    pub(super) fn lower_markup(&mut self, markup: NotaMarkup<'a>) -> Expression<'a> {
+    pub(crate) fn lower_markup(&mut self, markup: NotaMarkup<'a>) -> Expression<'a> {
+        let span = markup.span;
         match markup.kind {
             NotaMarkupKind::Element(e) => self.lower_element(e.unbox()),
             NotaMarkupKind::Fragment(f) => self.lower_fragment(f.unbox()),
@@ -38,10 +38,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             NotaMarkupKind::Code(c) => self.lower_code(c.unbox()),
             NotaMarkupKind::Math(m) => self.lower_math(m.unbox()),
             NotaMarkupKind::Verbatim(v) => self.lower_verbatim(v.unbox()),
-            // The document is lowered to a `Program` via `lower_document`, never as an expression.
-            NotaMarkupKind::Document(_) => {
-                unreachable!("NotaDocument lowers via lower_document, not lower_markup")
-            }
+            // The document lowers to a `Program` via `lower_document`, never as an expression. The
+            // only way a `Document` reaches here is the `Dummy` placeholder a parse error returns
+            // (its `kind` defaults to the first variant) — emit an inert placeholder; the fatal
+            // error already set means the result is discarded.
+            NotaMarkupKind::Document(_) => self.ast.expression_null_literal(Span::empty(span.start)),
         }
     }
 

@@ -13,9 +13,9 @@ The reader is being restructured from **parse-and-lower-in-one-pass** (the parse
 `Expression::NotaMarkup`** variant (discriminant 40), rich tree in our own `#[ast]` types; (2)
 **faithful** sugar/raw-text nodes, Scribble runs in *lowering*; (3) **full-document deferral** — the
 parser emits a faithful `NotaDocument`; lowering builds the `Doc` skeleton, `%`-routing, F1 hoist+export,
-decode-wraps, await→async. Phases: **P0 AST integration spike ✓** · **P1 full faithful AST ✓** · P2
-parser→tree lowered inline (120 fixtures as oracle) · P3 defer to a pass · P4 relocate to
-`oxc_transformer/src/nota/` · P5 migrate H1/H2.
+decode-wraps, await→async. Phases: **P0 AST integration spike ✓** · **P1 full faithful AST ✓** · **P2
+parser→tree + inline lowering ✓** · P3 defer to a pass · P4 relocate to `oxc_transformer/src/nota/` · P5
+migrate H1/H2.
 
 **P0 done ✓** — added an unused `Expression::NotaMarkup` stub (`crates/oxc_ast/src/ast/nota.rs`) and got
 the whole workspace green (check: 0 errors; ~2470 tests incl. 122 codegen nota fixtures, 82 parser-lib, 11
@@ -37,6 +37,24 @@ handling / catch-alls). Naming gotcha: an enum variant builder (`NotaProp::Field
 collided with a struct of the same snake_case (`NotaPropField`) → renamed to `NotaFieldProp`. Open design
 nit: `NotaListKind` collapses `-`/`+` into `Unordered` (both lower to `nota-ul-li`), so exact-marker
 round-trip would need a marker field. Green: workspace check 0 errors; 1841 + 11 tests pass.
+
+**P2 done ✓** — the parser now PARSES into the Nota AST and LOWERS separately. `crates/oxc_parser/src/nota/
+lower.rs` (the `lower_*` `ParserImpl` methods) consumes owned Nota nodes (`unbox`-based, the P3 `take_in`
+model) and re-emits the hyperscript via the kept `build_*` primitives + the relocated Scribble bridge +
+document routing. Lowering is called **inline** at the three entry points and at the embedded-JS `@`-hook
+(`js/expression.rs`), so embedded `@`-forms lower immediately while the top-level markup tree lowers at the
+entry — output stays byte-identical. ~30 `parse_*` flipped to build Nota nodes (`parse_nota_form`→
+`NotaMarkup`, element/props/fragment/if/for/verbatim/code/math/sugar→their nodes); `collect_markup`/the
+range collectors push `NotaChild`; `parse_body` returns raw `NotaChild` (Scribble deferred). **Full-document
+deferral:** `parse_document_body`→`NotaDocument` with `%`/`%%%` lines collected uniformly as
+`NotaChild::Statement` (no parse-time routing); lowering routes document-level statements (F1 hoist+export /
+Doc prelude) and wraps element-body statements in the suffix-scoping IIFE. Deleted the now-dead
+`apply_whitespace`, `build_element`, `nested_statement_iife`, `consume_statements_at`/`parse_percent_
+statement`/`parse_fence_statements`. **H1/H2 mappings moved parse→lower and still match byte-exact.** Two
+deferred-to-P5 fidelity nits: `NotaText` spans are `Span::empty` (text is never a nav target), and a quoted
+prop key (`["data-x": v]`) currently lowers as a bare identifier (no fixtures exercise it; needs a quoted
+flag). Green byte-identical: 231 codegen-integration (incl. 122 nota fixtures + golden) · 82 parser-lib ·
+11 `oxc::nota`; whole-workspace check 0 errors.
 
 ---
 
