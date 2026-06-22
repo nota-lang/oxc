@@ -990,9 +990,27 @@ macro_rules! nota_format_unreachable {
     };
 }
 nota_format_unreachable!(
-    NotaMarkup, NotaDocument, NotaText, NotaStatement, NotaElement, NotaHostName, NotaDynamicTag,
-    NotaFieldProp, NotaPropName, NotaPropExpr, NotaShorthandProp, NotaSpreadProp, NotaFragment,
-    NotaInterpolation, NotaIf, NotaFor, NotaCode, NotaMath, NotaVerbatim, NotaEmphasis, NotaHeading,
+    NotaMarkup,
+    NotaDocument,
+    NotaText,
+    NotaStatement,
+    NotaElement,
+    NotaHostName,
+    NotaDynamicTag,
+    NotaFieldProp,
+    NotaPropName,
+    NotaPropExpr,
+    NotaShorthandProp,
+    NotaSpreadProp,
+    NotaFragment,
+    NotaInterpolation,
+    NotaIf,
+    NotaFor,
+    NotaCode,
+    NotaMath,
+    NotaVerbatim,
+    NotaEmphasis,
+    NotaHeading,
     NotaListItem,
 );
 

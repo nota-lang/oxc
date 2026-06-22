@@ -52,7 +52,7 @@ enum BodyItem<'a> {
 
 /// Demote a markup form ([`NotaMarkup`]) to a body child ([`NotaChild`]), reusing the boxed node
 /// (no re-allocation). The document form never appears as a child.
-fn markup_to_child<'a>(markup: NotaMarkup<'a>) -> NotaChild<'a> {
+fn markup_to_child(markup: NotaMarkup<'_>) -> NotaChild<'_> {
     match markup.kind {
         NotaMarkupKind::Element(e) => NotaChild::Element(e),
         NotaMarkupKind::Fragment(f) => NotaChild::Fragment(f),
@@ -244,7 +244,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `@name` → `name`; `@(expr)` → `expr`. The head's boundary token (the bare ident or the `)`)
     /// and the markup-text/JS resume were already handled by [`Self::commit_head`]; this only builds
     /// the spliced expression from the (already-captured) head.
-    fn finish_interpolation(&mut self, head: NotaHead<'a>) -> NotaInterpolation<'a> {
+    fn finish_interpolation(&self, head: NotaHead<'a>) -> NotaInterpolation<'a> {
         let expr = match head.kind {
             HeadKind::Named { name, span } => self.ast.expression_identifier(span, name),
             HeadKind::Dynamic(expr) => expr,
@@ -360,9 +360,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             MarkupTrigger::Verbatim => {}
             MarkupTrigger::None => {
                 if in_body {
-                    self.advance_for_markup_text()
+                    self.advance_for_markup_text();
                 } else {
-                    self.bump_any()
+                    self.bump_any();
                 }
             }
         }
@@ -426,8 +426,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Used for both document and element bodies (full-document deferral; lowering routes vs IIFEs).
     fn collect_statements(&mut self, line_start: u32, items: &mut Vec<BodyItem<'a>>) -> u32 {
         let mut at = line_start;
-        loop {
-            let Some((content, is_fence)) = self.statement_kind(at) else { break };
+        while let Some((content, is_fence)) = self.statement_kind(at) {
             let end = if is_fence {
                 self.collect_fence_statements(content, items)
             } else {

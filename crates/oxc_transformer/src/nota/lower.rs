@@ -377,6 +377,14 @@ impl<'a> NotaLowering<'a> {
     // Verbatim / code / math
     // ===========================================================================================
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        clippy::needless_pass_by_ref_mut,
+        reason = "uniform lower_*(&mut self, NotaX<'a>) interface: the sibling lowerers consume \
+                  their owned arena node and record mappings (so genuinely need &mut self + \
+                  ownership); lower_code alone needs neither, but the matching signature keeps the \
+                  self.lower_x(x.unbox()) dispatch uniform"
+    )]
     fn lower_code(&mut self, c: NotaCode<'a>) -> Expression<'a> {
         let NotaCode { span, language, value, block, .. } = c;
         let raw_child = self.build_string_raw(span, value.as_str());

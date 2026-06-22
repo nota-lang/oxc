@@ -207,7 +207,11 @@ pub fn generate_ancestor(schema: &Schema) -> TokenStream {
             clippy::ref_option,
             clippy::undocumented_unsafe_blocks,
         )]
-        #![allow(clippy::redundant_pub_crate)]
+        // `unnecessary_cast`: a field whose type is `u8` makes the `… as *const u8` accessor cast a
+        // no-op (the base pointer is already `*const u8`); it is inherent to the uniform accessor
+        // template, like the casts in the `expect` list above. Conditional (only `u8` fields), so
+        // `allow` rather than `expect` — matching `redundant_pub_crate`.
+        #![allow(clippy::redundant_pub_crate, clippy::unnecessary_cast)]
 
         ///@@line_break
         use std::{cell::Cell, marker::PhantomData, mem::offset_of};
