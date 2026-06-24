@@ -19,6 +19,7 @@ use oxc_allocator::{Allocator, Vec as ArenaVec};
 use oxc_ast::{AstBuilder, ast::*};
 use oxc_ast_visit::{VisitMut, walk_mut};
 use oxc_span::{GetSpan, Span};
+use oxc_syntax::identifier::is_identifier_name;
 
 use super::mapping::{NotaMappingKind, NotaMappingMark};
 use super::{is_valid_tag_expr, scribble, statement_uses_await};
@@ -288,9 +289,20 @@ impl<'a> NotaLowering<'a> {
             out.push(match prop {
                 NotaProp::Field(f) => {
                     let NotaFieldProp { span, name, value, .. } = f.unbox();
-                    let key = PropertyKey::StaticIdentifier(
-                        self.ast.alloc_identifier_name(name.span, name.name.as_str()),
-                    );
+                    // A key that is not a valid JS identifier (e.g. `data-x`, `aria-label`) must be a
+                    // STRING-literal key — `{ data-x: v }` parses as `data - x` (invalid JS). Valid
+                    // identifiers (incl. keywords like `for`/`class`, legal as keys) stay bare.
+                    let key = if is_identifier_name(name.name.as_str()) {
+                        PropertyKey::StaticIdentifier(
+                            self.ast.alloc_identifier_name(name.span, name.name.as_str()),
+                        )
+                    } else {
+                        PropertyKey::StringLiteral(self.ast.alloc_string_literal(
+                            name.span,
+                            name.name.as_str(),
+                            None,
+                        ))
+                    };
                     let value = match value {
                         NotaPropValue::Expression(e) => {
                             let expr = e.unbox().expression;

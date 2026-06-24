@@ -79,6 +79,17 @@ fn nota_expr_err(source: &str) {
     assert!(result.is_err(), "expected a diagnostic for {source:?}, but parse succeeded");
 }
 
+/// Assert that compiling `source` in **document mode** fails with at least one diagnostic.
+#[track_caller]
+fn nota_doc_err(source: &str) {
+    let allocator = Allocator::default();
+    let result = Parser::new(&allocator, source, SourceType::default()).parse_nota_document();
+    assert!(
+        result.is_err(),
+        "expected a document-mode diagnostic for {source:?}, but parse succeeded"
+    );
+}
+
 /// Assert the emitted JS re-parses cleanly under the stock oxc parser (the validity invariant).
 #[track_caller]
 fn assert_valid_js(js: &str) {
@@ -376,6 +387,14 @@ fn err_bad_head() {
 #[test]
 fn err_unterminated_dynamic_head() {
     nota_expr_err("@(getTag(){x}");
+}
+
+#[test]
+fn err_unterminated_fence() {
+    // An unterminated `%%%` fence is rejected (correct). NOTE: the *message quality* is weak — it
+    // surfaces as a generic "Unexpected token" at the next `@`, with no hint a fence is open (unlike
+    // the precise "unterminated verbatim body"); a dedicated diagnostic would be better.
+    nota_doc_err("%%%\nconst a = 1;\n@p{hi}\n");
 }
 
 #[test]
@@ -1001,11 +1020,19 @@ fn escape_colon_in_body_is_literal() {
 
 #[test]
 fn verbatim_validity_with_backtick_in_raw() {
-    // A literal backtick inside a verbatim raw body must not break the emitted template (validity
-    // invariant): codegen escapes it as `` \` `` (the only safe encoding; the `\` leaks at runtime,
-    // an accepted degeneracy). The point of this test is that the emitted JS re-parses under stock oxc.
+    // A literal backtick inside a verbatim raw body is preserved faithfully: `String.raw` cannot
+    // carry a backtick, so the content falls back to a cooked string literal (no `String.raw`, no
+    // leaked `\`). The emitted JS re-parses under stock oxc (validity invariant) and the runtime
+    // value equals the source.
     let js = nota_expr_raw("@code|{a `b` c}|");
-    assert!(js.contains("String.raw"), "{js}");
+    assert!(
+        !js.contains("String.raw"),
+        "backtick content uses a cooked literal, not String.raw: {js}"
+    );
+    assert!(
+        js.contains("`b`") && !js.contains(r"\`"),
+        "backtick preserved, no leaked backslash: {js}"
+    );
     // (assert_valid_js already ran inside nota_expr_raw — the emitted JS is valid.)
 }
 
@@ -1103,12 +1130,14 @@ fn emphasis_close_skips_embedded_expression() {
 }
 
 #[test]
-fn verbatim_unicode_and_backtick_escape() {
-    // UTF-8 content survives raw; an embedded backtick is escaped for template validity. The
-    // assertion is the validity invariant (inside nota_expr_raw) plus the structural shape.
+fn verbatim_unicode_and_backtick_preserved() {
+    // UTF-8 content survives; an embedded backtick is preserved FAITHFULLY. `String.raw` cannot carry
+    // a backtick (it would leak a spurious `\`), so backtick content falls back to a cooked string
+    // literal whose codegen escaping reproduces the source exactly.
     let js = nota_expr_raw("@code|{café `x` λ}|");
     assert!(js.contains("café") && js.contains("λ"), "unicode preserved: {js}");
-    assert!(js.contains(r"\`x\`"), "backtick escaped: {js}");
+    assert!(js.contains("`x`"), "backtick preserved literally: {js}");
+    assert!(!js.contains(r"\`"), "no spurious backslash before a backtick: {js}");
 }
 
 #[test]
@@ -1134,4 +1163,175 @@ fn id(x: i32) -> i32 { x }
     assert!(js.contains("cost is $5 and"), "escaped dollar → literal `$` in prose: {js}");
     assert!(js.contains(r#"h(CodeBlock, { lang: "rust" }"#), "fenced: {js}");
     assert!(js.contains(r#"h("figure", {}, [String.raw`verbatim @keep{raw}`])"#), "verbatim: {js}");
+}
+
+// ===============================================================================================
+// Fuzzing findings (2026-06) — known reader/codegen bugs, as executable specs.
+// ===============================================================================================
+//
+// Each `#[ignore]`d test asserts the **intended** behavior, so it FAILS today — that is the point:
+// it is a red, runnable record of a real bug. Run them with
+//     cargo test -p oxc_codegen --test integration -- --ignored
+// They are `#[ignore]`d only so normal CI stays green; when a bug is fixed, delete its `#[ignore]`
+// and the test turns green. Each test's comment states the severity, the repro, and the bug.
+//
+// Findings whose correct home is elsewhere live there instead: the paragraph-break bug is a runtime
+// issue (`packages/runtime/tests/struct.test.ts` — a `test.fails` on `groupParas`), and the
+// unterminated-`%%%`-fence rejection is a normal parser diagnostic (`err_unterminated_fence` above).
+// So this module is exclusively the `#[ignore]`d, currently-failing reader/codegen bug specs.
+mod fuzz_findings {
+    use oxc_allocator::Allocator;
+    use oxc_codegen::Codegen;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    use super::{nota_doc, nota_expr_raw};
+
+    /// Emit document-mode JS **without** asserting the validity invariant — for the finding whose
+    /// whole point is that the emit is *not* valid JavaScript.
+    #[track_caller]
+    fn emit_doc_unchecked(source: &str) -> String {
+        let allocator = Allocator::default();
+        let mut program = Parser::new(&allocator, source, SourceType::default())
+            .parse_nota_document()
+            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
+        oxc_transformer::NotaLowering::new(&allocator, source, false)
+            .lower_document_program(&mut program);
+        Codegen::new().build(&program).code
+    }
+
+    /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
+    fn reparses(js: &str) -> bool {
+        let allocator = Allocator::default();
+        let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+        !ret.panicked && ret.errors.is_empty()
+    }
+
+    /// Try to parse `source` in document mode; `true` iff it parses without diagnostics.
+    fn doc_parses(source: &str) -> bool {
+        let allocator = Allocator::default();
+        Parser::new(&allocator, source, SourceType::default()).parse_nota_document().is_ok()
+    }
+
+    // --- [HIGH] Hyphenated/quoted prop keys emit valid JS (FIXED) --------------------------------
+    // A key that is not a valid JS identifier (`data-x`, `aria-label`) must be a STRING-literal key:
+    // `{ data-x: v }` parses as `data - x`. FIX: lower_props emits a quoted key for non-identifier
+    // names → h("a", { "data-x": v }, ["y"]), which re-parses (validity invariant).
+    #[test]
+    fn hyphenated_prop_key_should_emit_valid_js() {
+        let js = emit_doc_unchecked("@a[\"data-x\": v]{y}\n");
+        assert!(reparses(&js), "emit should be valid JS (quoted key), but does not re-parse: {js}");
+    }
+
+    // --- 3. [HIGH] String.raw must not corrupt code/verbatim with a backtick or `${` (FIXED) ------
+    // String.raw does NOT process a `\` escape, so escaping a backtick/`${` inside it leaks the `\`
+    // into the runtime string. FIX: content with either breaker falls back to a cooked string literal
+    // (build.rs `build_string_raw`), which reproduces the source exactly — no spurious backslash.
+    #[test]
+    fn string_raw_should_not_corrupt_backtick_in_code() {
+        let js = nota_expr_raw("@code|{a `x` b}|");
+        assert!(
+            !js.contains(r"\`"),
+            "should not backslash-escape backticks (corrupts runtime): {js}"
+        );
+    }
+
+    // Same root cause for `${` (a template-substitution opener).
+    #[test]
+    fn string_raw_should_not_corrupt_dollar_brace_in_code() {
+        let js = nota_expr_raw("@code|{a ${b} c}|");
+        assert!(
+            !js.contains(r"\${"),
+            "should not backslash-escape a dollar-brace (corrupts runtime): {js}"
+        );
+    }
+
+    // --- 4. [MEDIUM] CRLF mishandled -------------------------------------------------------------
+    // FIX: `\r\n` is normalized in the Scribble pass (a `\r` before the split `\n` is dropped as part
+    // of the line terminator), so no `\r` stays glued to text and a trailing `\r\n` after the closing
+    // `}` no longer leaks a stray "\r" sibling.
+    #[test]
+    fn crlf_should_be_normalized() {
+        let js = nota_doc("@p{line1\r\nline2}\r\n");
+        assert!(!js.contains(r"\r"), "CRLF should be normalized, no stray carriage returns: {js}");
+    }
+
+    // --- 5. [MEDIUM] Emphasis honors the Typst open/close boundary rule (FIXED) ------------------
+    // FIX: an opener must be followed by content (non-whitespace, not another same marker) and a
+    // closer preceded by content, with no empty span (parser `can_open_emphasis`/`can_close_emphasis`
+    // + the non-empty close guard). So empty (`**`/`****`), space-padded (`* foo *`), and run
+    // (`***x***`) markers no longer produce empty/garbled spans.
+
+    // `**`/`__`/`****` no longer emphasize *nothing* → no empty <strong>/<em>.
+    #[test]
+    fn empty_emphasis_markers_should_be_literal() {
+        let js = nota_expr_raw("@p{** __ ****}");
+        assert!(
+            !js.contains(r#"h("strong", {}, [])"#) && !js.contains(r#"h("em", {}, [])"#),
+            "empty markers should be literal text, not empty elements: {js}"
+        );
+    }
+
+    // `***x***` no longer splits into empty <strong> pairs.
+    #[test]
+    fn triple_emphasis_markers_should_not_make_empty_strongs() {
+        let js = nota_expr_raw("@p{***benefit***}");
+        assert!(!js.contains(r#"h("strong", {}, [])"#), "no empty <strong> from ***x***: {js}");
+    }
+
+    // `* foo *` (space after the opening `*`) stays literal.
+    #[test]
+    fn space_padded_emphasis_should_be_literal() {
+        let js = nota_expr_raw("@p{* foo *}");
+        assert!(
+            !js.contains("strong"),
+            "space-padded markers should be literal (no <strong>): {js}"
+        );
+    }
+
+    // --- 6. [MEDIUM] Colon/block sugar with a `| props` line dedents the body (FIXED) ------------
+    // FIX: a `| props` line no longer throws off common-indent stripping. The body suffix after the
+    // props now includes the preceding `\n` (collect_colon_body), so the whitespace pass treats its
+    // first line as an indent line. notation.md golden: h("foo", { x: 1 }, ["hello"]).
+    #[test]
+    fn colon_sugar_props_line_should_not_break_dedent() {
+        let js = nota_doc("@foo:\n  | x: 1\n  hello\n");
+        assert!(js.contains(r#"["hello"]"#), "colon-sugar body should dedent to \"hello\": {js}");
+    }
+
+    // --- 7. [MEDIUM] Hyphenated (custom-element) tag names are host tags (FIXED) -----------------
+    // FIX: a lowercase head extends over `-`-joined segments when an element trigger follows, so
+    // `@my-widget{hi}` → h("my-widget", {}, ["hi"]). Interpolation is unaffected: `@my-foo bar` (no
+    // trigger) stays `@my` interpolation + literal `-foo bar` (parser `scan_hyphenated_tag_tail`).
+    #[test]
+    fn hyphenated_tag_should_be_a_host_tag() {
+        let js = nota_doc("@my-widget{hi}\n");
+        assert!(
+            js.contains(r#"h("my-widget", {}, ["hi"])"#),
+            "custom-element tag should be a host tag: {js}"
+        );
+    }
+
+    // --- 8. [LOW] Leading UTF-8 BOM is stripped (FIXED) ------------------------------------------
+    // FIX: a leading UTF-8 BOM (U+FEFF) is skipped at the document start (parse_document_body), so it
+    // is not collected as a text node; byte offsets after it are unchanged, so spans stay correct.
+    #[test]
+    fn leading_bom_should_be_stripped() {
+        let js = nota_doc("\u{feff}@p{after bom}\n");
+        assert!(!js.contains('\u{feff}'), "leading BOM should be stripped, not emitted: {js}");
+    }
+
+    // --- 9. [LOW-MED] Head-adjacent `@foo\:` does not parse (documented gap) ----------------------
+    // BUG: `@foo\:` (escape a literal colon right after a bare head, per notation.md) makes the JS
+    // lexer consume the `\` during head classification and choke with an unrelated "Invalid Unicode
+    // escape sequence". INTENDED (notation.md §Colon): it parses — `@foo` interpolates, then literal
+    // ": hello" — i.e. document-mode parse succeeds.
+    #[test]
+    #[ignore = "known BUG: head-adjacent `@foo\\:` (literal colon) fails to parse"]
+    fn head_adjacent_colon_escape_should_parse() {
+        assert!(
+            doc_parses("@foo\\: hello\n"),
+            "`@foo\\:` should parse (literal colon per notation.md)"
+        );
+    }
 }

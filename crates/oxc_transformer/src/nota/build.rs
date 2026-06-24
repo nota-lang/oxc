@@ -255,7 +255,17 @@ impl<'a> NotaLowering<'a> {
     // ===========================================================================================
 
     /// `String.raw\`<raw>\`` — a tagged template over a single raw quasi (no substitutions).
+    ///
+    /// `String.raw` cannot faithfully carry a backtick or a literal `${`: a backtick closes the
+    /// template, `${` opens a substitution, and `String.raw` does NOT process a `\` escape — so any
+    /// `\` added to neutralize them leaks into the runtime string. For content with either breaker we
+    /// emit a **cooked** string literal instead, whose codegen escaping (`\\`, control chars, the
+    /// closing quote) reproduces `raw` exactly. Breaker-free content keeps the readable `String.raw`
+    /// form (contract §3).
     pub(super) fn build_string_raw(&self, span: Span, raw: &'a str) -> Expression<'a> {
+        if Self::has_template_breaker(raw) {
+            return self.ast.expression_string_literal(span, raw, None);
+        }
         let ast = self.ast;
         let mut quasis = ast.vec_with_capacity(1);
         quasis.push(self.raw_quasi(span, raw, true));
@@ -291,15 +301,21 @@ impl<'a> NotaLowering<'a> {
         self.ast.template_element(span, value, tail, false)
     }
 
+    /// Does `raw` contain a template-syntax breaker — a backtick or a `${` — that a `String.raw`
+    /// template cannot represent without a `\` that leaks at runtime?
+    fn has_template_breaker(raw: &str) -> bool {
+        let bytes = raw.as_bytes();
+        bytes
+            .iter()
+            .enumerate()
+            .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')))
+    }
+
     /// Prefix a `\` before each backtick and each `${` in `raw` (the only template-syntax breakers),
     /// returning the original slice unchanged when neither occurs (the common case — no allocation).
     fn escape_raw_template_syntax(&self, raw: &'a str) -> &'a str {
         let bytes = raw.as_bytes();
-        let needs = bytes
-            .iter()
-            .enumerate()
-            .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')));
-        if !needs {
+        if !Self::has_template_breaker(raw) {
             return raw;
         }
         let mut out = String::with_capacity(bytes.len() + 8);

@@ -46,6 +46,11 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
                         lines.push(Vec::new());
                         newline_count += 1;
                     }
+                    // Normalize CRLF: a `\r` right before the split `\n` is part of the line
+                    // terminator, not content — drop one trailing `\r` so Windows-authored files
+                    // don't leak stray carriage returns into text (and a trailing `\r\n` after a
+                    // closing `}` doesn't surface as a stray `"\r"` sibling).
+                    let part = part.strip_suffix('\r').unwrap_or(part);
                     if !part.is_empty() {
                         if part.bytes().any(|b| !b.is_ascii_whitespace()) {
                             has_nonws = true;
@@ -244,6 +249,14 @@ mod tests {
         assert_eq!(render(&[t("\n  bar\n")]), r#""bar""#);
         // `@foo{⏎  begin⏎    x⏎  end}` → "begin","⏎","  ","x","⏎","end"
         assert_eq!(render(&[t("\n  begin\n    x\n  end")]), r#""begin" "\n" "  " "x" "\n" "end""#);
+    }
+
+    #[test]
+    fn crlf_is_normalized() {
+        // `\r\n` line endings: the `\r` is part of the terminator, dropped → same shape as `\n`.
+        assert_eq!(render(&[t("line1\r\nline2")]), r#""line1" "\n" "line2""#);
+        // a trailing `\r` (e.g. the `\r\n` after a closing brace) is not emitted as a stray node.
+        assert_eq!(render(&[t("\r\n")]), r#""\n""#);
     }
 
     #[test]

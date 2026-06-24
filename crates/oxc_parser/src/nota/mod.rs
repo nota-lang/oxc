@@ -210,6 +210,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
             }
         };
+
         let span = self.end_span(span_start);
         self.ast.nota_markup(span, kind)
     }
@@ -232,12 +233,48 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let token = self.cur_token();
             let name = self.token_source(&token);
             let span = token.span();
+            // Custom-element / hyphenated host tag (`@my-widget`): a lowercase head may continue over
+            // `-`-joined identifier segments — but ONLY when an element trigger ({/[/:/|{) follows the
+            // full name. Otherwise the `-` is not part of an (interpolation) name (`@my-foo bar` stays
+            // `@my` interpolation + literal `-foo bar`), so we keep just the leading identifier.
+            if !is_component_name(name) {
+                if let Some(ext_end) = self.scan_hyphenated_tag_tail(span.end) {
+                    if !matches!(self.peek_markup_trigger(ext_end), MarkupTrigger::None) {
+                        let full = &self.source_text[span.start as usize..ext_end as usize];
+                        let span = Span::new(span.start, ext_end);
+                        return Some(NotaHead {
+                            kind: HeadKind::Named { name: full, span },
+                            end: ext_end,
+                        });
+                    }
+                }
+            }
             // Do NOT bump: the identifier is the head's boundary token, left as one-token lookahead
             // (see the dynamic-head branch). `commit_head` consumes it after classifying the trigger.
             Some(NotaHead { kind: HeadKind::Named { name, span }, end: span.end })
         } else {
             None
         }
+    }
+
+    /// Scan a custom-element name tail starting at `at`: one or more `-`-joined runs of identifier
+    /// characters (`@my-widget`, `@x-y-z`). Returns the offset past the tail, or `None` if `at` is
+    /// not a `-` directly followed by an identifier character. Pure raw-source scan (the JS lexer
+    /// stops a bare identifier at `-`, so the tail is read here over the source bytes).
+    fn scan_hyphenated_tag_tail(&self, at: u32) -> Option<u32> {
+        let bytes = self.source_text.as_bytes();
+        let mut i = at as usize;
+        let mut consumed = false;
+        while bytes.get(i) == Some(&b'-')
+            && bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+        {
+            i += 1; // the `-`
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            consumed = true;
+        }
+        consumed.then_some(i as u32)
     }
 
     /// Finish an `@`-form that turned out to be an *interpolation* (no `{`/`[`/`:`/`|{` trigger):
@@ -354,9 +391,19 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ///   significant whitespace after the head is not skipped) or normal JS otherwise.
     fn commit_head(&mut self, head: &NotaHead<'a>, in_body: bool) -> MarkupTrigger {
         let trigger = self.peek_markup_trigger(head.end);
+        // An *extended* head — a hyphenated host tag (`@my-widget`) — runs past the lexer's current
+        // boundary token, so `bump_any` (which consumes only that token) would mis-position; seek to
+        // `head.end` instead. A plain head's boundary token ends exactly at `head.end` → bump.
+        let extended = self.cur_token().end() != head.end;
         match trigger {
-            MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => self.bump_any(),
-            // Boundary token stays current; the verbatim body is scanned by absolute offset.
+            MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => {
+                if extended {
+                    self.nota_seek_to(head.end);
+                } else {
+                    self.bump_any();
+                }
+            }
+            // Boundary token stays current; the verbatim body is scanned by absolute offset (head.end).
             MarkupTrigger::Verbatim => {}
             MarkupTrigger::None => {
                 if in_body {
@@ -562,7 +609,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                         Some(m @ (b'*' | b'_')) => {
                             // Emphasis sigil. Marker iff NOT intra-word (Typst rule); else
                             // literal. An *opening* marker recurses into the emphasis body.
-                            if self.is_emphasis_marker(term_off) {
+                            if self.can_open_emphasis(term_off, m) {
                                 self.parse_emphasis(m, term_off, items);
                             } else {
                                 self.push_literal_byte(items, m);
@@ -986,6 +1033,34 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         !(is_wordy(prev) && is_wordy(next))
     }
 
+    /// Can a `*`/`_` at `off` **open** an emphasis span? Beyond being a marker (not intra-word, not
+    /// escaped — [`Self::is_emphasis_marker`]), Typst requires the opener to be immediately followed
+    /// by *content*: a non-whitespace char that is not another copy of the same marker. So `* foo`
+    /// (space after), and marker runs `**`/`***`/`****` do **not** open — they stay literal instead
+    /// of producing empty or garbled spans.
+    fn can_open_emphasis(&self, off: u32, marker: u8) -> bool {
+        if !self.is_emphasis_marker(off) {
+            return false;
+        }
+        match self.source_text.as_bytes().get(off as usize + 1) {
+            Some(&b) => !b.is_ascii_whitespace() && b != marker,
+            None => false,
+        }
+    }
+
+    /// Can a `*`/`_` at `off` **close** an emphasis span? It must be a marker and immediately
+    /// *preceded* by content (a non-whitespace byte), so `foo *` (space before the marker) does not
+    /// close (Typst). Non-emptiness of the span is enforced by the caller ([`Self::find_emphasis_close`]).
+    fn can_close_emphasis(&self, off: u32) -> bool {
+        if !self.is_emphasis_marker(off) {
+            return false;
+        }
+        match (off as usize).checked_sub(1).and_then(|p| self.source_text.as_bytes().get(p)) {
+            Some(&b) => !b.is_ascii_whitespace(),
+            None => false,
+        }
+    }
+
     /// Is the byte at `off` preceded by an *odd* run of backslashes (i.e. escaped)?
     fn is_escaped(&self, off: u32) -> bool {
         let bytes = self.source_text.as_bytes();
@@ -1074,8 +1149,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 // `{…}` markup body is left to the brace arms above (depth-tracked, escape-aware).
                 b'@' => i = self.skip_at_form_for_emphasis(i),
                 _ if b == marker && depth == 0 => {
-                    // A candidate close: valid iff it is a marker (not intra-word).
-                    if self.is_emphasis_marker(i as u32) {
+                    // A candidate close: a marker preceded by content, enclosing ≥1 byte (no empty
+                    // span). Empty (`**`) or space-before (`foo *`) closes are skipped → stay literal.
+                    if i as u32 > open + 1 && self.can_close_emphasis(i as u32) {
                         return Some(i as u32);
                     }
                     i += 1;
@@ -1467,7 +1543,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                             items.push(BodyItem::Child(markup_to_child(child)));
                         }
                         Some(m @ (b'*' | b'_')) if term_off < end => {
-                            if self.is_emphasis_marker(term_off) {
+                            if self.can_open_emphasis(term_off, m) {
                                 self.parse_emphasis(m, term_off, items);
                             } else {
                                 self.push_literal_byte(items, m);
@@ -1943,22 +2019,26 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_document_body(&mut self) -> NotaDocument<'a> {
         let mut items: Vec<BodyItem<'a>> = Vec::new();
 
+        // Skip a leading UTF-8 BOM (U+FEFF) so it is not collected as a text node. The BOM occupies
+        // bytes 0..3, so every later byte offset is unchanged — content spans stay correct.
+        let start = if self.source_text.starts_with('\u{feff}') { 3u32 } else { 0 };
+
         // The file may *open* with a statement / list / heading (no preceding `\n` to trigger the
-        // line-start hooks in `collect_markup`). Handle offset 0 explicitly.
-        if self.is_statement_line(0) {
-            let resume = self.collect_statements(0, &mut items);
+        // line-start hooks in `collect_markup`). Handle the start offset explicitly.
+        if self.is_statement_line(start) {
+            let resume = self.collect_statements(start, &mut items);
             self.nota_seek_markup(resume);
-        } else if self.list_marker_at(0).is_some() {
-            let (els, resume) = self.parse_list(0);
+        } else if self.list_marker_at(start).is_some() {
+            let (els, resume) = self.parse_list(start);
             for e in els {
                 items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
             }
             self.nota_seek_markup(resume);
-        } else if let Some((heading, h_end)) = self.try_heading(0) {
+        } else if let Some((heading, h_end)) = self.try_heading(start) {
             items.push(BodyItem::Child(NotaChild::Heading(self.ast.alloc(heading))));
             self.nota_seek_markup(h_end);
         } else {
-            self.nota_seek_markup(0);
+            self.nota_seek_markup(start);
         }
 
         // `collect_markup` (document=true) collects all markup + `%`/`%%%` statements (as faithful
@@ -2208,10 +2288,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             }
         }
-        // Hmm: if there are `|` lines, the rest-of-line content of `@head:` is dropped only if the
-        // first line had no inline content. We keep it simple: inline content + non-`|` lines form
-        // the body. Re-collect the body markup over [body_start_effective, end).
-        let body_range_start = if body_start > start { body_start } else { start };
+        // If `|` lines were consumed, the rest-of-line content of `@head:` is dropped (kept simple);
+        // the body is the remaining suffix. Back up to include the `\n` that precedes that suffix, so
+        // the whitespace pass sees the body as "opened with a newline" and treats its first line as
+        // an *indent* line (stripping the common indent) rather than as the inline `{`-line — without
+        // this, `@foo:⏎  | x:1⏎  hello` leaks the leading indent as `"  hello"` instead of `"hello"`.
+        let body_range_start = if body_start > start {
+            if bytes.get(body_start as usize - 1) == Some(&b'\n') {
+                body_start - 1
+            } else {
+                body_start
+            }
+        } else {
+            start
+        };
         self.collect_markup_range(body_range_start, end, head_indent, items);
     }
 
@@ -2302,7 +2392,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                         }
                         Some(m @ (b'*' | b'_')) if term_off < end => {
                             // Nested emphasis inside an emphasis / colon-sugar body.
-                            if self.is_emphasis_marker(term_off) {
+                            if self.can_open_emphasis(term_off, m) {
                                 self.parse_emphasis(m, term_off, items);
                             } else {
                                 self.push_literal_byte(items, m);
