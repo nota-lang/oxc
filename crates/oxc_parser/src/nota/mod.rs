@@ -237,17 +237,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // `-`-joined identifier segments — but ONLY when an element trigger ({/[/:/|{) follows the
             // full name. Otherwise the `-` is not part of an (interpolation) name (`@my-foo bar` stays
             // `@my` interpolation + literal `-foo bar`), so we keep just the leading identifier.
-            if !is_component_name(name) {
-                if let Some(ext_end) = self.scan_hyphenated_tag_tail(span.end) {
-                    if !matches!(self.peek_markup_trigger(ext_end), MarkupTrigger::None) {
-                        let full = &self.source_text[span.start as usize..ext_end as usize];
-                        let span = Span::new(span.start, ext_end);
-                        return Some(NotaHead {
-                            kind: HeadKind::Named { name: full, span },
-                            end: ext_end,
-                        });
-                    }
-                }
+            if !is_component_name(name)
+                && let Some(ext_end) = self.scan_hyphenated_tag_tail(span.end)
+                && !matches!(self.peek_markup_trigger(ext_end), MarkupTrigger::None)
+            {
+                let full = &self.source_text[span.start as usize..ext_end as usize];
+                let span = Span::new(span.start, ext_end);
+                return Some(NotaHead { kind: HeadKind::Named { name: full, span }, end: ext_end });
             }
             // Do NOT bump: the identifier is the head's boundary token, left as one-token lookahead
             // (see the dynamic-head branch). `commit_head` consumes it after classifying the trigger.
