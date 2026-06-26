@@ -17,7 +17,7 @@ mod lower;
 mod mapping;
 mod scribble;
 
-pub use lower::NotaLowering;
+pub use lower::{NotaLowering, NotaLoweringReturn};
 pub use mapping::{NotaMappingKind, NotaMappingMark};
 
 /// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
@@ -95,7 +95,10 @@ fn statement_uses_await(stmt: &Statement) -> bool {
     }
 }
 
-/// Recursively check an expression for an `await` not under a nested function/arrow boundary.
+/// Recursively check an expression for an `await` not under a nested function/arrow boundary. Used
+/// both for `%` statements and (over the lowered document body) for `await` embedded in markup — a
+/// prop value (`@p[x: await f()]`), an interpolation (`@(await f())`), or a `@for` iterable
+/// (`@for(x of await xs)`) — all of which must make `Doc` `async`.
 fn expr_has_top_await(expr: &Expression) -> bool {
     match expr {
         Expression::AwaitExpression(_) => true,
@@ -116,6 +119,21 @@ fn expr_has_top_await(expr: &Expression) -> bool {
                 || expr_has_top_await(&c.alternate)
         }
         Expression::AssignmentExpression(a) => expr_has_top_await(&a.right),
+        // Markup lowers to `h(tag, { …props }, [ …children ])`, so descend into object property
+        // values, array elements, and member objects to catch await embedded in a prop / child /
+        // iterable.
+        Expression::ObjectExpression(o) => o.properties.iter().any(|p| match p {
+            ObjectPropertyKind::ObjectProperty(prop) => expr_has_top_await(&prop.value),
+            ObjectPropertyKind::SpreadProperty(s) => expr_has_top_await(&s.argument),
+        }),
+        Expression::ArrayExpression(a) => a.elements.iter().any(|e| match e {
+            ArrayExpressionElement::SpreadElement(s) => expr_has_top_await(&s.argument),
+            other => other.as_expression().is_some_and(expr_has_top_await),
+        }),
+        Expression::StaticMemberExpression(m) => expr_has_top_await(&m.object),
+        Expression::ComputedMemberExpression(m) => {
+            expr_has_top_await(&m.object) || expr_has_top_await(&m.expression)
+        }
         // Do NOT descend into function/arrow bodies (their await is theirs).
         _ => false,
     }

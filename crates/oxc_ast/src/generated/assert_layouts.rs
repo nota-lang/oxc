@@ -1851,11 +1851,12 @@ const _: () = {
     assert!(offset_of!(NotaStatement, node_id) == 8);
     assert!(offset_of!(NotaStatement, statement) == 16);
 
-    // Padding: 4 bytes
+    // Padding: 3 bytes
     assert!(size_of::<NotaElement>() == 80);
     assert!(align_of::<NotaElement>() == 8);
     assert!(offset_of!(NotaElement, span) == 0);
     assert!(offset_of!(NotaElement, node_id) == 8);
+    assert!(offset_of!(NotaElement, is_colon) == 12);
     assert!(offset_of!(NotaElement, tag) == 16);
     assert!(offset_of!(NotaElement, props) == 32);
     assert!(offset_of!(NotaElement, children) == 56);
@@ -3860,14 +3861,15 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaStatement, node_id) == 8);
     assert!(offset_of!(NotaStatement, statement) == 12);
 
-    // Padding: 0 bytes
-    assert!(size_of::<NotaElement>() == 52);
+    // Padding: 3 bytes
+    assert!(size_of::<NotaElement>() == 56);
     assert!(align_of::<NotaElement>() == 4);
     assert!(offset_of!(NotaElement, span) == 0);
     assert!(offset_of!(NotaElement, node_id) == 8);
-    assert!(offset_of!(NotaElement, tag) == 12);
-    assert!(offset_of!(NotaElement, props) == 20);
-    assert!(offset_of!(NotaElement, children) == 36);
+    assert!(offset_of!(NotaElement, is_colon) == 12);
+    assert!(offset_of!(NotaElement, tag) == 16);
+    assert!(offset_of!(NotaElement, props) == 24);
+    assert!(offset_of!(NotaElement, children) == 40);
 
     assert!(size_of::<NotaTag>() == 8);
     assert!(align_of::<NotaTag>() == 4);

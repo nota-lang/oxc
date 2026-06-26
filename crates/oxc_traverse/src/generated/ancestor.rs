@@ -18907,6 +18907,7 @@ pub(crate) const OFFSET_NOTA_ELEMENT_SPAN: usize = offset_of!(NotaElement, span)
 pub(crate) const OFFSET_NOTA_ELEMENT_TAG: usize = offset_of!(NotaElement, tag);
 pub(crate) const OFFSET_NOTA_ELEMENT_PROPS: usize = offset_of!(NotaElement, props);
 pub(crate) const OFFSET_NOTA_ELEMENT_CHILDREN: usize = offset_of!(NotaElement, children);
+pub(crate) const OFFSET_NOTA_ELEMENT_IS_COLON: usize = offset_of!(NotaElement, is_colon);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
@@ -18939,6 +18940,11 @@ impl<'a, 't> NotaElementWithoutTag<'a, 't> {
             &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_CHILDREN)
                 as *const Vec<'a, NotaChild<'a>>)
         }
+    }
+
+    #[inline]
+    pub fn is_colon(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
     }
 }
 
@@ -18979,6 +18985,11 @@ impl<'a, 't> NotaElementWithoutProps<'a, 't> {
                 as *const Vec<'a, NotaChild<'a>>)
         }
     }
+
+    #[inline]
+    pub fn is_colon(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
+    }
 }
 
 impl<'a, 't> GetAddress for NotaElementWithoutProps<'a, 't> {
@@ -19016,6 +19027,11 @@ impl<'a, 't> NotaElementWithoutChildren<'a, 't> {
         unsafe {
             &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS) as *const Vec<'a, NotaProp<'a>>)
         }
+    }
+
+    #[inline]
+    pub fn is_colon(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
     }
 }
 

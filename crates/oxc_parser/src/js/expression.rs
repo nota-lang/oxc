@@ -242,7 +242,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // position the form is not a body child (`in_body = false`). The parser leaves the form
             // un-lowered (`Expression::NotaMarkup`); the separate lowering pass replaces it.
             Kind::At if self.nota_markup => {
-                let markup = self.parse_nota_form(false);
+                // Expression position: a `}` is not an enclosing markup-body close (`brace_significant`
+                // = false).
+                let markup = self.parse_nota_form(false, false);
                 Expression::NotaMarkup(self.ast.alloc(markup))
             }
             Kind::At => self.parse_decorated_expression(),

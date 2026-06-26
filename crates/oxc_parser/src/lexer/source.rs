@@ -63,7 +63,9 @@ use super::search::SEARCH_BATCH_SIZE;
 pub(super) struct Source<'a> {
     /// Pointer to start of source string. Never altered after initialization.
     start: *const u8,
-    /// Pointer to end of source string. Never altered after initialization.
+    /// Pointer to end of source string. Set at initialization; the Nota reader *temporarily* moves
+    /// it inward to bound a `%`/`%%%` statement parse (see [`Source::set_end_offset`]) and restores
+    /// it immediately after — it is otherwise never altered.
     end: *const u8,
     /// Pointer to current position in source string
     ptr: *const u8,
@@ -323,6 +325,34 @@ impl<'a> Source<'a> {
     #[inline]
     pub(super) fn offset_usize(&self) -> usize {
         self.offset_of_usize(self.position())
+    }
+
+    /// The current end offset (normally the source length; temporarily smaller while a Nota
+    /// bounded-statement parse is active — see [`Self::set_end_offset`]).
+    #[inline]
+    pub(super) fn end_offset(&self) -> u32 {
+        self.offset_of(self.end())
+    }
+
+    /// Temporarily move the source `end` to byte `offset` so the lexer lexes `Eof` there.
+    ///
+    /// The Nota reader uses this to bound a `%`/`%%%` statement's JS parse to its extent. A JS
+    /// statement is unbounded (the parser reads until ASI / a non-continuation token), but a Nota
+    /// `%` statement ends at the next line-leading `%` (a statement delimiter, never a JS
+    /// continuation) and a `%%%` fence body ends at its closing fence. Bounding `end` makes the JS
+    /// parser hit `Eof` at the boundary (clean ASI) instead of over-reading into the next statement
+    /// (e.g. `1\n% …` mis-lexing the `%` as modulo). Save the prior end via [`Self::end_offset`] and
+    /// restore it right after the bounded parse. `offset` must be `<=` the true source length and on
+    /// a UTF-8 char boundary.
+    #[inline]
+    pub(super) fn set_end_offset(&mut self, offset: u32) {
+        // SAFETY: `offset <= source length` and on a char boundary (same contract as `set_offset`),
+        // so `start + offset` is in bounds (or at EOF). `end` is only ever read for pointer-equality
+        // and `offset_from` bounds checks, never dereferenced.
+        let new_end = unsafe { self.start.add(offset as usize) };
+        self.end = new_end;
+        // Keep the batch-search guard in sync with the (temporarily) shortened end.
+        self.end_for_batch_search_addr = (new_end as usize).saturating_sub(SEARCH_BATCH_SIZE);
     }
 
     /// Get offset of `pos` as `u32`.

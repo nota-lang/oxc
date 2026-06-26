@@ -2606,6 +2606,7 @@ impl ContentEq for NotaElement<'_> {
         ContentEq::content_eq(&self.tag, &other.tag)
             && ContentEq::content_eq(&self.props, &other.props)
             && ContentEq::content_eq(&self.children, &other.children)
+            && ContentEq::content_eq(&self.is_colon, &other.is_colon)
     }
 }
 

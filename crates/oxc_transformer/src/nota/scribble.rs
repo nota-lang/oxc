@@ -33,7 +33,7 @@ enum Piece<'a> {
 /// 4. Strip the common indentation of the indent lines, keeping the leftover indent as its own
 ///    text child; trim each interior line's trailing whitespace (keep the `}`-line's).
 /// 5. Emit one `"\n"` per inter-line newline — never coalesced.
-pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
+pub(super) fn lower<'a>(segs: &[Seg<'a>], is_brace: bool) -> Vec<ChildSpec> {
     // --- Step 1: split into lines of pieces, counting newlines. ---
     let mut lines: Vec<Vec<Piece<'a>>> = vec![Vec::new()];
     let mut newline_count = 0usize;
@@ -51,11 +51,20 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
                     // don't leak stray carriage returns into text (and a trailing `\r\n` after a
                     // closing `}` doesn't surface as a stray `"\r"` sibling).
                     let part = part.strip_suffix('\r').unwrap_or(part);
-                    if !part.is_empty() {
-                        if part.bytes().any(|b| !b.is_ascii_whitespace()) {
-                            has_nonws = true;
+                    // A bare CR (old-Mac line ending) and the Unicode line/paragraph separators
+                    // (U+2028/U+2029) are line breaks too — split on them so they don't survive as
+                    // literal characters in the text.
+                    for (m, sub) in part.split(['\r', '\u{2028}', '\u{2029}']).enumerate() {
+                        if m > 0 {
+                            lines.push(Vec::new());
+                            newline_count += 1;
                         }
-                        lines.last_mut().unwrap().push(Piece::Text(part));
+                        if !sub.is_empty() {
+                            if sub.bytes().any(|b| !b.is_ascii_whitespace()) {
+                                has_nonws = true;
+                            }
+                            lines.last_mut().unwrap().push(Piece::Text(sub));
+                        }
                     }
                 }
             }
@@ -68,6 +77,11 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
 
     // --- Step 2: whitespace-only body. ---
     if !has_nonws {
+        // A non-brace body (document / heading / list-item / control-flow branch) has no `{`/`}`
+        // edges, so a whitespace-only body is simply empty — no stray "\n" children.
+        if !is_brace {
+            return Vec::new();
+        }
         if newline_count == 0 {
             return Vec::new(); // `@p{}` / `@p{   }` → []
         }
@@ -76,16 +90,28 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
             .collect();
     }
 
-    // --- Step 3: drop `{`-newline / `}`-newline. ---
-    // `first_line_is_indent`: did the body open with a newline (so the new first line is an
-    // indentation line that participates in common-indent)? Set on dropping a leading all-ws line.
+    // --- Step 3: trim edges. ---
+    // A brace body drops the single `{`-newline / `}`-newline (its surrounding spaces are content).
+    // A non-brace body has no `{`/`}` edges, so it trims ALL leading/trailing whitespace-only lines
+    // and its first line is a normal indent line. `first_line_is_indent` records whether the first
+    // line participates in common-indent stripping.
     let mut first_line_is_indent = false;
-    if lines.len() >= 2 && line_is_blank(&lines[0]) {
-        lines.remove(0);
+    if is_brace {
+        if lines.len() >= 2 && line_is_blank(&lines[0]) {
+            lines.remove(0);
+            first_line_is_indent = true;
+        }
+        if lines.len() >= 2 && line_is_blank(lines.last().unwrap()) {
+            lines.pop();
+        }
+    } else {
+        while lines.len() > 1 && line_is_blank(&lines[0]) {
+            lines.remove(0);
+        }
+        while lines.len() > 1 && line_is_blank(lines.last().unwrap()) {
+            lines.pop();
+        }
         first_line_is_indent = true;
-    }
-    if lines.len() >= 2 && line_is_blank(lines.last().unwrap()) {
-        lines.pop();
     }
 
     // --- Step 4: common indentation over the indent lines. ---
@@ -106,12 +132,15 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
             out.push(ChildSpec::Text("\n".to_string())); // one "\n" per inter-line newline
         }
         let is_indent_line = i >= indent_from;
+        // Keep the final line's trailing whitespace only for a brace body (the `}`-line); a
+        // non-brace body trims every line's trailing whitespace.
+        let keep_trailing = is_brace && i == last_idx;
         emit_line(
             &mut out,
             line,
             if is_indent_line { common } else { 0 },
             is_indent_line,
-            i == last_idx,
+            keep_trailing,
         );
     }
     out
@@ -124,13 +153,13 @@ pub(super) fn lower<'a>(segs: &[Seg<'a>]) -> Vec<ChildSpec> {
 /// * For an *indent line*: strip `strip` leading whitespace bytes (the common indent), emitting
 ///   any *leftover* indent (past the common amount) as its own text child, then the content. For
 ///   the `{`-line (not an indent line), leading whitespace is content (between `{` and text), kept.
-/// * Trim the line-final text run's trailing whitespace unless `is_last` (text&`}` keeps it).
+/// * Trim the line-final text run's trailing whitespace unless `keep_trailing` (a brace `}`-line).
 fn emit_line(
     out: &mut Vec<ChildSpec>,
     line: &[Piece<'_>],
     strip: usize,
     is_indent_line: bool,
-    is_last: bool,
+    keep_trailing: bool,
 ) {
     // --- Merge consecutive text into runs. ---
     enum Run {
@@ -160,16 +189,14 @@ fn emit_line(
         match run {
             Run::Text(mut s) => {
                 if i == 0 && is_indent_line {
+                    // Strip the common indent; any leftover indent (past the common amount) stays
+                    // JOINED with the line's content as one text child (e.g. "  x", not "  ","x").
                     let lead = s.bytes().take_while(|b| *b == b' ' || *b == b'\t').count();
                     let drop = strip.min(lead);
-                    let leftover = s[drop..lead].to_string();
-                    if !leftover.is_empty() {
-                        out.push(ChildSpec::Text(leftover));
-                    }
-                    s = s[lead..].to_string();
+                    s = s[drop..].to_string();
                 }
-                // Trailing-trim the line-final text run of a non-`}` line.
-                if i == last && !is_last {
+                // Trailing-trim the line-final text run unless the body keeps it (a brace `}`-line).
+                if i == last && !keep_trailing {
                     let trimmed = s.trim_end_matches([' ', '\t']);
                     s.truncate(trimmed.len());
                 }
@@ -216,7 +243,7 @@ mod tests {
     /// text children quoted, element children as `E`. Mirrors Scribble's own reader output.
     fn render(segs: &[Seg]) -> String {
         let mut parts: Vec<String> = Vec::new();
-        for child in lower(segs) {
+        for child in lower(segs, true) {
             match child {
                 ChildSpec::Text(s) => parts.push(format!("{s:?}")),
                 ChildSpec::Elem(_) => parts.push("E".to_string()),
@@ -247,8 +274,8 @@ mod tests {
     fn drop_open_close_newline_strip_indent() {
         // `@foo{⏎  bar⏎}` → "bar"
         assert_eq!(render(&[t("\n  bar\n")]), r#""bar""#);
-        // `@foo{⏎  begin⏎    x⏎  end}` → "begin","⏎","  ","x","⏎","end"
-        assert_eq!(render(&[t("\n  begin\n    x\n  end")]), r#""begin" "\n" "  " "x" "\n" "end""#);
+        // `@foo{⏎  begin⏎    x⏎  end}` → "begin","⏎","  x","⏎","end" (kept indent joined to content)
+        assert_eq!(render(&[t("\n  begin\n    x\n  end")]), r#""begin" "\n" "  x" "\n" "end""#);
     }
 
     #[test]
@@ -269,10 +296,7 @@ mod tests {
 
     #[test]
     fn common_indent_keeps_leftover() {
-        assert_eq!(
-            render(&[t("bar\n       baz\n     bbb")]),
-            r#""bar" "\n" "  " "baz" "\n" "bbb""#
-        );
+        assert_eq!(render(&[t("bar\n       baz\n     bbb")]), r#""bar" "\n" "  baz" "\n" "bbb""#);
     }
 
     #[test]

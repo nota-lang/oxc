@@ -3311,6 +3311,7 @@ impl<'a> Dummy<'a> for NotaElement<'a> {
             tag: Dummy::dummy(allocator),
             props: Dummy::dummy(allocator),
             children: Dummy::dummy(allocator),
+            is_colon: Dummy::dummy(allocator),
         }
     }
 }

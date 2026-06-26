@@ -10989,6 +10989,11 @@ impl<'a> AstNode<'a, NotaElement<'a>> {
         })
     }
 
+    #[inline]
+    pub fn is_colon(&self) -> bool {
+        self.inner.is_colon
+    }
+
     pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
         format_leading_comments(self.span()).fmt(f);
     }

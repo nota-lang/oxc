@@ -71,7 +71,7 @@ mod mapping_collection_tests {
         let mut program = Parser::new(&allocator, src, SourceType::tsx())
             .parse_nota_document()
             .unwrap_or_else(|e| panic!("parse failed for {src:?}: {e:?}"));
-        NotaLowering::new(&allocator, src, true).lower_document_program(&mut program)
+        NotaLowering::new(&allocator, src, true).lower_document_program(&mut program).mappings
     }
 
     /// The byte offset of the unique substring `needle` in `src`.
@@ -137,7 +137,8 @@ mod mapping_collection_tests {
         let src = "@p[id: theId]{@(user)}\n";
         let mut program =
             Parser::new(&allocator, src, SourceType::tsx()).parse_nota_document().unwrap();
-        let marks = NotaLowering::new(&allocator, src, false).lower_document_program(&mut program);
+        let marks =
+            NotaLowering::new(&allocator, src, false).lower_document_program(&mut program).mappings;
         assert!(marks.is_empty(), "collect=false yields no marks: {marks:?}");
     }
 }

@@ -248,9 +248,10 @@ fn ws_leading_trailing_newline_dropped() {
 #[test]
 fn ws_interior_indent_and_newlines() {
     // `@foo{⏎··begin⏎····x⏎··end}` → ⟦ "begin", "⏎", "··x", "⏎", "end" ⟧
+    // Kept indentation (past the common strip) stays joined with its line's content (notation.md).
     nota_expr(
         "@foo{\n  begin\n    x\n  end}",
-        r#"h("foo", {}, ["begin", "\n", "  ", "x", "\n", "end"])"#,
+        r#"h("foo", {}, ["begin", "\n", "  x", "\n", "end"])"#,
     );
 }
 
@@ -277,10 +278,10 @@ fn ws_body_only_newlines() {
 
 #[test]
 fn ws_common_indent_strip_keeps_leftover() {
-    // `@foo{bar⏎·······baz⏎·····bbb}` → ⟦ "bar","⏎","··","baz","⏎","bbb" ⟧
+    // `@foo{bar⏎·······baz⏎·····bbb}` → ⟦ "bar","⏎","··baz","⏎","bbb" ⟧ (kept indent joined to content)
     nota_expr(
         "@foo{bar\n       baz\n     bbb}",
-        r#"h("foo", {}, ["bar", "\n", "  ", "baz", "\n", "bbb"])"#,
+        r#"h("foo", {}, ["bar", "\n", "  baz", "\n", "bbb"])"#,
     );
 }
 
@@ -360,6 +361,24 @@ fn doc_f1_component_hoist_export_name() {
 fn colon_sugar_inline() {
     // `@foo: hello world` → `@foo{hello world}`.
     nota_expr("@foo: hello world", r#"h("foo", {}, ["hello world"])"#);
+}
+
+#[test]
+fn colon_body_brace_handling() {
+    // A literal `}` in a top-level colon body is content (no enclosing brace to close → no clip); an
+    // escaped `\}` is literal too. But colon sugar nested in a braced body clips at the parent's `}`.
+    assert!(
+        nota_doc("@def: a } b\n").contains(r#"["a } b"]"#),
+        "literal }} kept in a top-level colon body"
+    );
+    assert!(
+        nota_doc("@def: a \\} b\n").contains(r#"["a } b"]"#),
+        "escaped \\}} is a literal in a colon body"
+    );
+    assert!(
+        nota_doc("@p{@a: b}\n").contains(r#"h("p", {}, [h("a", {}, ["b"])])"#),
+        "colon sugar nested in a braced body clips at the parent brace"
+    );
 }
 
 // ===============================================================================================
@@ -731,6 +750,30 @@ fn dash_without_space_is_literal() {
     assert!(!js.contains(r#"h("nota-ul-li""#), "{js}");
 }
 
+#[test]
+fn line_start_sugar_chains_after_a_construct() {
+    // Line-start sugar (a heading / list) on the line right after another construct — a list run, a
+    // `%%%` fence — is recognized, not read as literal text. The collector consumes a *run* of
+    // line-start constructs (each resumes at a line start that may open the next), at the document
+    // start and after a `\n` alike.
+    assert!(
+        nota_doc("- a\n- b\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        "heading after a list (at document start)"
+    );
+    assert!(
+        nota_doc("intro\n- a\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        "heading after a list (after a paragraph)"
+    );
+    assert!(
+        nota_doc("%%%\nconst x = 1;\n%%%\n# Title\n").contains(r#"h("h1", {}, ["Title"])"#),
+        "heading after a %%% fence"
+    );
+    assert!(
+        nota_doc("%%%\nconst x = 1;\n%%%\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        "list after a %%% fence"
+    );
+}
+
 // ===============================================================================================
 // THE canonical golden: stage-1 `.nota` → must equal stage-3 (modulo formatting).
 // ===============================================================================================
@@ -823,8 +866,9 @@ fn nested_percent_statement_wraps_rest_in_iife() {
     assert!(js.contains("const n = count();"), "{js}");
     assert!(js.contains("=> {"), "IIFE present: {js}");
     assert!(js.contains("return Fragment("), "IIFE returns a Fragment: {js}");
-    // "Intro." is a sibling BEFORE the `%`, so it stays outside the IIFE.
-    assert!(js.contains(r#""Intro.""#), "{js}");
+    // "Intro." is a sibling BEFORE the `%`, so it stays outside the IIFE. (A pre-existing 1-space
+    // leftover indent now joins it as " Intro." since kept indent merges with its line's content.)
+    assert!(js.contains("Intro."), "Intro. stays outside the IIFE: {js}");
 }
 
 #[test]
@@ -1321,17 +1365,498 @@ mod fuzz_findings {
         assert!(!js.contains('\u{feff}'), "leading BOM should be stripped, not emitted: {js}");
     }
 
-    // --- 9. [LOW-MED] Head-adjacent `@foo\:` does not parse (documented gap) ----------------------
-    // BUG: `@foo\:` (escape a literal colon right after a bare head, per notation.md) makes the JS
+    // --- 9. [LOW-MED] Head-adjacent `@foo\:` parses (FIXED) ---------------------------------------
+    // `@foo\:` (escape a literal colon right after a bare head, per notation.md) used to make the JS
     // lexer consume the `\` during head classification and choke with an unrelated "Invalid Unicode
-    // escape sequence". INTENDED (notation.md §Colon): it parses — `@foo` interpolates, then literal
-    // ": hello" — i.e. document-mode parse succeeds.
+    // escape sequence". FIX (parser `try_raw_escaped_head`): the `@ident\…` head is scanned over raw
+    // bytes, so `@foo` interpolates and the markup collector renders `\:` as a literal `: hello`.
     #[test]
-    #[ignore = "known BUG: head-adjacent `@foo\\:` (literal colon) fails to parse"]
     fn head_adjacent_colon_escape_should_parse() {
         assert!(
             doc_parses("@foo\\: hello\n"),
             "`@foo\\:` should parse (literal colon per notation.md)"
+        );
+    }
+}
+
+// ===============================================================================================
+// Fuzzing findings, round 2 (2026-06) — NON-ignored, currently-FAILING reader/codegen specs.
+// ===============================================================================================
+//
+// Specs found by AI-driven spec-conformance fuzzing (the `nota_inspect` harness), each asserting the
+// spec-correct behavior. The FIXED findings pass; the still-open ones are `#[ignore]`d with the
+// blocker noted in the reason (like `fuzz_findings` above) so the suite stays green — un-ignore one
+// and fix the reader to turn it green. The two purely-runtime findings (object/non-renderable child;
+// paragraph break surviving inside a tight element) live in `packages/runtime/tests/serialize.test.ts`.
+mod fuzz_findings_2 {
+    use oxc_allocator::Allocator;
+    use oxc_codegen::Codegen;
+    use oxc_parser::Parser;
+    use oxc_span::SourceType;
+
+    use super::nota_expr_raw;
+
+    /// Document-mode emit WITHOUT the validity assertion (for findings whose emit is invalid JS).
+    #[track_caller]
+    fn emit_doc_unchecked(source: &str) -> String {
+        let allocator = Allocator::default();
+        let mut program = Parser::new(&allocator, source, SourceType::default())
+            .parse_nota_document()
+            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
+        oxc_transformer::NotaLowering::new(&allocator, source, false)
+            .lower_document_program(&mut program);
+        Codegen::new().build(&program).code
+    }
+
+    /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
+    fn reparses(js: &str) -> bool {
+        let allocator = Allocator::default();
+        let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+        !ret.panicked && ret.errors.is_empty()
+    }
+
+    /// Parse `source` in document mode; `true` iff it parses without diagnostics. (Panics if the
+    /// reader panics — itself a finding, which fails the test.)
+    fn doc_parses(source: &str) -> bool {
+        let allocator = Allocator::default();
+        Parser::new(&allocator, source, SourceType::default()).parse_nota_document().is_ok()
+    }
+
+    /// Parse + lower a document; `true` iff lowering reported NO diagnostics. A reserved-name
+    /// collision (a user `Doc` / runtime-import binding) or a duplicate `export default` → `false`.
+    fn doc_lowers_clean(source: &str) -> bool {
+        let allocator = Allocator::default();
+        let mut program = Parser::new(&allocator, source, SourceType::default())
+            .parse_nota_document()
+            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
+        oxc_transformer::NotaLowering::new(&allocator, source, false)
+            .lower_document_program(&mut program)
+            .diagnostics
+            .is_empty()
+    }
+
+    /// Parse `source` in document mode as **TS-aware** (`tsx`) — the canonical Nota parse (contract
+    /// H2). `true` iff it parses without diagnostics.
+    fn doc_parses_tsx(source: &str) -> bool {
+        let allocator = Allocator::default();
+        Parser::new(&allocator, source, SourceType::tsx()).parse_nota_document().is_ok()
+    }
+
+    /// Compile a Nota expression with the **TS-aware** (`tsx`) parse, asserting the emit re-parses as
+    /// TSX. (The build path additionally strips the types — covered in `oxc::nota`; here we only
+    /// pin that a generic call is parsed as a call, not as `f < Foo > x` comparison operators.)
+    #[track_caller]
+    fn nota_expr_tsx(source: &str) -> String {
+        let allocator = Allocator::default();
+        let mut expr = Parser::new(&allocator, source, SourceType::tsx())
+            .parse_nota_expression()
+            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
+        oxc_transformer::NotaLowering::new(&allocator, source, false).lower_expression(&mut expr);
+        let mut codegen = Codegen::new();
+        codegen.print_expression(&expr);
+        let js = codegen.into_source_text();
+        let reparse_allocator = Allocator::default();
+        let reparse = Parser::new(&reparse_allocator, &js, SourceType::tsx()).parse();
+        assert!(!reparse.panicked && reparse.errors.is_empty(), "emit not valid TSX: {js}");
+        js
+    }
+
+    // ---- crashes (should be diagnostics, not panics) -------------------------------------------
+
+    // [CRASH] `@` + a non-head char (`@@`, `@ `, `@1`, `@.`, `@-`, `@}`, trailing `@`) panics the
+    // parser via `markup_to_child`'s `unreachable!("a document is never a body child")`.
+    #[test]
+    fn fuzz2_at_run_should_diagnose_not_panic() {
+        assert!(!doc_parses("@@\n"), "`@@` should be a diagnostic, not a parser panic");
+    }
+
+    // ---- emitted JS that does not parse / run --------------------------------------------------
+
+    // [INVALID-JS] `await` in a @for body → `xs.map((x, _i) => … await …)` but the arrow is not async.
+    #[test]
+    #[ignore = "deferred: async @for needs Promise.all (product call)"]
+    fn fuzz2_await_in_for_body_should_emit_valid_js() {
+        let js = emit_doc_unchecked("@for(x of xs){@(await f(x))}\n");
+        assert!(reparses(&js), "await in a @for body must emit valid (async) JS: {js}");
+    }
+
+    // [INVALID-JS] `await` in a prop value / iterable / condition → Doc never made async.
+    #[test]
+    fn fuzz2_await_in_prop_should_emit_valid_js() {
+        let js = emit_doc_unchecked("@p[x: await f()]{y}\n");
+        assert!(reparses(&js), "await in a prop value must make Doc async (valid JS): {js}");
+    }
+
+    // [INVALID-JS] an empty/malformed prop group `@p[:]` emits broken JS instead of a diagnostic.
+    #[test]
+    #[ignore = "deferred: @p[:] support-vs-diagnose is a product call"]
+    fn fuzz2_empty_prop_should_emit_valid_js() {
+        let js = emit_doc_unchecked("@p[:]{x}\n");
+        assert!(reparses(&js), "a malformed prop `[:]` must not emit invalid JS: {js}");
+    }
+
+    // [INVALID-JS] a user `% export default …` collides with the reader's `export default Doc`.
+    #[test]
+    fn fuzz2_export_default_should_not_collide_with_doc() {
+        // The reader emits `export default function Doc`, so a user `% export default` is a second
+        // default export. The collision is with a reader-injected name, so the parser can't catch it;
+        // the lowering diagnoses it.
+        assert!(
+            !doc_lowers_clean("% export default 5\n@p{x}\n"),
+            "a user `export default` must be diagnosed (it would be a second default export)"
+        );
+    }
+
+    // ---- reader-injected name hygiene (collisions the oxc parser does NOT catch) ----------------
+
+    // [INVALID-JS] reader's `_i` map index collides with a user loop var named `_i` → `(_i, _i) =>`
+    // (a duplicate arrow parameter — a SyntaxError in a real engine; oxc's parser does not flag it).
+    #[test]
+    fn fuzz2_for_index_name_should_not_collide() {
+        let js = emit_doc_unchecked("@for(_i of xs){@_i}\n");
+        assert!(!js.contains("(_i, _i)"), "the reader's `_i` index collides with the user's: {js}");
+    }
+
+    // [INVALID-JS] a module-scope user `Doc` (here `%import Doc`) collides with `function Doc`.
+    #[test]
+    fn fuzz2_user_doc_binding_should_not_collide() {
+        assert!(
+            !doc_lowers_clean("%import Doc from \"./x\"\n@p{y}\n"),
+            "a user `Doc` import must be diagnosed (it collides with the reader's `function Doc`)"
+        );
+    }
+
+    // [RUNTIME-BREAK] a user binding `h` (or `Fragment`/`decode`/…) shadows the runtime import the
+    // emitted markup calls, so `h(…)` invokes the user's value instead of the runtime function.
+    #[test]
+    fn fuzz2_user_binding_should_not_shadow_runtime_h() {
+        assert!(
+            !doc_lowers_clean("%let h = 1\n@p{x}\n"),
+            "a user `h` binding must be diagnosed (it shadows the runtime import the markup calls)"
+        );
+    }
+
+    // [INVALID-JS] a DESTRUCTURED user binding (`%const { h } = …`, `%const [Doc] = …`) shadows a
+    // reserved emit name too — the reserved-name check walks the binding pattern, not just plain ids.
+    #[test]
+    fn fuzz2_destructured_binding_should_be_diagnosed() {
+        assert!(
+            !doc_lowers_clean("%const { h } = lib\n@p{x}\n"),
+            "a destructured `h` must be diagnosed (it shadows the runtime import)"
+        );
+        assert!(
+            !doc_lowers_clean("%const [Doc] = xs\n@p{x}\n"),
+            "a destructured `Doc` must be diagnosed (it collides with `function Doc`)"
+        );
+        // A non-reserved destructured name is fine.
+        assert!(
+            doc_lowers_clean("%const { x } = lib\n@p{@(x)}\n"),
+            "non-reserved destructure is OK"
+        );
+    }
+
+    // [RUNTIME-BREAK] dynamic-tag `@(_Tag)` whose expr references `_Tag` → `const _Tag = _Tag` (TDZ).
+    #[test]
+    fn fuzz2_dynamic_tag_binding_should_not_self_reference() {
+        let js = nota_expr_raw("@(_Tag){x}");
+        assert!(
+            !js.contains("const _Tag = _Tag"),
+            "dynamic-tag `_Tag` self-references (TDZ): {js}"
+        );
+    }
+
+    // ---- control-flow / keyword traps ----------------------------------------------------------
+
+    // [DATA-LOSS] `@else` (with the `@` sigil) becomes an `<else>` element, not an else branch.
+    #[test]
+    #[ignore = "deferred: @else support-vs-diagnose is a product call"]
+    fn fuzz2_at_else_should_be_a_branch_not_an_element() {
+        let js = emit_doc_unchecked("@if(x){a}@else{b}\n");
+        assert!(!js.contains("h(\"else\""), "`@else` is parsed as an <else> element: {js}");
+    }
+
+    // [REJECTS-VALID] `@for(const x of xs)` → "'const' is a reserved word"; `@for(let x …)` differs.
+    #[test]
+    #[ignore = "deferred: @for(const x) support-vs-diagnose product call"]
+    fn fuzz2_for_binding_should_accept_declaration_keyword() {
+        assert!(
+            doc_parses("@for(const x of xs){@x}\n"),
+            "@for should accept a `const`/`let` binding"
+        );
+    }
+
+    // ---- TypeScript in the build path (contract H2: the canonical parse is TS-aware) ------------
+
+    // The canonical Nota parse is TS-aware (`tsx`), so embedded TS (annotations, `type`/`interface`/
+    // `enum`, `as`/`satisfies`/`!`) parses. (The build `compile` then strips the types — covered by
+    // `oxc::nota::compile_accepts_and_strips_embedded_typescript`.)
+    #[test]
+    fn fuzz2_build_path_should_accept_embedded_ts() {
+        assert!(
+            doc_parses_tsx("% const n: number = 1\n@p{@(n)}\n"),
+            "the TS-aware parse accepts embedded TS"
+        );
+    }
+
+    // A generic call `f<Foo>(x)` must parse as a call, not as `f < Foo > x` (comparison operators).
+    #[test]
+    fn fuzz2_generic_call_should_not_parse_as_comparison() {
+        let js = nota_expr_tsx("@(f<Foo>(x))");
+        assert!(
+            !js.contains("f < Foo"),
+            "a generic call is mis-parsed as comparison operators: {js}"
+        );
+    }
+
+    // ---- `%` / `%%%` statement & fence parsing -------------------------------------------------
+
+    // [REJECTS-VALID] a `%%` line (a `%`-run that is neither 1 nor 3) hard-errors.
+    #[test]
+    #[ignore = "deferred: %% support-vs-diagnose is a product call"]
+    fn fuzz2_double_percent_should_not_hard_error() {
+        assert!(
+            doc_parses("%% let x = 1\n@p{x}\n"),
+            "a `%%` line should not be a hard parse error"
+        );
+    }
+
+    // [REJECTS-VALID] a `%%%` fence whose body is a bare expression statement (`x`) errors with
+    // "Unexpected token", though `x;` is valid JS (a `const x = 1;` body parses fine).
+    #[test]
+    fn fuzz2_fence_bare_expression_should_parse() {
+        assert!(
+            doc_parses("%%%\nx\n%%%\n"),
+            "a %%% fence with a bare-expression body should parse"
+        );
+    }
+
+    // [DATA-LOSS] markup on the line right after a `%%%` fence is dropped from the AST entirely.
+    #[test]
+    fn fuzz2_markup_after_fence_should_not_be_dropped() {
+        let js = emit_doc_unchecked("%%%\nconst x = 1;\n%%%\n@p{hi}\n");
+        assert!(js.contains("\"hi\""), "markup on the line after a %%% fence is dropped: {js}");
+    }
+
+    // [REJECTS-VALID] consecutive single-`%` statements without semicolons (2nd `%` lexed as modulo).
+    #[test]
+    fn fuzz2_consecutive_percent_statements_should_parse() {
+        assert!(
+            doc_parses("% let a = 1\n% let b = 2\n@p{x}\n"),
+            "consecutive % statements should parse"
+        );
+    }
+
+    // [REJECTS-VALID] a comment-only (or whitespace-only) `%` line.
+    #[test]
+    fn fuzz2_comment_only_percent_line_should_parse() {
+        assert!(doc_parses("% // a comment\n@p{x}\n"), "a comment-only % line should parse");
+    }
+
+    // [REJECTS-VALID] `@foo\:` (escaped literal colon adjacent to a head) — notation.md §Colon.
+    #[test]
+    fn fuzz2_head_adjacent_colon_escape_should_parse() {
+        assert!(doc_parses("@foo\\: hello\n"), "`@foo\\:` should parse (literal colon)");
+        // The raw-escaped-head scan is Unicode-aware, so a Unicode head escapes too.
+        assert!(doc_parses("@café\\: hello\n"), "`@café\\:` should parse (Unicode head)");
+    }
+
+    // ---- self-closing / lists / colon-block ----------------------------------------------------
+
+    // [DATA-LOSS] a dedented nested-list item is duplicated (nested AND as a sibling).
+    #[test]
+    fn fuzz2_nested_list_dedent_should_not_duplicate() {
+        let js = emit_doc_unchecked("- a\n  - b\n- c\n");
+        assert_eq!(
+            js.matches("[\"c\"]").count(),
+            1,
+            "a dedented nested-list item is duplicated: {js}"
+        );
+    }
+
+    // [DATA-LOSS] text after a `@tag[props]` self-closing element drops its first word.
+    #[test]
+    fn fuzz2_self_closing_props_should_not_drop_following_text() {
+        let js = emit_doc_unchecked("@img[src: \"a\"] and text\n");
+        assert!(js.contains("and"), "text after a [props] self-closing element is dropped: {js}");
+    }
+
+    // [DATA-LOSS] line-start sugar (`#`, lists) is not recognized inside a colon-block body.
+    #[test]
+    fn fuzz2_colon_block_should_recognize_line_start_sugar() {
+        let js = emit_doc_unchecked("@section:\n  # Title\n  body\n");
+        assert!(
+            js.contains("h(\"h1\""),
+            "line-start sugar not recognized in a colon-block body: {js}"
+        );
+    }
+
+    // [REJECTS-VALID] colon sugar `@head:` inside a braced body swallows the `}` → "Expected `}`".
+    #[test]
+    fn fuzz2_colon_sugar_in_braced_body_should_parse() {
+        assert!(
+            doc_parses("@p{@a: b}\n"),
+            "colon sugar inside a braced body should parse, not error"
+        );
+    }
+
+    // [DATA-LOSS] a void element with children silently drops them at render — diagnose it instead.
+    #[test]
+    #[ignore = "deferred: void-children support-vs-diagnose product call"]
+    fn fuzz2_void_element_children_should_be_diagnosed() {
+        assert!(!doc_parses("@br{hello}\n"), "a void element with children should be diagnosed");
+    }
+
+    // ---- whitespace / Scribble -----------------------------------------------------------------
+
+    // [WHITESPACE] the document's first line keeps its indentation while later lines dedent.
+    #[test]
+    fn fuzz2_document_first_line_indent_should_be_stripped() {
+        let js = emit_doc_unchecked("  a\n  b\n");
+        assert!(!js.contains("\"  a\""), "the document's first line keeps its indentation: {js}");
+    }
+
+    // [WHITESPACE] trailing whitespace in a list-item body is not trimmed.
+    #[test]
+    fn fuzz2_list_item_trailing_whitespace_should_be_trimmed() {
+        let js = emit_doc_unchecked("- a  \n- b\n");
+        assert!(
+            !js.contains("\"a  \""),
+            "trailing whitespace in a list-item body is not trimmed: {js}"
+        );
+    }
+
+    // [WHITESPACE] a blank line after a list item leaves a stray newline inside the item.
+    #[test]
+    fn fuzz2_blank_line_after_list_item_should_not_leave_newline() {
+        let js = emit_doc_unchecked("- a\n- b\n\npara\n");
+        assert!(
+            !js.contains(r#"["b", "\n"]"#),
+            "blank line after a list item leaves a stray \\n: {js}"
+        );
+    }
+
+    // [WHITESPACE] an empty list item carries a stray newline body.
+    #[test]
+    fn fuzz2_empty_list_item_should_not_have_stray_newline() {
+        let js = emit_doc_unchecked("- \n");
+        assert!(!js.contains(r#"["\n"]"#), "an empty list item has a stray newline body: {js}");
+    }
+
+    // [WHITESPACE] a colon-sugar body keeps a trailing newline that a brace body correctly drops.
+    #[test]
+    fn fuzz2_colon_body_should_drop_trailing_newline() {
+        let js = emit_doc_unchecked("@foo:\n");
+        assert!(!js.contains(r#"["\n"]"#), "a colon-sugar body keeps the trailing newline: {js}");
+    }
+
+    // [WHITESPACE] a bare CR (not part of CRLF) is not normalized to a line break.
+    #[test]
+    fn fuzz2_bare_cr_should_be_normalized() {
+        let js = emit_doc_unchecked("a\rb");
+        assert!(!js.contains(r"\r"), "a bare CR is not normalized to a line break: {js}");
+    }
+
+    // [WHITESPACE] kept indentation (beyond the leftmost line) is split into its own text node.
+    #[test]
+    fn fuzz2_kept_indent_should_join_content() {
+        let js = emit_doc_unchecked("@foo{\n  begin\n    x\n  end\n}");
+        assert!(
+            js.contains(r#""  x""#),
+            "kept indentation is split from the content (spec joins it): {js}"
+        );
+    }
+
+    // [WHITESPACE] a U+2028 line separator is not treated as a line break.
+    #[test]
+    fn fuzz2_unicode_line_separator_should_break() {
+        let js = emit_doc_unchecked("a\u{2028}b");
+        assert!(js.contains(r#""a", "\n", "b""#), "U+2028 is not treated as a line break: {js}");
+    }
+
+    // [WHITESPACE] a control-flow branch leaks the author's readability spaces (`{ a }` → " a ").
+    #[test]
+    fn fuzz2_control_flow_branch_should_trim_surrounding_space() {
+        let js = nota_expr_raw("@if(x){ a }");
+        assert!(
+            !js.contains(r#"Fragment(" a ")"#),
+            "a control-flow branch leaks surrounding spaces: {js}"
+        );
+    }
+
+    // ---- sugar recognition / headings / fences -------------------------------------------------
+
+    // [DATA-LOSS] markup on the line after a `%%%` fence (covered above); here: indented heading is
+    // not recognized even though an indented LIST is.
+    #[test]
+    fn fuzz2_indented_heading_should_be_recognized() {
+        let js = emit_doc_unchecked("  # H\n");
+        assert!(
+            js.contains("h(\"h1\""),
+            "an indented heading is not recognized (indented lists are): {js}"
+        );
+    }
+
+    // [DIVERGENCE] heading sugar requires a literal space and rejects a tab after `#`.
+    #[test]
+    fn fuzz2_tab_after_hash_should_be_a_heading() {
+        let js = emit_doc_unchecked("#\tH\n");
+        assert!(
+            js.contains("h(\"h1\""),
+            "heading sugar requires a literal space, rejects a tab: {js}"
+        );
+    }
+
+    // [DIVERGENCE] a fenced-code info string uses the whole line as `lang`, not the first token.
+    #[test]
+    fn fuzz2_fence_lang_should_be_first_token() {
+        let js = emit_doc_unchecked("```js extra words\ncode\n```\n");
+        assert!(
+            !js.contains("extra words"),
+            "fenced-code lang should be the first token only: {js}"
+        );
+    }
+
+    // ---- source-fidelity / component name ------------------------------------------------------
+
+    // [FIDELITY] text/content nodes carry span 0..0 (tag-name strings get real spans) → source maps
+    // and Volar mappings point all text content at source position 0.
+    #[test]
+    fn fuzz2_text_node_should_have_a_source_span() {
+        use oxc_ast::ast::{Expression, NotaChild, NotaMarkupKind, Statement};
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, "@p{Hello}", SourceType::default())
+            .parse_nota_document()
+            .expect("parses");
+        let Some(Statement::ExpressionStatement(stmt)) = program.body.first() else {
+            panic!("expected an expression statement")
+        };
+        let Expression::NotaMarkup(markup) = &stmt.expression else {
+            panic!("expected Nota markup")
+        };
+        let NotaMarkupKind::Document(doc) = &markup.kind else { panic!("expected a document") };
+        let NotaChild::Element(element) = doc.items.first().expect("one item") else {
+            panic!("expected an element")
+        };
+        let text = element
+            .children
+            .iter()
+            .find_map(|c| if let NotaChild::Text(t) = c { Some(t) } else { None })
+            .expect("a text child");
+        assert!(
+            text.span.start != 0 || text.span.end != 0,
+            "text node should carry its real source span, not 0..0: {:?}",
+            text.span
+        );
+    }
+
+    // [F1] the reader keeps a user-supplied component-name arg instead of overriding it with the
+    // binding name, so the island manifest's `comp` can mismatch the exported registry key.
+    #[test]
+    fn fuzz2_component_name_should_use_binding_name() {
+        let js = emit_doc_unchecked("%let C = inlineComponent((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
+        assert!(
+            !js.contains("\"ZZZ\""),
+            "F1 should pass the binding name, not the user's name arg: {js}"
         );
     }
 }

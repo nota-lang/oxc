@@ -204,7 +204,7 @@ pub static STRUCTS: phf::Map<&'static str, StructDetails> = ::phf::Map {
         ("ParenthesizedExpression", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("TSNamespaceExportDeclaration", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("NotaStatement", StructDetails { field_order: Some(&[1, 0, 2]) }),
-        ("NotaElement", StructDetails { field_order: Some(&[1, 0, 2, 3, 4]) }),
+        ("NotaElement", StructDetails { field_order: Some(&[1, 0, 3, 4, 5, 2]) }),
         ("CharacterClass", StructDetails { field_order: Some(&[0, 2, 3, 4, 1]) }),
         ("ErrorLabel", StructDetails { field_order: Some(&[1, 0]) }),
         ("NotaPropExpr", StructDetails { field_order: Some(&[1, 0, 2]) }),

@@ -7,14 +7,43 @@
 
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
+use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
 use super::{
-    DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H, f1_constructor_name,
-    is_markup_call, statement_uses_await,
+    BLOCK_COMPONENT, DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H,
+    INLINE_COMPONENT, f1_constructor_name, is_markup_call, statement_uses_await,
 };
+
+/// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
+/// module references the default-export component `Doc` and the runtime imports the markup calls
+/// (`h`/`Fragment`/`decode`/`inlineComponent`/`blockComponent`); these are pinned by the contract and
+/// cannot be silently renamed, so a colliding binding is diagnosed rather than emitted.
+fn is_reserved_emit_name(name: &str) -> bool {
+    matches!(name, DOC | H | FRAGMENT | DECODE | INLINE_COMPONENT | BLOCK_COMPONENT)
+}
+
+/// Diagnostic for a user module binding that shadows a reader-injected emit-surface name.
+fn reserved_name_collision(name: &str, span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error(format!(
+        "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` (the \
+         default-export document component) and imports `h`/`Fragment`/`decode`/`inlineComponent`/\
+         `blockComponent` from the runtime, which the lowered markup calls; a module binding of the \
+         same name shadows them and breaks the emit. Rename the binding."
+    ))
+    .with_label(span)
+}
+
+/// Diagnostic for a user `export default` (the reader already emits `export default function Doc`).
+fn duplicate_default_export(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error(
+        "a Nota document already emits `export default function Doc(…)`, so this `% export default` \
+         would be a second default export (a module may have only one). Remove it.",
+    )
+    .with_label(span)
+}
 
 impl<'a> NotaLowering<'a> {
     // ===========================================================================================
@@ -65,6 +94,42 @@ impl<'a> NotaLowering<'a> {
         ast.expression_array(Span::empty(span.end), elements)
     }
 
+    /// Pick a fresh identifier name for a reader-injected binding (`_i`, `_Tag`) that cannot collide
+    /// with a user identifier in the construct at `span`. Returns `candidate` unless it appears as a
+    /// whole word in the construct's source (`@for(_i of …)`, `@(_Tag)`), in which case a numeric
+    /// suffix is appended until free. (Scanning the source over-approximates — a name in a string or
+    /// comment also bumps — which only ever yields a *more* distinct name, never a colliding one.)
+    fn fresh_name(&self, candidate: &'static str, span: Span) -> &'a str {
+        fn contains_word(haystack: &str, needle: &str) -> bool {
+            let bytes = haystack.as_bytes();
+            let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+            let mut from = 0;
+            while let Some(pos) = haystack[from..].find(needle) {
+                let start = from + pos;
+                let end = start + needle.len();
+                let before = start == 0 || !is_ident(bytes[start - 1]);
+                let after = end >= bytes.len() || !is_ident(bytes[end]);
+                if before && after {
+                    return true;
+                }
+                from = start + 1;
+            }
+            false
+        }
+        let src = &self.source_text[span.start as usize..span.end as usize];
+        if !contains_word(src, candidate) {
+            return candidate;
+        }
+        let mut n = 2u32;
+        loop {
+            let cand = format!("{candidate}{n}");
+            if !contains_word(src, &cand) {
+                return self.ast.allocator.alloc_str(&cand);
+            }
+            n += 1;
+        }
+    }
+
     /// `(() => { const _Tag = <expr>; return h(_Tag, { props }, [children]); })()` — dynamic tag.
     pub(super) fn build_dynamic_iife(
         &self,
@@ -75,9 +140,10 @@ impl<'a> NotaLowering<'a> {
     ) -> Expression<'a> {
         let ast = self.ast;
         let empty = Span::empty(span.start);
+        let tag_binding = self.fresh_name(DYNAMIC_TAG_BINDING, span);
 
         // `const _Tag = <expr>;`
-        let binding = ast.binding_pattern_binding_identifier(empty, DYNAMIC_TAG_BINDING);
+        let binding = ast.binding_pattern_binding_identifier(empty, tag_binding);
         let declarator = ast.variable_declarator(
             empty,
             VariableDeclarationKind::Const,
@@ -95,7 +161,7 @@ impl<'a> NotaLowering<'a> {
         let const_stmt = Statement::from(decl);
 
         // `return h(_Tag, { props }, [children]);`
-        let tag_ref = ast.expression_identifier(empty, DYNAMIC_TAG_BINDING);
+        let tag_ref = ast.expression_identifier(empty, tag_binding);
         let h_call = self.build_h(span, tag_ref, props, children);
         let return_stmt = ast.statement_return(empty, Some(h_call));
 
@@ -133,10 +199,11 @@ impl<'a> NotaLowering<'a> {
     ) -> Expression<'a> {
         let ast = self.ast;
         let empty = Span::empty(span.start);
+        let index_name = self.fresh_name(FOR_KEY_PARAM, span);
 
         // The arrow's wrapping `Fragment({ key: _i }, ...children)`.
         let key_props = {
-            let key_name = ast.expression_identifier(empty, FOR_KEY_PARAM);
+            let key_name = ast.expression_identifier(empty, index_name);
             let key = PropertyKey::StaticIdentifier(ast.alloc_identifier_name(empty, "key"));
             let prop = ast.alloc_object_property(
                 empty,
@@ -164,7 +231,7 @@ impl<'a> NotaLowering<'a> {
             false,
             false,
         ));
-        let index_pat = ast.binding_pattern_binding_identifier(empty, FOR_KEY_PARAM);
+        let index_pat = ast.binding_pattern_binding_identifier(empty, index_name);
         params.push(ast.formal_parameter(
             empty,
             ast.vec(),
@@ -375,6 +442,10 @@ impl<'a> NotaLowering<'a> {
         if statement_uses_await(&stmt) {
             *is_async = true;
         }
+        // Diagnose a binding / default-export that would collide with the reader's emit surface
+        // (`Doc`, the runtime imports) before routing it — the oxc parser cannot catch these (the
+        // collision is with names the *lowering* injects, not with anything in the source).
+        self.check_reserved_collisions(&stmt);
         // A `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full capabilities).
         self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
         match stmt {
@@ -388,6 +459,72 @@ impl<'a> NotaLowering<'a> {
                 module_items.push(export);
             }
             other => doc_prelude.push(other),
+        }
+    }
+
+    /// Diagnose a routed top-level statement that collides with the reader's emit surface: a module
+    /// binding named like a reserved emit name ([`is_reserved_emit_name`]), or a `% export default`
+    /// (a second default export beside `export default function Doc`). The statement is still routed
+    /// as usual — the diagnostic is advisory (the emit would be broken/ambiguous JS otherwise).
+    fn check_reserved_collisions(&mut self, stmt: &Statement<'a>) {
+        match stmt {
+            Statement::ExportDefaultDeclaration(d) => self.error(duplicate_default_export(d.span)),
+            Statement::ImportDeclaration(imp) => {
+                let Some(specifiers) = &imp.specifiers else { return };
+                for spec in specifiers {
+                    let local = match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => &s.local,
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => &s.local,
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => &s.local,
+                    };
+                    self.check_reserved_binding(local.name.as_str(), local.span);
+                }
+            }
+            Statement::VariableDeclaration(v) => self.check_var_decl_bindings(v),
+            Statement::FunctionDeclaration(f) => {
+                if let Some(id) = &f.id {
+                    self.check_reserved_binding(id.name.as_str(), id.span);
+                }
+            }
+            Statement::ClassDeclaration(c) => {
+                if let Some(id) = &c.id {
+                    self.check_reserved_binding(id.name.as_str(), id.span);
+                }
+            }
+            // `% export const Doc = …` / `% export function h() {}` — check the inner declaration.
+            Statement::ExportNamedDeclaration(e) => match &e.declaration {
+                Some(Declaration::VariableDeclaration(v)) => self.check_var_decl_bindings(v),
+                Some(Declaration::FunctionDeclaration(f)) => {
+                    if let Some(id) = &f.id {
+                        self.check_reserved_binding(id.name.as_str(), id.span);
+                    }
+                }
+                Some(Declaration::ClassDeclaration(c)) => {
+                    if let Some(id) = &c.id {
+                        self.check_reserved_binding(id.name.as_str(), id.span);
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Check every binding identifier of a `let/const/var` declaration against the reserved set,
+    /// walking the binding PATTERN so destructured names collide too (`%const { h } = lib`,
+    /// `%const [Doc] = xs`, `%const { x: h } = …`, rest elements), not only a plain `%const h = …`.
+    fn check_var_decl_bindings(&mut self, decl: &VariableDeclaration<'a>) {
+        for d in &decl.declarations {
+            for id in d.id.get_binding_identifiers() {
+                self.check_reserved_binding(id.name.as_str(), id.span);
+            }
+        }
+    }
+
+    /// Emit a collision diagnostic iff `name` is a reserved emit-surface name.
+    fn check_reserved_binding(&mut self, name: &str, span: Span) {
+        if is_reserved_emit_name(name) {
+            self.error(reserved_name_collision(name, span));
         }
     }
 
@@ -473,8 +610,13 @@ impl<'a> NotaLowering<'a> {
             if let Some(arg0) = call.arguments.first_mut() {
                 self.wrap_component_returns(arg0);
             }
-            if call.arguments.len() < 2 {
-                let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
+            // F1: the component name passed to the constructor MUST be the binding name (so the
+            // island manifest's `comp` matches the exported registry key) — override any user-
+            // supplied 2nd argument rather than keeping it.
+            let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
+            if call.arguments.len() >= 2 {
+                call.arguments[1] = Argument::from(name_lit);
+            } else {
                 call.arguments.push(Argument::from(name_lit));
             }
         }

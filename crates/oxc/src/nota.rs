@@ -9,14 +9,18 @@
 //! The runtime import (`import { h, decode, Fragment, inlineComponent, blockComponent } from
 //! "@nota-lang/runtime"`) is *not* emitted here; the wrapper prepends it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions, CodegenReturn};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_parser::Parser;
+use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
-use oxc_transformer::{NotaLowering, NotaMappingKind, NotaMappingMark};
+use oxc_transformer::{
+    NotaLowering, NotaMappingKind, NotaMappingMark, TransformOptions, Transformer,
+    TypeScriptOptions,
+};
 
 /// The result of compiling a `.nota` source string.
 pub struct NotaCompiled {
@@ -143,75 +147,147 @@ pub struct NotaVirtualCompiled {
     pub mappings: Vec<CodeMapping>,
 }
 
+/// Per-call configuration for the one shared Nota compile pipeline ([`compile_internal`]). The three
+/// public entries are thin wrappers that differ only in these knobs.
+struct CompileConfig {
+    /// Strip embedded TypeScript to plain JS (the build path, contract H2). Mutually exclusive with
+    /// `collect_mappings` — stripping shifts codegen offsets, so it never runs on a mapping path.
+    strip_ts: bool,
+    /// Collect Volar `CodeMapping`s (the mapping / virtual paths) — also enables codegen's offset log.
+    collect_mappings: bool,
+    /// Tolerate lowering diagnostics (reserved-name collisions) instead of failing: the language
+    /// server's virtual `.tsx` path still emits a best-effort file so the editor degrades gracefully
+    /// (it surfaces the collision through its own diagnostic channel). The build paths stay strict.
+    lenient_diagnostics: bool,
+    /// Source-map path (names the source in the emitted map); `None` skips map generation.
+    source_map_path: Option<PathBuf>,
+}
+
+/// The output of [`compile_internal`]; each public wrapper takes the fields it exposes.
+struct CompileOutput {
+    code: String,
+    map: Option<oxc_sourcemap::SourceMap>,
+    mappings: Vec<CodeMapping>,
+}
+
+/// The one Nota compile pipeline: parse (TS-aware) → Nota-lower → optionally strip TS → codegen,
+/// joining mapping marks with the codegen offset log when requested. The public [`compile`],
+/// [`compile_with_mappings`], and [`compile_virtual`] are wrappers over this with different
+/// [`CompileConfig`]s — keeping the parse mode, the lowering, and the mapping assembly in one place.
+///
+/// The canonical Nota parse is `SourceType::tsx` (contract H2): embedded TypeScript in `%`/`[props]`/
+/// `@(expr)`/`@for` heads is admitted into the AST. The build path then *strips* the types (plain-JS
+/// emit); the mapping/virtual paths *preserve* them (the language server's TS service types them).
+fn compile_internal(
+    source_text: &str,
+    config: CompileConfig,
+) -> Result<CompileOutput, Vec<OxcDiagnostic>> {
+    let allocator = Allocator::default();
+    let mut program =
+        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
+
+    let lowered = NotaLowering::new(&allocator, source_text, config.collect_mappings)
+        .lower_document_program(&mut program);
+    if !config.lenient_diagnostics && !lowered.diagnostics.is_empty() {
+        return Err(lowered.diagnostics);
+    }
+
+    if config.strip_ts {
+        strip_typescript(&allocator, &mut program)?;
+    }
+
+    let options = CodegenOptions { source_map_path: config.source_map_path, ..Default::default() };
+    let mut codegen = Codegen::new().with_options(options);
+    if config.collect_mappings {
+        codegen = codegen.with_nota_offset_log();
+    }
+    let CodegenReturn { code, map, nota_offset_log, .. } = codegen.build(&program);
+
+    let mappings = if config.collect_mappings {
+        build_code_mappings(source_text, &code, &lowered.mappings, &nota_offset_log)
+    } else {
+        Vec::new()
+    };
+    Ok(CompileOutput { code, map, mappings })
+}
+
+/// Strip embedded TypeScript from the (already Nota-lowered) plain-JS/TS `program` in place, leaving
+/// plain JS. Runs `oxc_transformer`'s TypeScript transform only — `EnvOptions::default()` leaves all
+/// non-TS JS byte-identical (no arrow/class/etc. lowering), so an all-JS document is unchanged. The
+/// transform needs scoping, so a `SemanticBuilder` pass runs first over the lowered program.
+fn strip_typescript<'a>(
+    allocator: &'a Allocator,
+    program: &mut oxc_ast::ast::Program<'a>,
+) -> Result<(), Vec<OxcDiagnostic>> {
+    // The Nota lowering rebuilds the document `Program` with a plain-JS `SourceType`, so the
+    // transformer would skip the TS pass (it only strips when the source type is TS-flagged). Mark it
+    // TypeScript (keeping module-ness) so the embedded TS nodes — already in the AST from the tsx
+    // parse — get stripped. There is no JSX in the lowered hyperscript, so `ts` (not `tsx`) suffices.
+    program.source_type = program.source_type.with_typescript(true);
+    let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    let options =
+        TransformOptions { typescript: TypeScriptOptions::default(), ..Default::default() };
+    let ret = Transformer::new(allocator, Path::new("doc.nota"), &options)
+        .build_with_scoping(scoping, program);
+    if ret.errors.is_empty() { Ok(()) } else { Err(ret.errors) }
+}
+
 /// Compile a `.nota` source string to a JS module (+ optional source map).
 ///
-/// Parses the whole file in Nota *document mode* (markup at the top level → `Doc`) and runs
-/// `oxc_codegen`. On a parse error, returns the collected diagnostics (`Err`); the reader is a pure
-/// function `String → (JS, map, diagnostics)`.
+/// The build path: parses the whole file in Nota *document mode* (markup at the top level → `Doc`),
+/// lowers, **strips embedded TypeScript** to plain JS (contract H2), and runs `oxc_codegen`. On a
+/// parse error or a name-collision diagnostic, returns the collected diagnostics (`Err`).
 ///
 /// `source_map_path` controls whether a source map is generated (it names the source in the map);
 /// pass `None` to skip map generation (faster).
 ///
-/// **Parse mode:** this build entry parses with [`SourceType::default`] (= `mjs`, plain JavaScript)
-/// for back-compatibility, so embedded **TypeScript** (e.g. `% const n: number = …`) is *not*
-/// accepted here. The mapping entries [`compile_with_mappings`] and [`compile_virtual`] parse with
-/// [`SourceType::tsx`] (TS-aware). To make the build path accept embedded TS too, switch this to
-/// `SourceType::tsx()` (verified to leave the all-JS fixtures byte-identical).
-///
 /// # Errors
-/// If the source is not well-formed Nota.
+/// If the source is not well-formed Nota, or a `%` binding collides with a reserved emit name.
 pub fn compile(
     source_text: &str,
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiled, Vec<OxcDiagnostic>> {
-    let allocator = Allocator::default();
-    let mut program =
-        Parser::new(&allocator, source_text, SourceType::default()).parse_nota_document()?;
-    NotaLowering::new(&allocator, source_text, false).lower_document_program(&mut program);
-
-    let options = CodegenOptions { source_map_path, ..CodegenOptions::default() };
-    let CodegenReturn { code, map, .. } = Codegen::new().with_options(options).build(&program);
-
-    Ok(NotaCompiled { code, map })
+    let out = compile_internal(
+        source_text,
+        CompileConfig {
+            strip_ts: true,
+            collect_mappings: false,
+            lenient_diagnostics: false,
+            source_map_path,
+        },
+    )?;
+    Ok(NotaCompiled { code: out.code, map: out.map })
 }
 
 /// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s.
 ///
-/// The build-path companion to [`compile`] that additionally exposes the per-range source⇄generated
-/// code mappings the language server consumes. Parses in [`SourceType::tsx`] so embedded
-/// **TypeScript** (in `%`/`[props]`/`@(expr)`) parses; codegen preserves whatever is in the AST (it
-/// does not strip types — see [`compile_virtual`]).
+/// The mapping companion to [`compile`] that exposes the per-range source⇄generated code mappings the
+/// language server consumes. Parses TS-aware; codegen **preserves** TS types verbatim (mappings stay
+/// byte-exact — it does not strip, unlike the build [`compile`]).
 ///
 /// # Errors
-/// If the source is not well-formed Nota.
+/// If the source is not well-formed Nota, or a `%` binding collides with a reserved emit name.
 pub fn compile_with_mappings(
     source_text: &str,
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiledWithMappings, Vec<OxcDiagnostic>> {
-    let allocator = Allocator::default();
-    let mut program =
-        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
-    let marks =
-        NotaLowering::new(&allocator, source_text, true).lower_document_program(&mut program);
-
-    let options = CodegenOptions { source_map_path, ..CodegenOptions::default() };
-    let CodegenReturn { code, map, nota_offset_log, .. } =
-        Codegen::new().with_options(options).with_nota_offset_log().build(&program);
-
-    let mappings = build_code_mappings(source_text, &code, &marks, &nota_offset_log);
-    Ok(NotaCompiledWithMappings { code, map, mappings })
+    let out = compile_internal(
+        source_text,
+        CompileConfig {
+            strip_ts: false,
+            collect_mappings: true,
+            lenient_diagnostics: false,
+            source_map_path,
+        },
+    )?;
+    Ok(NotaCompiledWithMappings { code: out.code, map: out.map, mappings: out.mappings })
 }
 
 /// Compile a `.nota` source to the **type-preserving virtual `.tsx`** emit + code mappings.
 ///
-/// The language-server emit. Same parse as the build path, but:
-/// * parsed in [`SourceType::tsx`] so embedded TS in `%`/`[props]`/`@(expr)`/`@for` heads is in the
-///   AST, and
-/// * codegen **preserves** those TS type annotations verbatim (it prints what is in the AST — the
-///   reader/codegen path has *no* type-stripping step; stripping lives in `oxc_transformer`, which
-///   the reader never invokes). The result is framed as a `.tsx` virtual file for the TS service.
-///
-/// Returns the virtual code + the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
+/// The language-server emit: TS-aware parse, and codegen **preserves** the TS type annotations
+/// verbatim (no strip step) so the TS service can type the virtual `.tsx`. Returns the virtual code +
+/// the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
 ///
 /// **For the Volar `LanguagePlugin`:** like the build path, the runtime `import { h, decode,
 /// Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Math`
@@ -221,21 +297,18 @@ pub fn compile_with_mappings(
 /// index the `.nota`).
 ///
 /// # Errors
-/// If the source is not well-formed Nota.
+/// If the source is not well-formed Nota, or a `%` binding collides with a reserved emit name.
 pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<OxcDiagnostic>> {
-    let allocator = Allocator::default();
-    let mut program =
-        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
-    let marks =
-        NotaLowering::new(&allocator, source_text, true).lower_document_program(&mut program);
-
-    // No sourcemap path: the virtual emit ships code mappings, not a flat sourcemap. Codegen
-    // prints TS annotations verbatim, so the emit is the type-preserving `.tsx`.
-    let CodegenReturn { code, nota_offset_log, .. } =
-        Codegen::new().with_nota_offset_log().build(&program);
-
-    let mappings = build_code_mappings(source_text, &code, &marks, &nota_offset_log);
-    Ok(NotaVirtualCompiled { code, mappings })
+    let out = compile_internal(
+        source_text,
+        CompileConfig {
+            strip_ts: false,
+            collect_mappings: true,
+            lenient_diagnostics: true,
+            source_map_path: None,
+        },
+    )?;
+    Ok(NotaVirtualCompiled { code: out.code, mappings: out.mappings })
 }
 
 /// Join the reader's [`NotaMappingMark`]s (source ranges + kinds) with codegen's offset log into
@@ -346,6 +419,39 @@ mod tests {
     fn compile_reports_errors() {
         match compile("@p{unterminated", None) {
             Ok(_) => panic!("expected a diagnostic for an unterminated body"),
+            Err(errors) => assert!(!errors.is_empty()),
+        }
+    }
+
+    #[test]
+    fn compile_accepts_and_strips_embedded_typescript() {
+        // The build path parses TS-aware (contract H2) and strips the types → plain, runnable JS.
+        let out = compile("% const n: number = 1\n@p{@(n)}\n", None).expect("compiles");
+        assert!(
+            !out.code.contains(": number"),
+            "TS annotation stripped on the build path:\n{}",
+            out.code
+        );
+        assert!(out.code.contains("const n = 1"), "the value survives the strip:\n{}", out.code);
+    }
+
+    #[test]
+    fn compile_strips_generic_call_type_arguments() {
+        // A generic call `f<Foo>(x)` must parse as a call (not `f < Foo > x`), then strip to `f(x)`.
+        let out = compile("@p{@(f<Foo>(x))}\n", None).expect("compiles");
+        assert!(
+            !out.code.contains("f < Foo"),
+            "generic not mis-parsed as comparison:\n{}",
+            out.code
+        );
+        assert!(out.code.contains("f(x)"), "type args stripped to a plain call:\n{}", out.code);
+    }
+
+    #[test]
+    fn compile_reports_reserved_name_collision() {
+        // A `%` binding that shadows a reserved emit name (`h`/`Doc`/…) is a lowering diagnostic.
+        match compile("%let h = 1\n@p{x}\n", None) {
+            Ok(out) => panic!("expected a collision diagnostic, got:\n{}", out.code),
             Err(errors) => assert!(!errors.is_empty()),
         }
     }

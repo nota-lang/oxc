@@ -15600,6 +15600,7 @@ impl<'a> AstBuilder<'a> {
     /// * `tag`
     /// * `props`
     /// * `children`
+    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
     #[inline]
     pub fn nota_markup_kind_element(
         self,
@@ -15607,8 +15608,9 @@ impl<'a> AstBuilder<'a> {
         tag: NotaTag<'a>,
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
+        is_colon: bool,
     ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Element(self.alloc_nota_element(span, tag, props, children))
+        NotaMarkupKind::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
     }
 
     /// Build a [`NotaMarkupKind::Fragment`].
@@ -15814,6 +15816,7 @@ impl<'a> AstBuilder<'a> {
     /// * `tag`
     /// * `props`
     /// * `children`
+    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
     #[inline]
     pub fn nota_child_element(
         self,
@@ -15821,8 +15824,9 @@ impl<'a> AstBuilder<'a> {
         tag: NotaTag<'a>,
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
+        is_colon: bool,
     ) -> NotaChild<'a> {
-        NotaChild::Element(self.alloc_nota_element(span, tag, props, children))
+        NotaChild::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
     }
 
     /// Build a [`NotaChild::Fragment`].
@@ -16084,6 +16088,7 @@ impl<'a> AstBuilder<'a> {
     /// * `tag`
     /// * `props`
     /// * `children`
+    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
     #[inline]
     pub fn nota_element(
         self,
@@ -16091,8 +16096,9 @@ impl<'a> AstBuilder<'a> {
         tag: NotaTag<'a>,
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
+        is_colon: bool,
     ) -> NotaElement<'a> {
-        NotaElement { node_id: Default::default(), span, tag, props, children }
+        NotaElement { node_id: Default::default(), span, tag, props, children, is_colon }
     }
 
     /// Build a [`NotaElement`], and store it in the memory arena.
@@ -16105,6 +16111,7 @@ impl<'a> AstBuilder<'a> {
     /// * `tag`
     /// * `props`
     /// * `children`
+    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
     #[inline]
     pub fn alloc_nota_element(
         self,
@@ -16112,8 +16119,9 @@ impl<'a> AstBuilder<'a> {
         tag: NotaTag<'a>,
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
+        is_colon: bool,
     ) -> Box<'a, NotaElement<'a>> {
-        Box::new_in(self.nota_element(span, tag, props, children), self.allocator)
+        Box::new_in(self.nota_element(span, tag, props, children, is_colon), self.allocator)
     }
 
     /// Build a [`NotaTag::Host`].

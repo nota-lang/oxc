@@ -203,6 +203,18 @@ impl<'a, C: Config> Lexer<'a, C> {
         self.next_markup_text()
     }
 
+    /// The lexer's current source end offset (Nota reader). Save before [`Self::nota_set_source_end`].
+    pub(crate) fn nota_source_end(&self) -> u32 {
+        self.source.end_offset()
+    }
+
+    /// Temporarily bound the lexer's source end to `offset` so it lexes `Eof` there (Nota reader):
+    /// bounds a `%`/`%%%` statement parse to its extent. Pair with [`Self::nota_source_end`] to save
+    /// the prior end, and restore it (call again with the saved value) right after the bounded parse.
+    pub(crate) fn nota_set_source_end(&mut self, offset: u32) {
+        self.source.set_end_offset(offset);
+    }
+
     /// Creates a checkpoint storing the current lexer state.
     /// Use `rewind` to restore the lexer to the state stored in the checkpoint.
     pub fn checkpoint(&self) -> LexerCheckpoint<'a> {

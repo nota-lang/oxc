@@ -3333,6 +3333,7 @@ impl ESTree for NotaElement<'_> {
         state.serialize_field("tag", &self.tag);
         state.serialize_field("props", &self.props);
         state.serialize_field("children", &self.children);
+        state.serialize_field("isColon", &self.is_colon);
         state.serialize_span(self.span);
         state.end();
     }

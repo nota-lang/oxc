@@ -30,6 +30,11 @@ name = "nota_compile"
 path = "examples/nota_compile.rs"
 required-features = ["codegen"]
 
+[[example]]
+name = "nota_inspect"
+path = "examples/nota_inspect.rs"
+required-features = ["codegen"]
+
 [dependencies]
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }
@@ -67,8 +72,9 @@ semantic = ["oxc_semantic"]
 transformer = ["oxc_transformer", "oxc_transformer_plugins"]
 minifier = ["oxc_mangler", "oxc_minifier"]
 # `codegen` is the Nota compile path (`oxc::nota`), which lowers the Nota AST via `oxc_transformer`
-# before codegen — so it pulls the transformer in too.
-codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap", "oxc_transformer"]
+# before codegen — so it pulls the transformer in too. The build path additionally strips embedded
+# TypeScript via the transformer (which needs `oxc_semantic` for scoping), so it pulls that in as well.
+codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap", "oxc_transformer", "oxc_semantic"]
 mangler = ["oxc_mangler"]
 cfg = ["oxc_cfg", "oxc_semantic/cfg"]
 isolated_declarations = ["oxc_isolated_declarations"]
