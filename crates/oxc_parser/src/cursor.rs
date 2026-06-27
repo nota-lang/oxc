@@ -145,16 +145,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = self.lexer.seek_and_lex_nota_head(offset);
     }
 
-    /// Peek the raw source byte at `offset`, or `None` if at/after end of source.
-    ///
-    /// Used by the Nota reader to decide element-vs-interpolation by the byte immediately after a
-    /// head (`@name{`/`@name[`/`@name:` are elements; `@name ` interpolates) without letting the JS
-    /// lexer skip significant whitespace. A cheap, side-effect-free lookahead into `source_text`.
-    #[inline]
-    pub(crate) fn byte_at(&self, offset: u32) -> Option<u8> {
-        self.source_text.as_bytes().get(offset as usize).copied()
-    }
-
     /// Advance and return true if we are at `Kind`, return false otherwise
     #[inline]
     #[must_use = "Use `bump` instead of `eat` if you are ignoring the return value"]

@@ -21,7 +21,7 @@ mod comment;
 mod identifier;
 mod jsx;
 mod kind;
-mod nota;
+pub mod nota;
 mod number;
 mod numeric;
 mod punctuation;

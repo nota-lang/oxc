@@ -36,10 +36,18 @@ use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::ast::*;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, SourceType, Span};
-use oxc_syntax::identifier::is_identifier_start;
 
 use crate::{
-    ParserConfig as Config, ParserImpl, diagnostics, error_handler::FatalError, lexer::Kind,
+    ParserConfig as Config, ParserImpl, diagnostics,
+    error_handler::FatalError,
+    lexer::Kind,
+    lexer::nota::{
+        CodeScan, byte_at, colon_block_extent, colon_prop_line_at, else_peek, escape_extent,
+        find_emphasis_close, find_fence_close, heading_at, is_ident_start_at, is_statement_line,
+        lex_code_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
+        markup_trigger, next_line_start, next_percent_line_or_end, percent_line_is_empty,
+        scan_hyphen_tail, span_of_slice, statement_kind,
+    },
 };
 
 /// One piece of an element body, collected during the body-segment loop, *before* the Scribble
@@ -185,7 +193,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // keep the JS-lexed path. (Mirrors Typst's per-mode identifier lexing.)
         debug_assert!(self.at(Kind::At), "parse_nota_form entered not at `@`");
         let after_at = self.cur_token().end();
-        if self.source_text[after_at as usize..].chars().next().is_some_and(is_identifier_start) {
+        if is_ident_start_at(self.source_text, after_at) {
             self.nota_seek_head(after_at);
         } else {
             self.bump_any();
@@ -273,8 +281,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // full name. Otherwise the `-` is not part of an (interpolation) name (`@my-foo bar` stays
             // `@my` interpolation + literal `-foo bar`), so we keep just the leading identifier.
             if !is_component_name(name)
-                && let Some(ext_end) = self.scan_hyphenated_tag_tail(span.end)
-                && !matches!(self.peek_markup_trigger(ext_end), MarkupTrigger::None)
+                && let Some(ext_end) = scan_hyphen_tail(self.source_text, span.end)
+                && !matches!(markup_trigger(self.source_text, ext_end), MarkupTrigger::None)
             {
                 let full = &self.source_text[span.start as usize..ext_end as usize];
                 let span = Span::new(span.start, ext_end);
@@ -286,26 +294,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         } else {
             None
         }
-    }
-
-    /// Scan a custom-element name tail starting at `at`: one or more `-`-joined runs of identifier
-    /// characters (`@my-widget`, `@x-y-z`). Returns the offset past the tail, or `None` if `at` is
-    /// not a `-` directly followed by an identifier character. Pure raw-source scan (the JS lexer
-    /// stops a bare identifier at `-`, so the tail is read here over the source bytes).
-    fn scan_hyphenated_tag_tail(&self, at: u32) -> Option<u32> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = at as usize;
-        let mut consumed = false;
-        while bytes.get(i) == Some(&b'-')
-            && bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-        {
-            i += 1; // the `-`
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            consumed = true;
-        }
-        consumed.then_some(i as u32)
     }
 
     /// Finish an `@`-form that turned out to be an *interpolation* (no `{`/`[`/`:`/`|{` trigger):
@@ -399,17 +387,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// (interpolation). This is the typed, whitespace-sensitive analog of Typst's `directly_at`: the
     /// single site that inspects raw bytes for the head→body decision (the byte after a head is not
     /// a JS token — a space is significant, and `|{` is not a JS token — so we peek rather than lex).
-    fn peek_markup_trigger(&self, after: u32) -> MarkupTrigger {
-        match self.byte_at(after) {
-            Some(b'{') => MarkupTrigger::Brace,
-            Some(b'[') => MarkupTrigger::Bracket,
-            Some(b':') => MarkupTrigger::Colon,
-            // `|{` opens a verbatim body; a lone `|` is not a trigger.
-            Some(b'|') if self.byte_at(after + 1) == Some(b'{') => MarkupTrigger::Verbatim,
-            _ => MarkupTrigger::None,
-        }
-    }
-
     /// Cross the head→body boundary: classify the trigger, then consume the head's boundary token
     /// (the bare identifier, or the `@(expr)` head's `)`) in the lexer mode that trigger implies, and
     /// return the trigger so the caller can dispatch on it. This is the *one* place the head's
@@ -423,7 +400,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// * `None` (interpolation) — consume the boundary token, resuming markup text in a body (so
     ///   significant whitespace after the head is not skipped) or normal JS otherwise.
     fn commit_head(&mut self, head: &NotaHead<'a>, in_body: bool) -> MarkupTrigger {
-        let trigger = self.peek_markup_trigger(head.end);
+        let trigger = markup_trigger(self.source_text, head.end);
         // An *extended* head — a hyphenated host tag (`@my-widget`) — runs past the lexer's current
         // boundary token, so `bump_any` (which consumes only that token) would mis-position; seek to
         // `head.end` instead. A plain head's boundary token ends exactly at `head.end` → bump.
@@ -493,7 +470,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         for item in items {
             out.push(match item {
                 BodyItem::Text(t) => {
-                    let text = self.ast.nota_text(self.span_of_slice(t), t);
+                    let text = self.ast.nota_text(span_of_slice(self.source_text, t), t);
                     NotaChild::Text(self.ast.alloc(text))
                 }
                 BodyItem::Child(child) => child,
@@ -502,35 +479,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         out
     }
 
-    /// The source [`Span`] of a text run, recovered from its subslice offset within `source_text`.
-    ///
-    /// A body text run is one of two things: a `&source_text[a..b]` slice of real content (a markup
-    /// text token, an escaped char that *is* in source), which gets its true `a..b` span; or a
-    /// synthesized/arena literal not backed by source — a punctuation token re-materialized as a
-    /// `'static` `"\n"`/`"{"`/`"}"`/`"|"`, or an escaped/`alloc_char` literal — which is foreign to
-    /// the source allocation and gets an empty `0..0` span (it is whitespace/punctuation, never a
-    /// navigation target). The subslice test is a plain integer-offset comparison: a real subslice's
-    /// pointer lies within `[base, base+len]`; a foreign allocation's does not.
-    fn span_of_slice(&self, t: &str) -> Span {
-        let base = self.source_text.as_ptr() as usize;
-        let lo = t.as_ptr() as usize;
-        let hi = lo + t.len();
-        if lo >= base && hi <= base + self.source_text.len() {
-            Span::new((lo - base) as u32, (hi - base) as u32)
-        } else {
-            Span::empty(0)
-        }
-    }
-
     /// Parse a run of consecutive `%`/`%%%` statement lines from `line_start`, pushing each parsed
     /// statement as a `NotaChild::Statement`. Returns the offset of the first non-statement line.
     /// Used for both document and element bodies (full-document deferral; lowering routes vs IIFEs).
     fn collect_statements(&mut self, line_start: u32, items: &mut Vec<BodyItem<'a>>) -> u32 {
         let mut at = line_start;
-        while let Some((content, is_fence)) = self.statement_kind(at) {
+        while let Some((content, is_fence)) = statement_kind(self.source_text, at) {
             let end = if is_fence {
                 self.collect_fence_statements(content, items)
-            } else if self.percent_line_is_empty(content) {
+            } else if percent_line_is_empty(self.source_text, content) {
                 // A `%` line with no statement — empty (`%`), whitespace-only, or only a `//` line
                 // comment — is a no-op: skip the line (it must NOT swallow the following markup as a
                 // statement). `content` is on this line, so `next_line_start` below advances past it.
@@ -541,7 +498,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 // source end. A multi-line statement (`%const X = inlineComponent((c) => {⏎ … ⏎})`) has
                 // no intervening line-leading `%`, so the bound is source end and the parser stops
                 // naturally at the next markup (`@`), exactly as before.
-                let bound = self.next_percent_line_or_end(content);
+                let bound = next_percent_line_or_end(self.source_text, content);
                 debug_assert!(self.source_text.is_char_boundary(bound as usize));
                 let saved = self.lexer.nota_source_end();
                 self.lexer.nota_set_source_end(bound);
@@ -556,8 +513,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // A fence's resume offset is already the start of the line AFTER the closing fence; a
             // single-`%` statement's `end` is mid-line, so it advances to the next line. (Advancing a
             // fence again would drop the line right after it — markup or another statement.)
-            at = if is_fence { end } else { self.next_line_start(end) };
-            if !self.is_statement_line(at) {
+            at = if is_fence { end } else { next_line_start(self.source_text, end) };
+            if !is_statement_line(self.source_text, at) {
                 break;
             }
         }
@@ -567,7 +524,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse the inner statements of a `%%%`…`%%%` fence (from `inner_start`), pushing each as a
     /// `NotaChild::Statement`. Returns the offset past the closing fence.
     fn collect_fence_statements(&mut self, inner_start: u32, items: &mut Vec<BodyItem<'a>>) -> u32 {
-        let (inner_end, after_fence) = self.find_fence_close(inner_start);
+        let (inner_end, after_fence) = find_fence_close(self.source_text, inner_start);
         debug_assert!(self.source_text.is_char_boundary(inner_end as usize));
         // Bound the fence body's JS parse to `[inner_start, inner_end)` so the closing `%%%` is never
         // read as JS: a bare-expression body (`x`) then EOF → ASI → `x;`; without the bound `x⏎%%%`
@@ -638,11 +595,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // element-body ones in an IIFE); lists/headings fire only at brace depth 0 (a
                     // balanced `{…}` is literal body text).
                     loop {
-                        if self.is_statement_line(next_line) {
+                        if is_statement_line(self.source_text, next_line) {
                             next_line = self.collect_statements(next_line, items);
                             continue;
                         }
-                        if *depth == 0 && self.list_marker_at(next_line).is_some() {
+                        if *depth == 0 && list_marker_at(self.source_text, next_line).is_some() {
                             let (els, resume) = self.parse_list(next_line);
                             for e in els {
                                 items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
@@ -868,7 +825,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// nothing (→ `null`). Resumes the outer context (markup / JS) at the end of the whole chain.
     /// `close_end` is one byte past the just-parsed branch's `}`.
     fn parse_else_continuation(&mut self, close_end: u32, in_body: bool) -> Option<NotaElse<'a>> {
-        match self.peek_else(close_end) {
+        match else_peek(self.source_text, close_end) {
             ElsePeek::None => {
                 // No continuation: resume the outer context past the `}`.
                 self.resume_after_control(close_end, in_body);
@@ -968,144 +925,31 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.nota_seek_to(offset);
         }
     }
-
-    /// Scan the raw source from `close_end` (one past a branch's `}`) for an `else`/`else if`
-    /// contextual continuation. A continuation requires `else` to be the *next token* with **no
-    /// blank line** between (≥2 newlines in the gap breaks it); `\else` forces a literal (→ no
-    /// continuation). Returns where to resume parsing the continuation, or [`ElsePeek::None`].
-    fn peek_else(&self, close_end: u32) -> ElsePeek {
-        let bytes = self.source_text.as_bytes();
-        let mut i = close_end as usize;
-        let mut newlines = 0u32;
-        while i < bytes.len() {
-            match bytes[i] {
-                b' ' | b'\t' | b'\r' => i += 1,
-                b'\n' => {
-                    newlines += 1;
-                    if newlines >= 2 {
-                        return ElsePeek::None; // blank line: continuation broken
-                    }
-                    i += 1;
-                }
-                _ => break,
-            }
-        }
-        // `\else` — an escaped literal, not a continuation.
-        if i < bytes.len() && bytes[i] == b'\\' {
-            return ElsePeek::None;
-        }
-        // Match the keyword `else` followed by a word boundary.
-        if !matches_keyword(bytes, i, b"else") {
-            return ElsePeek::None;
-        }
-        // After `else`, skip whitespace and look for `if` (→ `else if`) or `{` (→ `else {`).
-        let mut j = i + 4;
-        while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
-            j += 1;
-        }
-        if matches_keyword(bytes, j, b"if") {
-            ElsePeek::ElseIf { if_offset: j as u32 }
-        } else if j < bytes.len() && bytes[j] == b'{' {
-            ElsePeek::Else { brace_offset: j as u32 }
-        } else {
-            // `else` not followed by `if`/`{` — malformed `else`; treat as no continuation so the
-            // text surfaces (and the misuse is caught by the un-lowered `else` / scope checks).
-            ElsePeek::None
-        }
-    }
 }
 
 /// A list marker found at a line start.
-struct ListMarker {
+pub struct ListMarker {
     /// `true` for an ordered marker (`+` / `N.`); `false` for a bullet (`-`).
-    ordered: bool,
+    pub ordered: bool,
     /// Indentation *depth* — the count of leading whitespace before the marker. This is what drives
     /// nesting: a marker deeper than the run's base nests inside the preceding item; one shallower
     /// ends the run. It is NOT a source offset (an earlier version conflated the two, so a dedented
     /// sibling at a *larger byte offset* than a nested marker was wrongly kept in the inner list).
-    indent: u32,
+    pub indent: u32,
     /// Byte offset of the marker's first char — the item's source start (for spans).
-    offset: u32,
+    pub offset: u32,
     /// Offset where the item body begins (just past the marker and its one separating space).
-    body_col: u32,
+    pub body_col: u32,
 }
 
 /// The result of scanning for an `else`/`else if` contextual continuation after an `@if` branch.
-enum ElsePeek {
+pub enum ElsePeek {
     /// No continuation (the alternate is `null`).
     None,
     /// `else if (…) {…}` — resume parsing at the `if` keyword (`if_offset`).
     ElseIf { if_offset: u32 },
     /// `else {…}` — resume parsing at the body `{` (`brace_offset`).
     Else { brace_offset: u32 },
-}
-
-/// Is `c` a "wordy" char for the emphasis word-boundary rule (Typst `in_word`): alphanumeric, with
-/// CJK scripts excluded (so CJK text gets emphasis without spaces)? `None` (start/end of source) is
-/// not wordy, so a marker at a boundary opens/closes. (CJK exclusion is approximated by Unicode
-/// block ranges — we have no `unicode-script` dep; ASCII + common Latin/Greek/Cyrillic are the
-/// realistic cases and classify exactly.)
-fn is_wordy(c: Option<char>) -> bool {
-    match c {
-        None => false,
-        Some(c) => c.is_alphanumeric() && !is_cjk(c),
-    }
-}
-
-/// Can a `*`/`_` at byte `off` in `source` **open** an emphasis span? Shared by the lexer's
-/// `next_nota_child` marker classification (Typst's `'*' if !in_word()`) and the parser's emphasis
-/// matching. The marker must be unescaped (even run of immediately-preceding `\`), not intra-word
-/// (the Typst word-boundary rule), and immediately followed by *content* — a non-whitespace byte that
-/// is not another copy of the same marker — so `* x`, marker runs `**`/`***`, and intra-word `a*b`
-/// stay literal instead of opening empty/garbled spans. (Whether a matching *close* exists is decided
-/// later, by the parser's [`Parser::find_emphasis_close`].)
-pub fn emphasis_can_open(source: &str, off: usize, marker: u8) -> bool {
-    let bytes = source.as_bytes();
-    // Unescaped: an even number of immediately-preceding backslashes.
-    let mut backslashes = 0usize;
-    let mut i = off;
-    while i > 0 && bytes[i - 1] == b'\\' {
-        backslashes += 1;
-        i -= 1;
-    }
-    if backslashes % 2 == 1 {
-        return false;
-    }
-    // Not intra-word: not (wordy(prev) && wordy(next)), the Typst word-boundary rule.
-    let prev = source.get(..off).and_then(|s| s.chars().next_back());
-    let next = source.get(off + 1..).and_then(|s| s.chars().next());
-    if is_wordy(prev) && is_wordy(next) {
-        return false;
-    }
-    // Immediately followed by content (non-whitespace, and not another copy of the marker).
-    matches!(bytes.get(off + 1), Some(&b) if !b.is_ascii_whitespace() && b != marker)
-}
-
-/// Approximate the CJK scripts Typst excludes from `in_word` (Han/Hiragana/Katakana/Hangul) by
-/// codepoint range — enough that CJK prose gets emphasis without surrounding spaces.
-fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF        // Hiragana + Katakana
-        | 0x3400..=0x4DBF      // CJK Ext A
-        | 0x4E00..=0x9FFF      // CJK Unified
-        | 0xAC00..=0xD7AF      // Hangul syllables
-        | 0xF900..=0xFAFF      // CJK compat
-        | 0x20000..=0x2FA1F    // CJK Ext B+ / compat supplement
-    )
-}
-
-/// Does `bytes[at..]` begin with the keyword `kw` followed by a word boundary (not an
-/// identifier-continue char)? Used to match the contextual `else`/`else if`/`if` keywords over the
-/// raw source without lexing.
-fn matches_keyword(bytes: &[u8], at: usize, kw: &[u8]) -> bool {
-    if at + kw.len() > bytes.len() || &bytes[at..at + kw.len()] != kw {
-        return false;
-    }
-    // Word boundary: the following byte must not continue an identifier.
-    match bytes.get(at + kw.len()) {
-        None => true,
-        Some(b) => !(b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$'),
-    }
 }
 
 // ===============================================================================================
@@ -1115,49 +959,6 @@ fn matches_keyword(bytes: &[u8], at: usize, kw: &[u8]) -> bool {
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
-    /// Is the `*`/`_` at `marker_off` (raw offset) a significant emphasis *marker*, or literal?
-    ///
-    /// Typst's rule (`references/typst/.../lexer.rs` `in_word`): a `*`/`_` is literal **only**
-    /// intra-word — when *both* the preceding and following chars are "wordy" (alphanumeric, with
-    /// CJK excluded). Otherwise it is a marker. So `my_var_name` keeps its `_` literal, while
-    /// `_italic_` and `*a _b_ c*` use them as markers. The open-vs-close determination is the
-    /// matcher's job ([`Self::find_emphasis_close`]); this only gates marker-vs-literal.
-    fn is_emphasis_marker(&self, marker_off: u32) -> bool {
-        // An escaped marker (`\*`/`\_`, odd run of preceding `\`) is literal (the `\`-stripping
-        // itself happens elsewhere — here we only suppress the marker).
-        if self.is_escaped(marker_off) {
-            return false;
-        }
-        let prev = self.char_before(marker_off);
-        let next = self.char_at(marker_off + 1);
-        !(is_wordy(prev) && is_wordy(next))
-    }
-
-    /// Can a `*`/`_` at `off` **close** an emphasis span? It must be a marker and immediately
-    /// *preceded* by content (a non-whitespace byte), so `foo *` (space before the marker) does not
-    /// close (Typst). Non-emptiness of the span is enforced by the caller ([`Self::find_emphasis_close`]).
-    fn can_close_emphasis(&self, off: u32) -> bool {
-        if !self.is_emphasis_marker(off) {
-            return false;
-        }
-        match (off as usize).checked_sub(1).and_then(|p| self.source_text.as_bytes().get(p)) {
-            Some(&b) => !b.is_ascii_whitespace(),
-            None => false,
-        }
-    }
-
-    /// Is the byte at `off` preceded by an *odd* run of backslashes (i.e. escaped)?
-    fn is_escaped(&self, off: u32) -> bool {
-        let bytes = self.source_text.as_bytes();
-        let mut n = 0usize;
-        let mut i = off as usize;
-        while i > 0 && bytes[i - 1] == b'\\' {
-            n += 1;
-            i -= 1;
-        }
-        n % 2 == 1
-    }
-
     /// Parse an emphasis span opened by `marker` (`*`→`strong`, `_`→`em`) at raw offset `open`.
     ///
     /// Finds the matching close marker over the raw source ([`Self::find_emphasis_close`]); if one
@@ -1165,7 +966,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// (nesting `@`-forms and nested emphasis) → `h(tag, {}, [...])` and resumes after `close`. With
     /// no matching close the marker is **literal** (Typst behavior) and we resume right after it.
     fn parse_emphasis(&mut self, marker: u8, open: u32, items: &mut Vec<BodyItem<'a>>) {
-        if let Some(close) = self.find_emphasis_close(open, marker) {
+        if let Some(close) = find_emphasis_close(self.source_text, open, marker) {
             let mut body: Vec<BodyItem<'a>> = Vec::new();
             self.collect_markup_range(open + 1, close, &mut body);
             let children = self.body_items_to_children(body);
@@ -1179,174 +980,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.push_literal_byte(items, marker);
             self.nota_seek_markup(open + 1);
         }
-    }
-
-    /// Find the matching close marker for an emphasis opened at `open` (raw offset of the marker).
-    ///
-    /// Scans the raw source for the next `marker` byte that is a valid marker (not intra-word). The
-    /// search is bounded by the emphasis's *scope*: it stops (returning `None`) at a blank line
-    /// (paragraph break — emphasis is intra-paragraph, à la Typst), at the `}` that closes the
-    /// enclosing body (brace depth dropping below the open level), or at EOF. Nested balanced `{…}`
-    /// is skipped. `@`-forms are skipped wholesale so a `*` *inside* an embedded expression cannot
-    /// close the span (the embedded JS owns its own `*`).
-    fn find_emphasis_close(&self, open: u32, marker: u8) -> Option<u32> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = open as usize + 1;
-        let mut depth: i32 = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            match b {
-                b'\\' => {
-                    // Escape: skip the escaped char (so `\*` cannot close).
-                    i += 2;
-                }
-                b'\n' => {
-                    // A blank line (this `\n` then optional-ws then another `\n`) ends the scope.
-                    let mut j = i + 1;
-                    while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r') {
-                        j += 1;
-                    }
-                    if j >= bytes.len() || bytes[j] == b'\n' {
-                        return None;
-                    }
-                    i += 1;
-                }
-                b'{' => {
-                    depth += 1;
-                    i += 1;
-                }
-                b'}' => {
-                    if depth == 0 {
-                        return None; // the enclosing body closes before a matching marker
-                    }
-                    depth -= 1;
-                    i += 1;
-                }
-                // Skip over a raw span (code/math/verbatim) so a `*`/`_` *inside* raw content
-                // cannot close the emphasis (the raw span owns its own markers).
-                b'`' | b'$' => i = self.skip_raw_span_for_emphasis(i),
-                b'|' if bytes.get(i + 1) == Some(&b'{') => {
-                    i = self.skip_raw_span_for_emphasis(i);
-                }
-                // Skip over an `@`-form's head and any `(…)`/`[…]` group so a `*`/`_` *inside* an
-                // embedded expression cannot close the emphasis (the embedded JS owns its own
-                // markers), and a stray `(`/`{`/`}` inside that JS cannot perturb `depth`. A trailing
-                // `{…}` markup body is left to the brace arms above (depth-tracked, escape-aware).
-                b'@' => i = self.skip_at_form_for_emphasis(i),
-                _ if b == marker && depth == 0 => {
-                    // A candidate close: a marker preceded by content, enclosing ≥1 byte (no empty
-                    // span). Empty (`**`) or space-before (`foo *`) closes are skipped → stay literal.
-                    if i as u32 > open + 1 && self.can_close_emphasis(i as u32) {
-                        return Some(i as u32);
-                    }
-                    i += 1;
-                }
-                _ => i += 1,
-            }
-        }
-        None
-    }
-
-    /// Skip a raw span (inline/fenced code, math, or `|{ … }|` verbatim) whose opener byte is at
-    /// `at`, returning the offset just past its close (or just past the opener if it has no valid
-    /// close — then the opener byte was literal and we advance by one to make progress). Used by
-    /// [`Self::find_emphasis_close`] so emphasis matching steps over raw content.
-    fn skip_raw_span_for_emphasis(&self, at: usize) -> usize {
-        let bytes = self.source_text.as_bytes();
-        match bytes[at] {
-            b'`' => {
-                let mut k = at;
-                while k < bytes.len() && bytes[k] == b'`' {
-                    k += 1;
-                }
-                let fence_len = k - at;
-                match self.find_backtick_close(k, fence_len) {
-                    Some(close) => close + fence_len, // past the closing run
-                    None => at + 1,                   // unterminated → the backtick is literal
-                }
-            }
-            b'$' => {
-                let display = bytes.get(at + 1) == Some(&b'$');
-                let delim = if display { 2 } else { 1 };
-                let mut k = at + delim;
-                while k < bytes.len() {
-                    match bytes[k] {
-                        b'\\' => k += 2,
-                        b'$' if !display => return k + 1,
-                        b'$' if display && bytes.get(k + 1) == Some(&b'$') => return k + 2,
-                        _ => k += 1,
-                    }
-                }
-                at + 1 // unterminated → the `$` is literal
-            }
-            b'|' => {
-                // `|{ … }|` — scan to the closing `}|`.
-                let mut k = at + 2;
-                while k < bytes.len() {
-                    if bytes[k] == b'}' && bytes.get(k + 1) == Some(&b'|') {
-                        return k + 2;
-                    }
-                    k += 1;
-                }
-                at + 1 // unterminated
-            }
-            _ => at + 1,
-        }
-    }
-
-    /// Skip an `@`-form whose `@` byte is at `at` (raw offset), returning the offset just past the
-    /// form's *head* and any immediately-following `(…)`/`[…]` group — the parenthesized
-    /// interpolation `@(expr)` or an attribute list `@name[…]`. Used by [`Self::find_emphasis_close`]
-    /// so a `*`/`_` *inside* an embedded expression cannot be mistaken for the emphasis close, and a
-    /// stray bracket inside that JS cannot perturb the caller's `{…}` depth counter.
-    ///
-    /// A trailing `{…}` markup body is deliberately left to the caller's main scan (its depth/escape/
-    /// raw-span machinery already handles markup braces). The group skip ([`Self::skip_balanced`])
-    /// matches brackets only — it does not interpret JS string/template literals, so a bracket char
-    /// inside a string inside `@(…)` (e.g. `@(")")`) can mis-scan. That is vanishingly rare inside
-    /// inline emphasis and was never handled before; the realistic case (`@(a * b)`) is exact.
-    fn skip_at_form_for_emphasis(&self, at: usize) -> usize {
-        let bytes = self.source_text.as_bytes();
-        let mut i = at + 1; // past '@'
-        // `@name` head: identifier bytes plus `.`-member chains (non-ASCII bytes are identifier
-        // continuations, e.g. `@café`). `@(expr)` has no identifier head — the group loop below skips
-        // the `(…)`. Over-consuming a trailing `.` is harmless: only `*`/`_` matter as close markers.
-        while i < bytes.len()
-            && (bytes[i].is_ascii_alphanumeric()
-                || matches!(bytes[i], b'_' | b'$' | b'.')
-                || bytes[i] >= 0x80)
-        {
-            i += 1;
-        }
-        // Adjacent `(…)`/`[…]` groups (the interpolation expr, attribute lists, call/index chains).
-        while matches!(bytes.get(i), Some(b'(' | b'[')) {
-            i = self.skip_balanced(i);
-        }
-        i
-    }
-
-    /// Skip a balanced bracket group (`(…)`/`[…]`/`{…}`, nesting all three) whose opener is at `at`,
-    /// returning the offset just past the matching closer, or `at + 1` if unterminated so the caller
-    /// makes progress. Brackets only — string/comment contents are not interpreted (see
-    /// [`Self::skip_at_form_for_emphasis`]).
-    fn skip_balanced(&self, at: usize) -> usize {
-        let bytes = self.source_text.as_bytes();
-        let mut depth = 0u32;
-        let mut i = at;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'(' | b'[' | b'{' => depth += 1,
-                b')' | b']' | b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return i + 1;
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        at + 1 // unterminated → caller advances past the opener
     }
 
     /// Push a single literal byte (an ASCII sigil that turned out to be non-significant) as text.
@@ -1365,20 +998,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         items.push(BodyItem::Text(s));
     }
 
-    /// The `char` ending at byte `offset` (i.e. the char immediately *before* `offset`), or `None`
-    /// at the start of source. Decodes a full UTF-8 scalar so non-ASCII word chars classify right.
-    fn char_before(&self, offset: u32) -> Option<char> {
-        if offset == 0 {
-            return None;
-        }
-        self.source_text.get(..offset as usize).and_then(|s| s.chars().next_back())
-    }
-
-    /// The `char` starting at byte `offset`, or `None` at/after end of source.
-    fn char_at(&self, offset: u32) -> Option<char> {
-        self.source_text.get(offset as usize..).and_then(|s| s.chars().next())
-    }
-
     // ------------------------------------------------------------------------------------------
     // Line constructs: headings (`#`) and lists (`-`/`+`/`N.`). Detected at a line start (the
     // `collect_markup` `\n` arm + the document/body start). Each emits a flat element; the runtime
@@ -1389,84 +1008,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `h("h{n}", {}, [rest-of-line])` and return `(element, end)` where `end` is the offset of the
     /// line's terminating `\n` (or EOF). Else `None` (the line is ordinary markup).
     fn try_heading(&mut self, line_start: u32) -> Option<(NotaHeading<'a>, u32)> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = line_start as usize;
-        // Skip leading indentation (consistent with list markers, which tolerate leading indent).
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        // Count the `#` run.
-        let run_start = i;
-        while i < bytes.len() && bytes[i] == b'#' {
-            i += 1;
-        }
-        let level = i - run_start;
-        // 1–6 `#` followed by a single separating space or tab.
-        if !(1..=6).contains(&level) || i >= bytes.len() || !matches!(bytes[i], b' ' | b'\t') {
-            return None;
-        }
-        let body_start = i as u32 + 1; // skip the one separating space/tab
-        let line_end = self.line_content_end(line_start); // offset of the line's `\n` (or EOF)
-
+        // The lexer detects the `#`-marker + extent; we collect the inline body and build the node.
+        let (level, body_start, line_end) = heading_at(self.source_text, line_start)?;
         let mut items: Vec<BodyItem<'a>> = Vec::new();
         self.collect_markup_range(body_start, line_end, &mut items);
         let children = self.body_items_to_children(items);
-
         let span = Span::new(line_start, line_end);
-        let element = self.ast.nota_heading(span, level as u8, children);
+        let element = self.ast.nota_heading(span, level, children);
         Some((element, line_end))
-    }
-
-    /// The offset of the terminating `\n` of the line containing `line_start` (or EOF if none).
-    fn line_content_end(&self, line_start: u32) -> u32 {
-        let bytes = self.source_text.as_bytes();
-        let mut i = line_start as usize;
-        while i < bytes.len() && bytes[i] != b'\n' {
-            i += 1;
-        }
-        i as u32
-    }
-
-    /// Classify a list marker at the first non-whitespace of the line at `line_start`. Returns the
-    /// marker kind, the marker's *content column* (offset just past the marker + its one space —
-    /// where the item body begins), and the indent (offset of the first non-ws). `None` if the line
-    /// does not open with a list marker.
-    fn list_marker_at(&self, line_start: u32) -> Option<ListMarker> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = line_start as usize;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        // `indent` is the *depth* (leading-whitespace count); `offset` is the marker's byte position.
-        let indent = (i - line_start as usize) as u32;
-        let offset = i as u32;
-        if i >= bytes.len() {
-            return None;
-        }
-        match bytes[i] {
-            // `-`+space (bullet) / `+`+space (number).
-            b'-' | b'+' if i + 1 < bytes.len() && bytes[i + 1] == b' ' => {
-                let ordered = bytes[i] == b'+';
-                Some(ListMarker { ordered, indent, offset, body_col: i as u32 + 2 })
-            }
-            // `N.`+space — an explicit ordered marker (digits then `.` then space).
-            b'0'..=b'9' => {
-                let mut j = i;
-                while j < bytes.len() && bytes[j].is_ascii_digit() {
-                    j += 1;
-                }
-                if j < bytes.len()
-                    && bytes[j] == b'.'
-                    && j + 1 < bytes.len()
-                    && bytes[j + 1] == b' '
-                {
-                    Some(ListMarker { ordered: true, indent, offset, body_col: j as u32 + 2 })
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
     }
 
     /// Parse a run of list items starting at `line_start` (the first line is known to be a list
@@ -1475,12 +1024,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `h("nota-ul-li"|"nota-ol-li", {}, [body])`. Returns `(elements, resume)` where `resume` is the offset
     /// where the run ended (a line that is neither a continuation nor a same-level marker).
     fn parse_list(&mut self, line_start: u32) -> (Vec<NotaListItem<'a>>, u32) {
-        let base = self.list_marker_at(line_start).expect("parse_list: not a marker line");
+        let base =
+            list_marker_at(self.source_text, line_start).expect("parse_list: not a marker line");
         let base_indent = base.indent;
         let mut elements: Vec<NotaListItem<'a>> = Vec::new();
         let mut at = line_start;
 
-        while let Some(marker) = self.list_marker_at(at) {
+        while let Some(marker) = list_marker_at(self.source_text, at) {
             if marker.indent < base_indent {
                 break; // a shallower marker belongs to an enclosing list
             }
@@ -1491,9 +1041,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // The item body extent: rest of the marker line + subsequent lines indented strictly
             // past the marker's *indent* (block-sugar rule). Deeper list markers within that extent
             // become nested `nota-ul-li`/`nota-ol-li` children via the recursive body collection.
-            let line_end = self.line_content_end(at);
+            let line_end = line_content_end(self.source_text, at);
             let body_start = marker.body_col.min(line_end);
-            let item_end = self.list_item_extent(line_end, marker.indent);
+            let item_end = list_item_extent(self.source_text, line_end, marker.indent);
 
             let children = self.collect_list_item_body(body_start, item_end);
             let kind = if marker.ordered { NotaListKind::Ordered } else { NotaListKind::Unordered };
@@ -1503,43 +1053,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             at = item_end;
             // Skip a single trailing newline already consumed by the extent; continue if the next
             // line is another marker at >= base_indent.
-            if self.list_marker_at(at).is_none() {
+            if list_marker_at(self.source_text, at).is_none() {
                 break;
             }
         }
         (elements, at)
-    }
-
-    /// The end offset of a list item's body: subsequent lines indented strictly past `marker_indent`
-    /// (or blank) are part of the item; the item ends at the first line at/below `marker_indent` that
-    /// is non-blank. Returns the offset of that line's start (the resume point).
-    fn list_item_extent(&self, first_line_end: u32, marker_indent: u32) -> u32 {
-        let bytes = self.source_text.as_bytes();
-        let mut end = self.next_line_start(first_line_end);
-        loop {
-            if end as usize >= bytes.len() {
-                break;
-            }
-            let line_start = end as usize;
-            let mut i = line_start;
-            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-            let is_blank = i >= bytes.len() || bytes[i] == b'\n';
-            let indent = (i - line_start) as u32;
-            // A same/shallower-indented *marker* line ends this item (it is a sibling/uncle item).
-            if !is_blank && self.list_marker_at(end).is_some() && indent <= marker_indent {
-                break;
-            }
-            // Non-marker content indented strictly past the marker continues the item; a deeper
-            // marker (nested list) also continues it.
-            if is_blank || indent > marker_indent {
-                end = self.next_line_start(end);
-            } else {
-                break;
-            }
-        }
-        end
     }
 
     /// Collect a list item's body over `[start, end)`: the rest-of-marker-line content plus indented
@@ -1572,22 +1090,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// literal text item (backslash dropped) and return the offset to resume markup text from. A
     /// lone trailing `\` (EOF after it) is pushed literally as `\`.
     fn push_escape(&self, items: &mut Vec<BodyItem<'a>>, esc_off: u32) -> u32 {
-        if let Some(c) = self.char_at(esc_off + 1) {
-            // Emit the escaped char verbatim (the `\` is dropped); resume past `\<c>`.
-            let lit: &'a str = self.alloc_char(c);
-            items.push(BodyItem::Text(lit));
-            esc_off + 1 + c.len_utf8() as u32
-        } else {
-            // Trailing lone backslash at EOF: literal `\`.
-            items.push(BodyItem::Text("\\"));
-            esc_off + 1
-        }
-    }
-
-    /// Allocate a single `char` as an arena `&str` (for escaped-literal text items).
-    fn alloc_char(&self, c: char) -> &'a str {
-        let mut buf = [0u8; 4];
-        self.ast.allocator.alloc_str(c.encode_utf8(&mut buf))
+        let (lit, resume) = escape_extent(self.source_text, esc_off);
+        items.push(BodyItem::Text(lit));
+        resume
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1690,18 +1195,19 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// as literal text. Either way, re-seek markup text at the resume offset. The byte-peek arm
     /// driver for code in the markup collectors.
     fn parse_code_or_literal(&mut self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) {
-        if let Some(resume) = self.parse_code_span(items, tick_off) {
-            self.nota_seek_markup(resume);
-        } else {
-            // No close: the backtick run is literal text. Emit it, resume past it.
-            let bytes = self.source_text.as_bytes();
-            let mut i = tick_off as usize;
-            while i < bytes.len() && bytes[i] == b'`' {
-                i += 1;
+        // The lexer scans the (verbatim) code-span extent; we only build the AST node.
+        match lex_code_span(self.source_text, tick_off) {
+            CodeScan::Code { span, is_block, lang, content, resume } => {
+                let language = lang.map(|l| self.ast.str(self.ast.allocator.alloc_str(l)));
+                let element = self.ast.nota_code(span, language, content, is_block);
+                items.push(BodyItem::Child(NotaChild::Code(self.ast.alloc(element))));
+                self.nota_seek_markup(resume);
             }
-            let lit: &'a str = &self.source_text[tick_off as usize..i];
-            items.push(BodyItem::Text(lit));
-            self.nota_seek_markup(i as u32);
+            CodeScan::Literal { run, resume } => {
+                // Not a valid opener: the backtick run is literal text.
+                items.push(BodyItem::Text(run));
+                self.nota_seek_markup(resume);
+            }
         }
     }
 
@@ -1720,144 +1226,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             items.push(BodyItem::Text(lit));
             self.nota_seek_markup(i as u32);
         }
-    }
-
-    /// Parse a code span whose opening backtick run starts at raw offset `tick_off` (the run stopped
-    /// there). Pushes the lowered `h(CodeInline|CodeBlock, …)` child into `items` and returns the
-    /// resume offset, or returns `None` if this is not a valid code opener (run shorter than any
-    /// close → the backticks are literal; the caller emits them as text).
-    fn parse_code_span(&self, items: &mut Vec<BodyItem<'a>>, tick_off: u32) -> Option<u32> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = tick_off as usize;
-        while i < bytes.len() && bytes[i] == b'`' {
-            i += 1;
-        }
-        let fence_len = i - tick_off as usize;
-        let content_start = i;
-
-        // A `≥3` run that is the last non-whitespace on its line (modulo a trailing language tag) is
-        // a *fenced* block: ```lang⏎ … ⏎```. Otherwise it is inline code.
-        if fence_len >= 3
-            && let Some((element, resume)) =
-                self.parse_fenced_code(tick_off, fence_len, content_start)
-        {
-            items.push(BodyItem::Child(NotaChild::Code(self.ast.alloc(element))));
-            return Some(resume);
-        }
-
-        // Inline code: content up to the next run of exactly `fence_len` backticks on the same scope
-        // (shorter runs are literal content). Search for the closing run.
-        let close = self.find_backtick_close(content_start, fence_len)?;
-        let raw: &'a str = &self.source_text[content_start..close];
-        let span = Span::new(tick_off, close as u32 + fence_len as u32);
-        let element = self.ast.nota_code(span, None, raw, false);
-        items.push(BodyItem::Child(NotaChild::Code(self.ast.alloc(element))));
-        Some(close as u32 + fence_len as u32)
-    }
-
-    /// Find the next run of *at least* `fence_len` backticks at/after `from`, returning the offset of
-    /// the first backtick of that run (the close), or `None` if none exists. Shorter runs are skipped
-    /// (they are literal content — "backtick runs shorter than the closing fence are literal").
-    fn find_backtick_close(&self, from: usize, fence_len: usize) -> Option<usize> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = from;
-        while i < bytes.len() {
-            if bytes[i] == b'`' {
-                let run_start = i;
-                while i < bytes.len() && bytes[i] == b'`' {
-                    i += 1;
-                }
-                if i - run_start >= fence_len {
-                    return Some(run_start);
-                }
-                // A shorter run: literal, keep scanning past it.
-            } else {
-                i += 1;
-            }
-        }
-        None
-    }
-
-    /// Parse a fenced code block opened by a `fence_len`-backtick run at `tick_off`, where
-    /// `content_start` is just past the opening run. The rest of the opening line (trimmed) is the
-    /// optional language tag. The block ends at a line whose first non-whitespace is a run of `≥
-    /// fence_len` backticks. Returns `(h(CodeBlock,…), resume)`, or `None` if the opening run is not
-    /// a bare fence line (then it is treated as inline code by the caller).
-    fn parse_fenced_code(
-        &self,
-        tick_off: u32,
-        fence_len: usize,
-        content_start: usize,
-    ) -> Option<(NotaCode<'a>, u32)> {
-        let bytes = self.source_text.as_bytes();
-        // The opening line's tail after the run: an optional language tag (no backticks), then `\n`.
-        let mut j = content_start;
-        while j < bytes.len() && bytes[j] != b'\n' {
-            if bytes[j] == b'`' {
-                return None; // backticks on the opener line ⇒ not a fenced block (inline run)
-            }
-            j += 1;
-        }
-        // The language is the FIRST token of the info string (a `lang`, not the whole line — e.g.
-        // ```` ```js extra words ```` → `lang: "js"`, not `"js extra words"`).
-        let lang = self.source_text[content_start..j].split_whitespace().next().unwrap_or("");
-        if j >= bytes.len() {
-            return None; // no newline after the opener ⇒ not a block
-        }
-        let body_start = j + 1; // first line of code content
-
-        // Scan for the closing fence: a line whose first non-ws is a run of ≥ fence_len backticks.
-        let mut line_start = body_start;
-        loop {
-            if line_start >= bytes.len() {
-                // Unterminated fence: code runs to EOF.
-                let raw: &'a str = &self.source_text[body_start..bytes.len()];
-                return Some(self.finish_fenced(
-                    tick_off,
-                    bytes.len() as u32,
-                    lang,
-                    body_start,
-                    raw,
-                ));
-            }
-            let mut k = line_start;
-            while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
-                k += 1;
-            }
-            let run_start = k;
-            while k < bytes.len() && bytes[k] == b'`' {
-                k += 1;
-            }
-            if k - run_start >= fence_len {
-                // Closing fence. Code body is [body_start, closing-line-start), dropping the `\n`
-                // immediately before the fence line. Resume right after
-                // the backtick run (NOT the rest of the line): trailing content — e.g. the `}` that
-                // closes an enclosing `@d{ … }` body — is left for the collector to handle.
-                let mut code_end = line_start;
-                if code_end > body_start && bytes[code_end - 1] == b'\n' {
-                    code_end -= 1;
-                }
-                let raw: &'a str = &self.source_text[body_start..code_end];
-                return Some(self.finish_fenced(tick_off, k as u32, lang, body_start, raw));
-            }
-            line_start = self.next_line_start(line_start as u32) as usize;
-        }
-    }
-
-    /// Build `h(CodeBlock, { lang: "…" }?, [String.raw`<code>`])` for a fenced block and return it
-    /// with the `resume` offset.
-    fn finish_fenced(
-        &self,
-        tick_off: u32,
-        resume: u32,
-        lang: &str,
-        _code_start: usize,
-        raw: &'a str,
-    ) -> (NotaCode<'a>, u32) {
-        let span = Span::new(tick_off, resume);
-        let language = (!lang.is_empty()).then(|| self.ast.str(self.ast.allocator.alloc_str(lang)));
-        let element = self.ast.nota_code(span, language, raw, true);
-        (element, resume)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -2013,11 +1381,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let mut at = start;
         let mut handed_off = false;
         loop {
-            if self.is_statement_line(at) {
+            if is_statement_line(self.source_text, at) {
                 at = self.collect_statements(at, &mut items);
                 continue;
             }
-            if self.list_marker_at(at).is_some() {
+            if list_marker_at(self.source_text, at).is_some() {
                 let (els, resume) = self.parse_list(at);
                 for e in els {
                     items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
@@ -2068,12 +1436,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // token; its end is the body start.
         debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
         let colon_end = self.cur_token().end();
-        let head_line_indent = self.line_indent_of(span_start);
+        let head_line_indent = line_indent_of(self.source_text, span_start);
 
         // Determine the sugar's source extent: rest of the `@head:` line + lines indented strictly
         // past `head_line_indent`.
         let (body_src_start, body_src_end) =
-            self.colon_block_extent(colon_end, head_line_indent, brace_significant);
+            colon_block_extent(self.source_text, colon_end, head_line_indent, brace_significant);
 
         // Collect props from leading `|` lines, and the markup body (text + `@`-forms).
         let mut props = self.ast.vec();
@@ -2093,219 +1461,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.ast.nota_element(span, tag, props, children, /* is_colon */ true)
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Line / statement / fence scanning (over the raw source)
-    // ------------------------------------------------------------------------------------------
-
-    /// Is the line beginning at `line_start` a `%`/`%%%` statement line? (first non-whitespace is
-    /// `%`, not an escaped `\%`).
-    fn is_statement_line(&self, line_start: u32) -> bool {
-        let bytes = self.source_text.as_bytes();
-        let mut i = line_start as usize;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        i < bytes.len() && bytes[i] == b'%'
-    }
-
-    /// Is the `%` statement line whose body begins at `content` a no-op — its rest-of-line is empty /
-    /// whitespace-only, or only a `//` line comment? Such a `%` line yields no statement; the
-    /// collector skips it rather than letting the JS parser run on into the following markup.
-    fn percent_line_is_empty(&self, content: u32) -> bool {
-        let bytes = self.source_text.as_bytes();
-        let line_end = self.line_content_end(content) as usize;
-        let mut i = content as usize;
-        while i < line_end && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        i >= line_end || (bytes.get(i) == Some(&b'/') && bytes.get(i + 1) == Some(&b'/'))
-    }
-
-    /// The start offset of the next line *after* `content`'s line whose first non-whitespace is `%` —
-    /// a Nota statement delimiter that bounds the current `%` statement's JS parse — or the source
-    /// length if none occurs before EOF. (A line-leading `%` always starts a NEW statement, never
-    /// continues the current one, so the JS parser must stop before it.)
-    ///
-    /// LIMITATION: this scans raw lines, so a line-leading `%` *inside a multi-line string/template
-    /// literal* in a `%` statement (`%const css = \`⏎%root{…}⏎\``) is treated as a delimiter and the
-    /// bounded parse errors ("Unterminated string"). This is the price of the line-leading-`%`-is-a-
-    /// delimiter rule; indent such a line, or use a `%%%` fence, to keep it as literal content.
-    fn next_percent_line_or_end(&self, content: u32) -> u32 {
-        let len = self.source_text.len() as u32;
-        let mut line = self.next_line_start(content);
-        while line < len {
-            if self.is_statement_line(line) {
-                return line;
-            }
-            line = self.next_line_start(line);
-        }
-        len
-    }
-
-    /// Classify the statement line at `line_start`. Returns `(content_or_inner_start, is_fence)`:
-    /// for a fence (`%%%`), the offset of the line *after* the opening fence; for a `%` statement,
-    /// the offset just past the `%`. `None` if the line is not a statement line.
-    fn statement_kind(&self, line_start: u32) -> Option<(u32, bool)> {
-        let bytes = self.source_text.as_bytes();
-        let mut i = line_start as usize;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        if i >= bytes.len() || bytes[i] != b'%' {
-            return None;
-        }
-        // Count the run of `%`.
-        let run_start = i;
-        while i < bytes.len() && bytes[i] == b'%' {
-            i += 1;
-        }
-        let run_len = i - run_start;
-        // `%%%` (a run of >= 3 with nothing else on the line, modulo trailing ws) → fence.
-        if run_len >= 3 {
-            // Confirm rest of line is whitespace (an opening fence on its own line).
-            let mut j = i;
-            while j < bytes.len() && bytes[j] != b'\n' {
-                if bytes[j] != b' ' && bytes[j] != b'\t' && bytes[j] != b'\r' {
-                    // Not a bare fence line; treat the first `%` as a statement (rare).
-                    return Some((run_start as u32 + 1, false));
-                }
-                j += 1;
-            }
-            let inner_start = if j < bytes.len() { j as u32 + 1 } else { j as u32 };
-            return Some((inner_start, true));
-        }
-        // A single `%` statement: content starts right after it.
-        Some((run_start as u32 + 1, false))
-    }
-
-    /// Find the `%%%` fence close at/after `inner_start`. Returns `(inner_end, after_fence)` where
-    /// `inner_end` is the offset of the closing-fence line start and `after_fence` is past the
-    /// closing fence's line (the resume point).
-    fn find_fence_close(&self, inner_start: u32) -> (u32, u32) {
-        let bytes = self.source_text.as_bytes();
-        let mut line_start = inner_start as usize;
-        while line_start < bytes.len() {
-            // Examine this line.
-            let mut i = line_start;
-            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-            let run_start = i;
-            while i < bytes.len() && bytes[i] == b'%' {
-                i += 1;
-            }
-            if i - run_start >= 3 {
-                // Closing fence. `inner_end` = this line's start; `after_fence` = next line start.
-                let mut j = i;
-                while j < bytes.len() && bytes[j] != b'\n' {
-                    j += 1;
-                }
-                let after = if j < bytes.len() { j + 1 } else { j };
-                return (line_start as u32, after as u32);
-            }
-            // Advance to next line.
-            let mut j = line_start;
-            while j < bytes.len() && bytes[j] != b'\n' {
-                j += 1;
-            }
-            line_start = if j < bytes.len() { j + 1 } else { j };
-        }
-        // Unterminated fence: treat the rest of the file as the inner body.
-        (bytes.len() as u32, bytes.len() as u32)
-    }
-
-    /// The offset of the line start following the line containing `offset`.
-    fn next_line_start(&self, offset: u32) -> u32 {
-        let bytes = self.source_text.as_bytes();
-        let mut i = offset as usize;
-        while i < bytes.len() && bytes[i] != b'\n' {
-            i += 1;
-        }
-        if i < bytes.len() { i as u32 + 1 } else { i as u32 }
-    }
-
-    /// The indentation (leading-space count) of the line containing byte `offset`.
-    fn line_indent_of(&self, offset: u32) -> usize {
-        let bytes = self.source_text.as_bytes();
-        // Find this line's start.
-        let mut start = offset as usize;
-        while start > 0 && bytes[start - 1] != b'\n' {
-            start -= 1;
-        }
-        let mut i = start;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        i - start
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Colon / block sugar extent + collection
-    // ------------------------------------------------------------------------------------------
-
-    /// Compute the source extent `[start, end)` of a `@head:` sugar body: the rest of the `@head:`
-    /// line (from `colon_end`) plus subsequent lines indented strictly past `head_indent`.
-    fn colon_block_extent(
-        &self,
-        colon_end: u32,
-        head_indent: usize,
-        clip_at_brace: bool,
-    ) -> (u32, u32) {
-        let bytes = self.source_text.as_bytes();
-        // The `:` consumes the immediately-following horizontal whitespace (separator), so
-        // `@foo: hello` → body `hello`, not ` hello`. Newlines are NOT skipped (they delimit lines).
-        let mut start = colon_end as usize;
-        while start < bytes.len() && (bytes[start] == b' ' || bytes[start] == b'\t') {
-            start += 1;
-        }
-        let start = start as u32;
-        // The first line ends at its newline — UNLESS (`clip_at_brace`) an unbalanced `}` closes an
-        // *enclosing* `{…}` body first (`@p{@a: b}` → the `@a:` body is `b`, not `b}…`). Scan tracking
-        // brace depth so the colon body's own balanced `{…}` are kept; a depth-0 `}` ends the body
-        // inline. When `!clip_at_brace` (document/fragment top level), a `}` is literal content — no
-        // clip. `\}`/`\{` escapes are skipped so they neither clip nor perturb the depth.
-        let mut depth = 0i32;
-        let mut j = colon_end as usize;
-        let first_line_end = loop {
-            match bytes.get(j) {
-                None | Some(b'\n') => {
-                    break self.next_line_start(colon_end);
-                }
-                Some(b'\\') => j += 1, // skip the escaped byte
-                Some(b'{') => depth += 1,
-                // A depth-0 `}` closes an enclosing brace body → clip (only when `clip_at_brace`).
-                Some(b'}') if depth == 0 && clip_at_brace => return (start, j as u32),
-                Some(b'}') if depth > 0 => depth -= 1,
-                // A literal `}` at the top level (depth 0, `!clip_at_brace`) falls through — keep
-                // scanning to the line's newline.
-                _ => {}
-            }
-            j += 1;
-        };
-        // The first line: up to and including its newline (if any).
-        let mut end = first_line_end;
-        // Include subsequent lines indented strictly past `head_indent`, OR blank lines.
-        loop {
-            if end as usize >= bytes.len() {
-                break;
-            }
-            let line_start = end as usize;
-            // Compute indentation; detect blank line.
-            let mut i = line_start;
-            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-            let is_blank = i >= bytes.len() || bytes[i] == b'\n';
-            let indent = i - line_start;
-            if is_blank || indent > head_indent {
-                end = self.next_line_start(end);
-            } else {
-                break;
-            }
-        }
-        (start, end)
-    }
-
     /// Collect the colon-sugar body over `[start, end)`: leading `|` lines → `[…]` prop groups; the
     /// remaining lines → markup body items.
     fn collect_colon_body(
@@ -2315,30 +1470,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         props: &mut ArenaVec<'a, NotaProp<'a>>,
         items: &mut Vec<BodyItem<'a>>,
     ) {
-        let bytes = self.source_text.as_bytes();
-
         // Walk leading `|` prop lines (a line whose first non-ws char is `|`, indented past head).
         let mut body_start = start;
         // Props lines only apply to the *continuation* lines (not the rest-of-`@head:`-line).
         // Find the first continuation line.
-        let first_cont = self.next_line_start(start);
+        let first_cont = next_line_start(self.source_text, start);
         let mut scan = first_cont;
         while scan < end {
-            let line_start = scan as usize;
-            let mut i = line_start;
-            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-                i += 1;
-            }
-            if i < bytes.len() && bytes[i] == b'|' {
-                // A `| k: v` prop line. Parse `[k: v]`-style entries from after `|` to line end.
-                let content_start = i as u32 + 1;
-                let line_end = self.next_line_start(scan);
-                self.parse_pipe_prop_line(content_start, line_end, props);
-                scan = line_end;
-                body_start = scan; // props consume the prefix; body starts after them
-            } else {
+            let Some(content_start) = colon_prop_line_at(self.source_text, scan) else {
                 break;
-            }
+            };
+            // A `| k: v` prop line. Parse `[k: v]`-style entries from after `|` to line end.
+            let line_end = next_line_start(self.source_text, scan);
+            self.parse_pipe_prop_line(content_start, line_end, props);
+            scan = line_end;
+            body_start = scan; // props consume the prefix; body starts after them
         }
         // If `|` lines were consumed, the rest-of-line content of `@head:` is dropped (kept simple);
         // the body is the remaining suffix. Back up to include the `\n` that precedes that suffix, so
@@ -2346,7 +1492,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // an *indent* line (stripping the common indent) rather than as the inline `{`-line — without
         // this, `@foo:⏎  | x:1⏎  hello` leaks the leading indent as `"  hello"` instead of `"hello"`.
         let body_range_start = if body_start > start {
-            if bytes.get(body_start as usize - 1) == Some(&b'\n') {
+            if byte_at(self.source_text, body_start - 1) == Some(b'\n') {
                 body_start - 1
             } else {
                 body_start
@@ -2423,7 +1569,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let next_line = self.cur_token().end();
                     // Line-start sugar (lists / headings) inside a colon-block body — the same
                     // recognition `collect_markup` does for brace/document bodies.
-                    if depth == 0 && next_line < end && self.list_marker_at(next_line).is_some() {
+                    if depth == 0
+                        && next_line < end
+                        && list_marker_at(self.source_text, next_line).is_some()
+                    {
                         let (els, resume) = self.parse_list(next_line);
                         for e in els {
                             items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
@@ -2496,7 +1645,7 @@ struct NotaHead<'a> {
 /// The element trigger immediately following an `@`-form head — the typed result of the
 /// whitespace-sensitive head→body switch (see [`ParserImpl::peek_markup_trigger`]).
 #[derive(Clone, Copy)]
-enum MarkupTrigger {
+pub enum MarkupTrigger {
     /// `@head{…}` — a `{`-body element.
     Brace,
     /// `@head[…]` — a `[props]` element (body optional).
