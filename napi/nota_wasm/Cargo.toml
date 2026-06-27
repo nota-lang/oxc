@@ -32,11 +32,11 @@ test = false
 doctest = false
 
 [dependencies]
-# Only the `codegen` feature of the umbrella crate is needed: it pulls in `oxc_parser` (the Nota
-# reader) + `oxc_codegen` + `oxc_sourcemap`, which is exactly what `oxc::nota` requires. No
-# `transformer`/`minifier`/`semantic`/`linter` → keeps the wasm binary small and avoids dragging in
-# deps that may not be wasm-friendly. (oxc ships a wasm playground, so parser+codegen compile to wasm.)
-oxc = { workspace = true, features = ["codegen"] }
+# `codegen` pulls in `oxc_parser` (the Nota reader) + `oxc_codegen` + `oxc_sourcemap`, which is what
+# `oxc::nota` requires. `serialize` adds `oxc_ast`'s ESTree JSON serializer (`Program::to_estree_js_json`)
+# — the playground's AST tab renders that structured JSON as a collapsible tree. Both are pure-Rust and
+# wasm-friendly; we still avoid `transformer`/`minifier`/`semantic`/`linter` to keep the binary small.
+oxc = { workspace = true, features = ["codegen", "serialize"] }
 
 # wasm-bindgen 0.2.89 — pinned to match the `wasm-bindgen` CLI installed in this environment
 # (`wasm-bindgen --version` → 0.2.89). wasm-pack regenerates glue with the matching CLI, but pinning

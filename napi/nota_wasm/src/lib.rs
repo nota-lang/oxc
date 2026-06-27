@@ -26,10 +26,13 @@
 
 use std::fmt::Write as _;
 
+use oxc::allocator::Allocator;
 use oxc::diagnostics::OxcDiagnostic;
 use oxc::nota::{
     self, CodeMapping as OxcCodeMapping, MappingCapabilities as OxcMappingCapabilities,
 };
+use oxc::parser::Parser;
+use oxc::span::SourceType;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -71,6 +74,11 @@ export interface NotaMappedResult {
   code: string;
   mappings: NotaCodeMapping[];
 }
+
+/** Result of `parseAst`: the post-parse Nota AST as an ESTree JSON string (with `start`/`end`). */
+export interface NotaParseAstResult {
+  ast: string;
+}
 "#;
 
 // ===================================================================================================
@@ -83,6 +91,14 @@ export interface NotaMappedResult {
 struct CompileResult {
     /// The emitted JS module source.
     code: String,
+}
+
+/// `{ ast }` — the post-parse Nota AST as an ESTree JSON string (document mode, parser stage only).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParseAstResult {
+    /// `Program::to_estree_js_json(true)` — JSON with per-node `type` + `start`/`end`.
+    ast: String,
 }
 
 /// `{ code, mappings }` — the H1/H2 result ([`nota::compile_with_mappings`] / [`nota::compile_virtual`]).
@@ -192,6 +208,31 @@ pub fn compile(source: &str) -> Result<JsValue, JsError> {
     match nota::compile(source, None) {
         // No `source_map_path`: the playground renders the `code`; a flat sourcemap is not needed.
         Ok(compiled) => to_js(&CompileResult { code: compiled.code }),
+        Err(errors) => Err(diagnostics_to_error(&errors)),
+    }
+}
+
+/// Parse a `.nota` source and return its **post-parse Nota AST** as ESTree JSON. Returns `{ ast }`,
+/// where `ast` is a JSON string the playground `JSON.parse`s and renders as a collapsible tree.
+///
+/// This is the parser stage only — no lowering, no codegen — so it is the faithful Nota tree
+/// (`NotaDocument` / `NotaHeading` / `NotaElement` / …) the reader builds before lowering to
+/// hyperscript. Serialized via `oxc_ast`'s ESTree serializer (every Nota node `#[generate_derive]`s
+/// `ESTree`); `ranges = true` so each node carries `start`/`end` offsets, letting the tree slice a
+/// one-line source preview from the editor text.
+///
+/// JS: `parseAst(source: string): { ast: string }` — throws on a Nota parse error.
+///
+/// # Errors
+/// Returns a `JsError` (thrown in JS) carrying the rendered diagnostics if `source` is not
+/// well-formed Nota.
+#[wasm_bindgen(js_name = parseAst)]
+pub fn parse_ast(source: &str) -> Result<JsValue, JsError> {
+    // One arena for the parse; the `Program` borrows from it, so serialize before it drops. Plain mjs
+    // source type, matching `oxc::nota::compile` (embedded TS is out of scope for the reader).
+    let allocator = Allocator::default();
+    match Parser::new(&allocator, source, SourceType::default()).parse_nota_document() {
+        Ok(program) => to_js(&ParseAstResult { ast: program.to_estree_js_json(true) }),
         Err(errors) => Err(diagnostics_to_error(&errors)),
     }
 }
