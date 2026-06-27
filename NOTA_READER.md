@@ -243,7 +243,7 @@ the cleaner fit (the closers `}|`/fence/`$$` are multi-byte and context-dependen
 
 ## The three fork sites (the shallow-fork seam)
 
-1. **Markup lexer scan-method** · `crates/oxc_parser/src/lexer/markup.rs` (NEW), registered in
+1. **Markup lexer scan-method** · `crates/oxc_parser/src/lexer/nota.rs` (NEW), registered in
    `lexer/mod.rs`. `next_markup_text()` models `next_jsx_child`/`read_jsx_child`: `byte_search!`
    + a `SafeByteMatchTable` (`MARKUP_TEXT_END_TABLE` = `}` | `@` | `{`) scans a maximal literal
    run, leaves source positioned **at** the terminator (unconsumed), returns the run via

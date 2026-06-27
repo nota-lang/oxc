@@ -21,7 +21,7 @@
 //!   hoisting, `inlineComponent`/`blockComponent` bindings, `await`→`async`, and the `decode(...)`
 //!   wrap all happen there, not here).
 //!
-//! The re-lex seam (`advance_for_markup_text`) mirrors JSX's `advance_for_jsx_child`: after a markup
+//! The re-lex seam (`advance_for_nota_child`) mirrors JSX's `advance_for_jsx_child`: after a markup
 //! delimiter we resume lexing in *markup-text* mode so significant whitespace is not skipped by the
 //! JS lexer.
 
@@ -36,7 +36,7 @@ use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::ast::*;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, SourceType, Span};
-use oxc_syntax::identifier::{is_identifier_part, is_identifier_start};
+use oxc_syntax::identifier::is_identifier_start;
 
 use crate::{
     ParserConfig as Config, ParserImpl, diagnostics, error_handler::FatalError, lexer::Kind,
@@ -176,18 +176,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     ) -> NotaMarkup<'a> {
         let span_start = self.start_span();
 
-        // `@ident\…` (a bare-identifier head glued to a backslash escape) would make the JS lexer
-        // choke on the `\` — a bad Unicode escape in identifier-continue position — while lexing the
-        // head. Detect that exact shape and scan the head over raw bytes instead: `@foo\: hi` parses
-        // as `@foo` interpolation, and the markup collector then renders `\:` as a literal `:`
-        // (notation.md §Colon). All other heads keep the JS-lexed path.
-        if let Some(head) = self.try_raw_escaped_head(in_body) {
-            let interp = self.finish_interpolation(head);
-            let kind = NotaMarkupKind::Interpolation(self.ast.alloc(interp));
-            let span = self.end_span(span_start);
-            return self.ast.nota_markup(span, kind);
+        // Consume `@` and lex the head. A head that opens with an identifier char (`@foo`, `@if`,
+        // `@café`) is lexed with Nota identifier rules via `next_nota_head`: a trailing `\` (the Nota
+        // escape) *terminates* the head — so `@foo\: x` is `@foo` followed by the literal `\:`
+        // (notation.md §Colon) — instead of making the JS identifier reader choke on a bad `\u`
+        // escape mid-head. Keyword heads still produce `Kind::If`/`Kind::For` (via `match_keyword`),
+        // so the control-flow dispatch below is unchanged. Non-identifier heads (`@(expr)`, `@{…}`)
+        // keep the JS-lexed path. (Mirrors Typst's per-mode identifier lexing.)
+        debug_assert!(self.at(Kind::At), "parse_nota_form entered not at `@`");
+        let after_at = self.cur_token().end();
+        if self.source_text[after_at as usize..].chars().next().is_some_and(is_identifier_start) {
+            self.nota_seek_head(after_at);
+        } else {
+            self.bump_any();
         }
-        self.expect(Kind::At);
 
         let kind = match self.cur_kind() {
             Kind::If => NotaMarkupKind::If({
@@ -246,51 +248,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         let span = self.end_span(span_start);
         self.ast.nota_markup(span, kind)
-    }
-
-    /// Detect the `@ident\…` shape — a bare ASCII-identifier head immediately followed by a backslash
-    /// — and scan the head over raw bytes, consuming the `@` + head and returning it as an
-    /// interpolation head (the lexer resumes markup text at the `\`, which the collector renders as a
-    /// literal). This sidesteps the JS lexer's identifier reader, which would choke on the `\` (a bad
-    /// Unicode escape). Entered with `@` as the current token. Returns `None` (use the normal JS-lexed
-    /// head path) unless the exact shape matches — so `@(expr)`, `@{…}`, `@if`/`@for`, Unicode-headed
-    /// forms, and any `@ident` NOT glued to a `\` are unaffected.
-    fn try_raw_escaped_head(&mut self, in_body: bool) -> Option<NotaHead<'a>> {
-        let after_at = self.cur_token().end() as usize; // `@` is the current token
-        // Scan a JS-identifier head over raw chars (ASCII or Unicode, e.g. `@café`), so the choke
-        // applies to Unicode heads too. `end_rel` is the head's byte length within `rest`.
-        let rest = self.source_text.get(after_at..)?;
-        let mut iter = rest.char_indices();
-        let (_, first) = iter.next()?;
-        if !is_identifier_start(first) {
-            return None;
-        }
-        let mut end_rel = first.len_utf8();
-        for (idx, c) in iter {
-            if is_identifier_part(c) {
-                end_rel = idx + c.len_utf8();
-            } else {
-                break;
-            }
-        }
-        let i = after_at + end_rel;
-        // Only applies when a backslash immediately follows the identifier (the lexer-choke shape).
-        if self.source_text.as_bytes().get(i) != Some(&b'\\') {
-            return None;
-        }
-        let name = &self.source_text[after_at..i];
-        // Control-flow keywords keep the normal path (`@if`/`@for` route to their own forms).
-        if matches!(name, "if" | "for") {
-            return None;
-        }
-        let span = Span::new(after_at as u32, i as u32);
-        // Resume the outer context at the `\` (markup text in a body, JS otherwise).
-        if in_body {
-            self.nota_seek_markup(i as u32);
-        } else {
-            self.nota_seek_to(i as u32);
-        }
-        Some(NotaHead { kind: HeadKind::Named { name, span }, end: i as u32 })
     }
 
     /// The parsed head of an `@`-form: the tag/interpolation expression plus classification needed
@@ -408,7 +365,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let end = self.prev_token_end;
             if in_body {
                 // Re-lex the trailing markup text starting right after the `]`. The current JS token
-                // already consumed the first word past it, so `advance_for_markup_text` would drop it.
+                // already consumed the first word past it, so `advance_for_nota_child` would drop it.
                 self.nota_seek_markup(end);
             }
             (self.ast.vec(), end)
@@ -483,7 +440,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             MarkupTrigger::Verbatim => {}
             MarkupTrigger::None => {
                 if in_body {
-                    self.advance_for_markup_text();
+                    self.advance_for_nota_child();
                 } else {
                     self.bump_any();
                 }
@@ -505,7 +462,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_body(&mut self, in_body: bool) -> (ArenaVec<'a, NotaChild<'a>>, u32) {
         let open = self.cur_token().span();
         debug_assert!(self.at(Kind::LCurly), "parse_body entered not at `{{`");
-        self.advance_for_markup_text(); // switch the lexer into markup-body mode
+        self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
         let mut items: Vec<BodyItem<'a>> = Vec::new();
         let mut depth = 0u32; // balanced-brace depth inside the body
@@ -514,7 +471,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             MarkupClose::Curly { end } => {
                 // Body close `}`. Consume it, resuming markup text iff this element is a child.
                 if in_body {
-                    self.advance_for_markup_text();
+                    self.advance_for_nota_child();
                 } else {
                     self.bump_any();
                 }
@@ -655,6 +612,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             if self.has_fatal_error() {
                 return MarkupClose::Eof;
             }
+            // `next_nota_child` returns each markup sigil as a typed token (consumed), so this loop
+            // dispatches on `cur_kind()` — never on raw bytes (the JSX/Typst model). `term_off` is the
+            // sigil's own offset (`cur_token().start()`), passed to the span helpers that re-scan and
+            // re-seek (code/math/emphasis/escape span more than the one consumed sigil byte).
             match self.cur_kind() {
                 Kind::MarkupText => {
                     let token = self.cur_token();
@@ -662,127 +623,103 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     if !text.is_empty() {
                         items.push(BodyItem::Text(text));
                     }
-                    // The run stopped *at* (unconsumed) the terminator: peek it via the raw source.
-                    let term_off = token.end();
-                    match self.byte_at(term_off) {
-                        Some(b'\n') => {
-                            // Line boundary. Keep the `\n` as literal text; resume on the next line.
-                            items.push(BodyItem::Text("\n"));
-                            let mut next_line = term_off + 1;
-                            // Consume a *run* of line-start constructs that resume at a line start:
-                            // `%`/`%%%` statements and `-`/`+`/`N.` lists. Each resumes at the line
-                            // AFTER it, which may itself open another (a `%%%` fence then a list, a
-                            // list then a `%` line, a list then a heading) — so loop, instead of
-                            // recognizing only the first and reading the next as literal text.
-                            // `%` statements collect as faithful `NotaChild::Statement` children
-                            // (lowering routes document-level ones / wraps element-body ones in an
-                            // IIFE); lists/headings fire only at brace depth 0 (a balanced `{…}` is
-                            // literal body text).
-                            loop {
-                                if self.is_statement_line(next_line) {
-                                    next_line = self.collect_statements(next_line, items);
-                                    continue;
-                                }
-                                if *depth == 0 && self.list_marker_at(next_line).is_some() {
-                                    let (els, resume) = self.parse_list(next_line);
-                                    for e in els {
-                                        items.push(BodyItem::Child(NotaChild::ListItem(
-                                            self.ast.alloc(e),
-                                        )));
-                                    }
-                                    next_line = resume;
-                                    continue;
-                                }
-                                break;
+                    self.advance_for_nota_child();
+                }
+                Kind::NotaNewline => {
+                    // Line boundary. Keep the `\n` as literal text; resume on the next line.
+                    items.push(BodyItem::Text("\n"));
+                    let mut next_line = self.cur_token().end();
+                    // Consume a *run* of line-start constructs that resume at a line start:
+                    // `%`/`%%%` statements and `-`/`+`/`N.` lists. Each resumes at the line AFTER it,
+                    // which may itself open another (a `%%%` fence then a list, a list then a `%` line,
+                    // a list then a heading) — so loop, instead of recognizing only the first and
+                    // reading the next as literal text. `%` statements collect as faithful
+                    // `NotaChild::Statement` children (lowering routes document-level ones / wraps
+                    // element-body ones in an IIFE); lists/headings fire only at brace depth 0 (a
+                    // balanced `{…}` is literal body text).
+                    loop {
+                        if self.is_statement_line(next_line) {
+                            next_line = self.collect_statements(next_line, items);
+                            continue;
+                        }
+                        if *depth == 0 && self.list_marker_at(next_line).is_some() {
+                            let (els, resume) = self.parse_list(next_line);
+                            for e in els {
+                                items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
                             }
-                            // A heading on the resume line resumes at its trailing `\n` (h_end), so the
-                            // next iteration's `\n` arm chains into whatever follows it.
-                            if *depth == 0
-                                && let Some((heading, h_end)) = self.try_heading(next_line)
-                            {
-                                items.push(BodyItem::Child(NotaChild::Heading(
-                                    self.ast.alloc(heading),
-                                )));
-                                self.nota_seek_markup(h_end);
-                                continue;
-                            }
-                            self.nota_seek_markup(next_line);
+                            next_line = resume;
+                            continue;
                         }
-                        Some(b'{') => {
-                            *depth += 1;
-                            items.push(BodyItem::Text("{"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        Some(b'}') if *depth > 0 => {
-                            *depth -= 1;
-                            items.push(BodyItem::Text("}"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        Some(b'}') if !document => {
-                            // Body close. Lex the `}` as a JS token so the caller can consume it;
-                            // leave it as the current token and report its end (one past `}`).
-                            self.bump_any();
-                            return MarkupClose::Curly { end: self.cur_token().end() };
-                        }
-                        Some(b'}') => {
-                            // Document mode: a depth-0 `}` is literal text.
-                            items.push(BodyItem::Text("}"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        Some(b'@') => {
-                            self.bump_any(); // lex `@`
-                            // A depth-0 `}` closes this body unless we are in document mode (`}` literal).
-                            let child = self.parse_nota_form(true, !document);
-                            items.push(BodyItem::Child(markup_to_child(child)));
-                        }
-                        Some(m @ (b'*' | b'_')) => {
-                            // Emphasis sigil. Marker iff NOT intra-word (Typst rule); else
-                            // literal. An *opening* marker recurses into the emphasis body.
-                            if self.can_open_emphasis(term_off, m) {
-                                self.parse_emphasis(m, term_off, items);
-                            } else {
-                                self.push_literal_byte(items, m);
-                                self.nota_seek_markup(term_off + 1);
-                            }
-                        }
-                        Some(b'\\') => {
-                            // General backslash escape: `\<c>` → literal `<c>`, `\` dropped.
-                            let resume = self.push_escape(items, term_off);
-                            self.nota_seek_markup(resume);
-                        }
-                        Some(b'`') => {
-                            // Code: inline `` `…` `` / fenced ```` ```…``` ````.
-                            self.parse_code_or_literal(items, term_off);
-                        }
-                        Some(b'$') => {
-                            // Math: `$…$` / `$$…$$`.
-                            self.parse_math_or_literal(items, term_off);
-                        }
-                        Some(b'|') => {
-                            // A bare `|` in a markup body is literal (the `|{`/`|@` forms are handled
-                            // by the head switch / inside verbatim bodies, never here).
-                            items.push(BodyItem::Text("|"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        _ => {
-                            // EOF.
-                            return MarkupClose::Eof;
-                        }
+                        break;
                     }
+                    // A heading on the resume line resumes at its trailing `\n` (h_end), so the next
+                    // iteration's `\n` arm chains into whatever follows it.
+                    if *depth == 0
+                        && let Some((heading, h_end)) = self.try_heading(next_line)
+                    {
+                        items.push(BodyItem::Child(NotaChild::Heading(self.ast.alloc(heading))));
+                        self.nota_seek_markup(h_end);
+                        continue;
+                    }
+                    self.nota_seek_markup(next_line);
+                }
+                Kind::LCurly => {
+                    *depth += 1;
+                    items.push(BodyItem::Text("{"));
+                    self.advance_for_nota_child();
+                }
+                Kind::RCurly if *depth > 0 => {
+                    *depth -= 1;
+                    items.push(BodyItem::Text("}"));
+                    self.advance_for_nota_child();
+                }
+                // Body close: leave the `}` (RCurly) as the current token so the caller (`parse_body`)
+                // can consume it, reporting its end (one past `}`).
+                Kind::RCurly if !document => {
+                    return MarkupClose::Curly { end: self.cur_token().end() };
+                }
+                Kind::RCurly => {
+                    // Document mode: a depth-0 `}` is literal text.
+                    items.push(BodyItem::Text("}"));
+                    self.advance_for_nota_child();
                 }
                 Kind::At => {
+                    // A depth-0 `}` closes this body unless we are in document mode (`}` literal).
                     let child = self.parse_nota_form(true, !document);
                     items.push(BodyItem::Child(markup_to_child(child)));
                 }
-                Kind::RCurly if *depth == 0 && !document => {
-                    return MarkupClose::Curly { end: self.cur_token().end() };
+                Kind::Star | Kind::NotaUnderscore => {
+                    // `next_nota_child` only emits these for a valid opener (the Typst word-boundary
+                    // rule, now owned by the lexer), so recurse straight into the emphasis body;
+                    // `parse_emphasis` still falls back to literal text when there is no matching close.
+                    let m = if self.cur_kind() == Kind::Star { b'*' } else { b'_' };
+                    self.parse_emphasis(m, self.cur_token().start(), items);
+                }
+                Kind::NotaBackslash => {
+                    // General backslash escape: `\<c>` → literal `<c>`, `\` dropped.
+                    let resume = self.push_escape(items, self.cur_token().start());
+                    self.nota_seek_markup(resume);
+                }
+                Kind::NotaBacktick => {
+                    // Code: inline `` `…` `` / fenced ```` ```…``` ````.
+                    self.parse_code_or_literal(items, self.cur_token().start());
+                }
+                Kind::NotaDollar => {
+                    // Math: `$…$` / `$$…$$`.
+                    self.parse_math_or_literal(items, self.cur_token().start());
+                }
+                Kind::Pipe => {
+                    // A bare `|` in a markup body is literal (the `|{`/`|@` forms are handled by the
+                    // head switch / inside verbatim bodies, never here).
+                    items.push(BodyItem::Text("|"));
+                    self.advance_for_nota_child();
                 }
                 Kind::Eof => return MarkupClose::Eof,
                 _ => {
                     // Any non-markup token here means lexing resumed in JS mode (after an `@`-form
                     // whose trailing context was not markup, e.g. in expression position). Re-enter
                     // markup from the current position.
-                    self.advance_for_markup_text();
+                    self.advance_for_nota_child();
                 }
             }
         }
@@ -1008,7 +945,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return (self.ast.vec(), self.prev_token_end);
         }
         let open = self.cur_token().span();
-        self.advance_for_markup_text(); // switch the lexer into markup-body mode
+        self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
         let mut items: Vec<BodyItem<'a>> = Vec::new();
         let mut depth = 0u32;
@@ -1115,6 +1052,35 @@ fn is_wordy(c: Option<char>) -> bool {
     }
 }
 
+/// Can a `*`/`_` at byte `off` in `source` **open** an emphasis span? Shared by the lexer's
+/// `next_nota_child` marker classification (Typst's `'*' if !in_word()`) and the parser's emphasis
+/// matching. The marker must be unescaped (even run of immediately-preceding `\`), not intra-word
+/// (the Typst word-boundary rule), and immediately followed by *content* — a non-whitespace byte that
+/// is not another copy of the same marker — so `* x`, marker runs `**`/`***`, and intra-word `a*b`
+/// stay literal instead of opening empty/garbled spans. (Whether a matching *close* exists is decided
+/// later, by the parser's [`Parser::find_emphasis_close`].)
+pub fn emphasis_can_open(source: &str, off: usize, marker: u8) -> bool {
+    let bytes = source.as_bytes();
+    // Unescaped: an even number of immediately-preceding backslashes.
+    let mut backslashes = 0usize;
+    let mut i = off;
+    while i > 0 && bytes[i - 1] == b'\\' {
+        backslashes += 1;
+        i -= 1;
+    }
+    if backslashes % 2 == 1 {
+        return false;
+    }
+    // Not intra-word: not (wordy(prev) && wordy(next)), the Typst word-boundary rule.
+    let prev = source.get(..off).and_then(|s| s.chars().next_back());
+    let next = source.get(off + 1..).and_then(|s| s.chars().next());
+    if is_wordy(prev) && is_wordy(next) {
+        return false;
+    }
+    // Immediately followed by content (non-whitespace, and not another copy of the marker).
+    matches!(bytes.get(off + 1), Some(&b) if !b.is_ascii_whitespace() && b != marker)
+}
+
 /// Approximate the CJK scripts Typst excludes from `in_word` (Han/Hiragana/Katakana/Hangul) by
 /// codepoint range — enough that CJK prose gets emphasis without surrounding spaces.
 fn is_cjk(c: char) -> bool {
@@ -1165,21 +1131,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let prev = self.char_before(marker_off);
         let next = self.char_at(marker_off + 1);
         !(is_wordy(prev) && is_wordy(next))
-    }
-
-    /// Can a `*`/`_` at `off` **open** an emphasis span? Beyond being a marker (not intra-word, not
-    /// escaped — [`Self::is_emphasis_marker`]), Typst requires the opener to be immediately followed
-    /// by *content*: a non-whitespace char that is not another copy of the same marker. So `* foo`
-    /// (space after), and marker runs `**`/`***`/`****` do **not** open — they stay literal instead
-    /// of producing empty or garbled spans.
-    fn can_open_emphasis(&self, off: u32, marker: u8) -> bool {
-        if !self.is_emphasis_marker(off) {
-            return false;
-        }
-        match self.source_text.as_bytes().get(off as usize + 1) {
-            Some(&b) => !b.is_ascii_whitespace() && b != marker,
-            None => false,
-        }
     }
 
     /// Can a `*`/`_` at `off` **close** an emphasis span? It must be a marker and immediately
@@ -2446,110 +2397,89 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             if self.has_fatal_error() {
                 break;
             }
-            // Stop once we've consumed up to `end`.
+            // Stop once we reach `end`: every sigil is its own token (start = its offset), so this one
+            // check bounds the whole range. Typed-kind dispatch mirrors `collect_markup` (no byte_at);
+            // a bounded range (emphasis / colon-sugar body) treats `}` as literal text and has no
+            // `%`-statement lines, so it omits those two arms.
             if self.cur_token().start() >= end {
                 break;
             }
             match self.cur_kind() {
                 Kind::MarkupText => {
                     let token = self.cur_token();
-                    // Clip the text to `end`.
+                    // Clip the text to `end`; if the run reaches `end`, we are done.
                     let text_end = token.end().min(end);
                     let text = &self.source_text[token.start() as usize..text_end as usize];
                     if !text.is_empty() {
                         items.push(BodyItem::Text(text));
                     }
-                    let term_off = token.end();
-                    if term_off >= end {
+                    if token.end() >= end {
                         break;
                     }
-                    match self.byte_at(term_off) {
-                        Some(b'\n') => {
-                            items.push(BodyItem::Text("\n"));
-                            let next_line = term_off + 1;
-                            // Line-start sugar (lists / headings) inside a colon-block body — the same
-                            // recognition `collect_markup` does for brace/document bodies.
-                            if depth == 0
-                                && next_line < end
-                                && self.list_marker_at(next_line).is_some()
-                            {
-                                let (els, resume) = self.parse_list(next_line);
-                                for e in els {
-                                    items.push(BodyItem::Child(NotaChild::ListItem(
-                                        self.ast.alloc(e),
-                                    )));
-                                }
-                                if resume >= end {
-                                    break;
-                                }
-                                self.nota_seek_markup(resume);
-                                continue;
-                            }
-                            if depth == 0
-                                && next_line < end
-                                && let Some((heading, h_end)) = self.try_heading(next_line)
-                            {
-                                items.push(BodyItem::Child(NotaChild::Heading(
-                                    self.ast.alloc(heading),
-                                )));
-                                if h_end >= end {
-                                    break;
-                                }
-                                self.nota_seek_markup(h_end);
-                                continue;
-                            }
-                            self.nota_seek_markup(next_line);
+                    self.advance_for_nota_child();
+                }
+                Kind::NotaNewline => {
+                    items.push(BodyItem::Text("\n"));
+                    let next_line = self.cur_token().end();
+                    // Line-start sugar (lists / headings) inside a colon-block body — the same
+                    // recognition `collect_markup` does for brace/document bodies.
+                    if depth == 0 && next_line < end && self.list_marker_at(next_line).is_some() {
+                        let (els, resume) = self.parse_list(next_line);
+                        for e in els {
+                            items.push(BodyItem::Child(NotaChild::ListItem(self.ast.alloc(e))));
                         }
-                        Some(b'{') => {
-                            depth += 1;
-                            items.push(BodyItem::Text("{"));
-                            self.nota_seek_markup(term_off + 1);
+                        if resume >= end {
+                            break;
                         }
-                        Some(b'}') if depth > 0 => {
-                            depth -= 1;
-                            items.push(BodyItem::Text("}"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        Some(b'}') => {
-                            items.push(BodyItem::Text("}"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        Some(b'@') => {
-                            self.bump_any();
-                            // A bounded range (colon / list-item body) treats `}` as literal text, so
-                            // a colon child's body must NOT clip at one.
-                            let child = self.parse_nota_form(true, false);
-                            items.push(BodyItem::Child(markup_to_child(child)));
-                        }
-                        Some(m @ (b'*' | b'_')) if term_off < end => {
-                            // Nested emphasis inside an emphasis / colon-sugar body.
-                            if self.can_open_emphasis(term_off, m) {
-                                self.parse_emphasis(m, term_off, items);
-                            } else {
-                                self.push_literal_byte(items, m);
-                                self.nota_seek_markup(term_off + 1);
-                            }
-                        }
-                        Some(b'\\') if term_off < end => {
-                            // General backslash escape, inside an emphasis / colon body.
-                            let resume = self.push_escape(items, term_off);
-                            self.nota_seek_markup(resume);
-                        }
-                        Some(b'`') if term_off < end => self.parse_code_or_literal(items, term_off),
-                        Some(b'$') if term_off < end => self.parse_math_or_literal(items, term_off),
-                        Some(b'|') if term_off < end => {
-                            items.push(BodyItem::Text("|"));
-                            self.nota_seek_markup(term_off + 1);
-                        }
-                        _ => break,
+                        self.nota_seek_markup(resume);
+                        continue;
                     }
+                    if depth == 0
+                        && next_line < end
+                        && let Some((heading, h_end)) = self.try_heading(next_line)
+                    {
+                        items.push(BodyItem::Child(NotaChild::Heading(self.ast.alloc(heading))));
+                        if h_end >= end {
+                            break;
+                        }
+                        self.nota_seek_markup(h_end);
+                        continue;
+                    }
+                    self.nota_seek_markup(next_line);
+                }
+                Kind::LCurly => {
+                    depth += 1;
+                    items.push(BodyItem::Text("{"));
+                    self.advance_for_nota_child();
+                }
+                Kind::RCurly => {
+                    // A bounded range treats every `}` as literal text (it never closes the range).
+                    depth = depth.saturating_sub(1);
+                    items.push(BodyItem::Text("}"));
+                    self.advance_for_nota_child();
                 }
                 Kind::At => {
                     let child = self.parse_nota_form(true, false);
                     items.push(BodyItem::Child(markup_to_child(child)));
                 }
+                Kind::Star | Kind::NotaUnderscore => {
+                    // Nested emphasis inside an emphasis / colon-sugar body (lexer-validated opener).
+                    let m = if self.cur_kind() == Kind::Star { b'*' } else { b'_' };
+                    self.parse_emphasis(m, self.cur_token().start(), items);
+                }
+                Kind::NotaBackslash => {
+                    // General backslash escape, inside an emphasis / colon body.
+                    let resume = self.push_escape(items, self.cur_token().start());
+                    self.nota_seek_markup(resume);
+                }
+                Kind::NotaBacktick => self.parse_code_or_literal(items, self.cur_token().start()),
+                Kind::NotaDollar => self.parse_math_or_literal(items, self.cur_token().start()),
+                Kind::Pipe => {
+                    items.push(BodyItem::Text("|"));
+                    self.advance_for_nota_child();
+                }
                 Kind::Eof => break,
-                _ => self.advance_for_markup_text(),
+                _ => self.advance_for_nota_child(),
             }
         }
     }

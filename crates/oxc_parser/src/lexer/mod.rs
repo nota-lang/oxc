@@ -21,7 +21,7 @@ mod comment;
 mod identifier;
 mod jsx;
 mod kind;
-mod markup;
+mod nota;
 mod number;
 mod numeric;
 mod punctuation;
@@ -194,13 +194,23 @@ impl<'a, C: Config> Lexer<'a, C> {
         self.next_token()
     }
 
-    /// Reposition the lexer to byte `offset` and lex a Nota markup-text run there (Nota reader).
-    /// Used to resume body text right after a markup delimiter (`{`/`}`/`\n`) was peeked.
+    /// Reposition the lexer to byte `offset` and lex one Nota markup child token there (Nota reader).
+    /// Used to resume a body after a span helper (code/math/emphasis) consumed a multi-byte extent.
     pub(crate) fn seek_and_lex_markup(&mut self, offset: u32) -> Token {
         self.source.set_offset(offset);
         self.token = Token::default();
         self.token.set_start(offset);
-        self.next_markup_text()
+        self.next_nota_child()
+    }
+
+    /// Reposition the lexer to byte `offset` and lex a Nota `@`-form head identifier there (Nota
+    /// reader). Used right after `@` to read the head with Nota identifier rules (a `\` terminates
+    /// the head instead of choking the JS lexer) — see [`Self::next_nota_head`].
+    pub(crate) fn seek_and_lex_nota_head(&mut self, offset: u32) -> Token {
+        self.source.set_offset(offset);
+        self.token = Token::default();
+        self.token.set_start(offset);
+        self.next_nota_head()
     }
 
     /// The lexer's current source end offset (Nota reader). Save before [`Self::nota_set_source_end`].

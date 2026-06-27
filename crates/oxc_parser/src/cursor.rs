@@ -112,11 +112,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = self.lexer.next_jsx_child();
     }
 
-    /// Move to the next Nota markup-text run (see [`crate::lexer`] `next_markup_text`).
-    /// Re-lexes the upcoming source as a literal markup-body text run rather than a JS token.
-    pub(crate) fn advance_for_markup_text(&mut self) {
+    /// Move to the next Nota markup-body child token (see [`crate::lexer`] `next_nota_child`):
+    /// a literal-text run or a typed markup sigil, rather than a JS token.
+    pub(crate) fn advance_for_nota_child(&mut self) {
         self.prev_token_end = self.token.end();
-        self.token = self.lexer.next_markup_text();
+        self.token = self.lexer.next_nota_child();
     }
 
     /// Reposition the lexer to byte `offset` and lex the token there (Nota reader).
@@ -134,6 +134,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     pub(crate) fn nota_seek_markup(&mut self, offset: u32) {
         self.prev_token_end = offset;
         self.token = self.lexer.seek_and_lex_markup(offset);
+    }
+
+    /// Reposition the lexer to byte `offset` and lex a Nota `@`-form head identifier there (Nota
+    /// reader). Used to read the head right after `@` with Nota identifier rules — a `\` terminates
+    /// the head instead of choking the JS lexer on a bad `\u` escape — see [`crate::lexer`]
+    /// `next_nota_head`. `offset` is the byte just past `@`, which becomes `prev_token_end`.
+    pub(crate) fn nota_seek_head(&mut self, offset: u32) {
+        self.prev_token_end = offset;
+        self.token = self.lexer.seek_and_lex_nota_head(offset);
     }
 
     /// Peek the raw source byte at `offset`, or `None` if at/after end of source.

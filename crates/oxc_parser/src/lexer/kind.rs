@@ -203,8 +203,17 @@ fieldless_enum! {
         PrivateIdentifier,
         // JSX
         JSXText,
-        // Nota markup body text (the literal-text run inside `@tag{ ... }`); see `lexer/markup.rs`.
+        // Nota markup body text (the literal-text run inside `@tag{ ... }`); see `lexer/nota.rs`.
         MarkupText,
+        // Nota markup sigils, lexed by `next_nota_child` (`lexer/nota.rs`): the `@`-form opener reuses
+        // `At` below; `{`/`}` reuse `LCurly`/`RCurly`; `*` reuses `Star`; `|` reuses `Pipe`. These are
+        // the markup-only sigils with no JS-token equivalent. Each marks the *position* of the sigil;
+        // the parser's body collector owns extent/word-boundary/escape semantics.
+        NotaNewline,    // `\n` — a markup line boundary
+        NotaUnderscore, // `_` — emphasis sigil
+        NotaBackslash,  // `\` — general escape opener
+        NotaBacktick,   // `` ` `` — inline/fenced code opener
+        NotaDollar,     // `$` — inline/display math opener
         // Decorator
         At,
     }
@@ -701,6 +710,11 @@ impl Kind {
             PrivateIdentifier => "#identifier",
             JSXText => "jsx",
             MarkupText => "markup text",
+            NotaNewline => "\\n",
+            NotaUnderscore => "_",
+            NotaBackslash => "\\",
+            NotaBacktick => "`",
+            NotaDollar => "$",
             At => "@",
             Assert => "assert",
             Any => "any",
