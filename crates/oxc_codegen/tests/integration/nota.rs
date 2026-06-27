@@ -4,7 +4,7 @@
 //! * **expression mode** (`nota_expr`) — elides the `Doc` wrapper and injected imports
 //!   (`@p{Hello}` → `h("p", {}, ["Hello"])`); the bulk of fixtures.
 //! * **document mode** (`nota_doc`) — the full module incl. `export default function Doc()`,
-//!   hoisted `import`/`export`, `decode(...)` wrap, inline components, `await`→`async`.
+//!   hoisted `import`/`export`, `decode(...)` wrap, inline components.
 //!
 //! Every fixture also asserts the *validity invariant*: the emitted JS re-parses cleanly under the
 //! STOCK oxc parser.
@@ -304,7 +304,7 @@ fn ws_nested_element_independent() {
 }
 
 // ===============================================================================================
-// Document mode: decode wrap, statements/hoisting/inline components, await→async, colon sugar
+// Document mode: decode wrap, statements/hoisting/inline components, colon sugar
 // ===============================================================================================
 
 #[test]
@@ -333,12 +333,6 @@ fn doc_top_level_statement_prepended_no_iife() {
     let js = nota_doc("% const n = 3\n@p{@n}\n");
     assert!(js.contains("const n = 3;"), "prelude const present: {js}");
     assert!(!js.contains("=> {"), "no IIFE for top-level %: {js}");
-}
-
-#[test]
-fn doc_await_makes_doc_async() {
-    let js = nota_doc("% const posts = await load()\n@h1{Posts}\n");
-    assert!(js.contains("export default async function Doc()"), "Doc is async: {js}");
 }
 
 #[test]
@@ -869,12 +863,6 @@ fn nested_percent_statement_wraps_rest_in_iife() {
     // "Intro." is a sibling BEFORE the `%`, so it stays outside the IIFE. (A pre-existing 1-space
     // leftover indent now joins it as " Intro." since kept indent merges with its line's content.)
     assert!(js.contains("Intro."), "Intro. stays outside the IIFE: {js}");
-}
-
-#[test]
-fn nested_percent_await_makes_iife_async() {
-    let js = nota_expr_raw("@aside{\n  % const x = await f()\n  @p{@x}\n}");
-    assert!(js.contains("async () =>") || js.contains("async ()=>"), "async IIFE: {js}");
 }
 
 #[test]
@@ -1472,20 +1460,9 @@ mod fuzz_findings_2 {
 
     // ---- emitted JS that does not parse / run --------------------------------------------------
 
-    // [INVALID-JS] `await` in a @for body → `xs.map((x, _i) => … await …)` but the arrow is not async.
-    #[test]
-    #[ignore = "deferred: async @for needs Promise.all (product call)"]
-    fn fuzz2_await_in_for_body_should_emit_valid_js() {
-        let js = emit_doc_unchecked("@for(x of xs){@(await f(x))}\n");
-        assert!(reparses(&js), "await in a @for body must emit valid (async) JS: {js}");
-    }
-
-    // [INVALID-JS] `await` in a prop value / iterable / condition → Doc never made async.
-    #[test]
-    fn fuzz2_await_in_prop_should_emit_valid_js() {
-        let js = emit_doc_unchecked("@p[x: await f()]{y}\n");
-        assert!(reparses(&js), "await in a prop value must make Doc async (valid JS): {js}");
-    }
+    // NOTE: top-level `await` (in a `%` statement, a prop value, an interpolation, or a `@for`
+    // iterable) is intentionally NOT made valid by auto-`async`ifying `Doc`/the IIFE — the reader
+    // emits synchronous functions, so such source produces JS that does not parse, by design.
 
     // [INVALID-JS] an empty/malformed prop group `@p[:]` emits broken JS instead of a diagnostic.
     #[test]

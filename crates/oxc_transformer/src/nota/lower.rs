@@ -23,7 +23,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::identifier::is_identifier_name;
 
 use super::mapping::{NotaMappingKind, NotaMappingMark};
-use super::{expr_has_top_await, is_valid_tag_expr, scribble, statement_uses_await};
+use super::{is_valid_tag_expr, scribble};
 
 /// The result of a Nota lowering pass: the Volar mapping marks, plus any lowering diagnostics.
 ///
@@ -189,17 +189,12 @@ impl<'a> NotaLowering<'a> {
 
                 // Peel the leading consecutive statements; the remainder is the IIFE's body.
                 let mut stmts = self.ast.vec();
-                let mut is_async = false;
                 let mut after: Vec<NotaChild<'a>> = Vec::new();
                 let mut still_stmts = true;
                 for c in rest {
                     if still_stmts {
                         if let NotaChild::Statement(s) = c {
-                            let s = s.unbox();
-                            if statement_uses_await(&s.statement) {
-                                is_async = true;
-                            }
-                            stmts.push(s.statement);
+                            stmts.push(s.unbox().statement);
                             continue;
                         }
                         still_stmts = false;
@@ -208,7 +203,7 @@ impl<'a> NotaLowering<'a> {
                 }
 
                 let rest_children = self.lower_children(after, is_brace);
-                let iife = self.build_statement_iife(stmts, is_async, rest_children);
+                let iife = self.build_statement_iife(stmts, rest_children);
                 segs.push(scribble::Seg::Elem(elems.len()));
                 elems.push(Some(iife));
                 self.scribble_emit(&segs, elems, is_brace)
@@ -557,11 +552,9 @@ impl<'a> NotaLowering<'a> {
     fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {
         let mut module_items = self.ast.vec();
         let mut doc_prelude = self.ast.vec();
-        let mut is_async = false;
         let items: Vec<NotaChild<'a>> = doc.items.into_iter().collect();
-        let siblings =
-            self.lower_document_items(items, &mut module_items, &mut doc_prelude, &mut is_async);
-        self.build_document(siblings, module_items, doc_prelude, is_async)
+        let siblings = self.lower_document_items(items, &mut module_items, &mut doc_prelude);
+        self.build_document(siblings, module_items, doc_prelude)
     }
 
     /// Like [`Self::lower_children`] but for the document body: a `%`/`%%%` statement is *routed*
@@ -571,7 +564,6 @@ impl<'a> NotaLowering<'a> {
         items: Vec<NotaChild<'a>>,
         module_items: &mut ArenaVec<'a, Statement<'a>>,
         doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
-        is_async: &mut bool,
     ) -> ArenaVec<'a, Expression<'a>> {
         let mut segs = Vec::with_capacity(items.len());
         let mut elems: Vec<Option<Expression<'a>>> = Vec::new();
@@ -579,7 +571,7 @@ impl<'a> NotaLowering<'a> {
             match c {
                 NotaChild::Text(t) => segs.push(scribble::Seg::Text(t.unbox().value.as_str())),
                 NotaChild::Statement(s) => {
-                    self.route_statement(s.unbox().statement, module_items, doc_prelude, is_async);
+                    self.route_statement(s.unbox().statement, module_items, doc_prelude);
                 }
                 other => {
                     segs.push(scribble::Seg::Elem(elems.len()));
@@ -588,13 +580,7 @@ impl<'a> NotaLowering<'a> {
                 }
             }
         }
-        let siblings = self.scribble_emit(&segs, elems, false);
-        // `await` embedded in markup (a prop value, interpolation, or `@for` iterable) makes the
-        // document's `Doc` async, just like a top-level `% await …` statement does.
-        if siblings.iter().any(expr_has_top_await) {
-            *is_async = true;
-        }
-        siblings
+        self.scribble_emit(&segs, elems, false)
     }
 }
 

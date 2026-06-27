@@ -82,66 +82,6 @@ fn f1_constructor_name<'a>(init: &Expression<'a>) -> Option<&'a str> {
     }
 }
 
-/// Does a top-level statement use top-level `await` (so its host `Doc` must be `async`)? We look for
-/// an `AwaitExpression` in a variable-declaration initializer or an expression statement, without
-/// descending into nested function/arrow bodies (whose `await` belongs to that function).
-fn statement_uses_await(stmt: &Statement) -> bool {
-    match stmt {
-        Statement::VariableDeclaration(decl) => {
-            decl.declarations.iter().any(|d| d.init.as_ref().is_some_and(expr_has_top_await))
-        }
-        Statement::ExpressionStatement(es) => expr_has_top_await(&es.expression),
-        _ => false,
-    }
-}
-
-/// Recursively check an expression for an `await` not under a nested function/arrow boundary. Used
-/// both for `%` statements and (over the lowered document body) for `await` embedded in markup — a
-/// prop value (`@p[x: await f()]`), an interpolation (`@(await f())`), or a `@for` iterable
-/// (`@for(x of await xs)`) — all of which must make `Doc` `async`.
-fn expr_has_top_await(expr: &Expression) -> bool {
-    match expr {
-        Expression::AwaitExpression(_) => true,
-        Expression::ParenthesizedExpression(p) => expr_has_top_await(&p.expression),
-        Expression::CallExpression(c) => {
-            expr_has_top_await(&c.callee) || c.arguments.iter().any(arg_has_top_await)
-        }
-        Expression::SequenceExpression(s) => s.expressions.iter().any(expr_has_top_await),
-        Expression::BinaryExpression(b) => {
-            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
-        }
-        Expression::LogicalExpression(b) => {
-            expr_has_top_await(&b.left) || expr_has_top_await(&b.right)
-        }
-        Expression::ConditionalExpression(c) => {
-            expr_has_top_await(&c.test)
-                || expr_has_top_await(&c.consequent)
-                || expr_has_top_await(&c.alternate)
-        }
-        Expression::AssignmentExpression(a) => expr_has_top_await(&a.right),
-        // Markup lowers to `h(tag, { …props }, [ …children ])`, so descend into object property
-        // values, array elements, and member objects to catch await embedded in a prop / child /
-        // iterable.
-        Expression::ObjectExpression(o) => o.properties.iter().any(|p| match p {
-            ObjectPropertyKind::ObjectProperty(prop) => expr_has_top_await(&prop.value),
-            ObjectPropertyKind::SpreadProperty(s) => expr_has_top_await(&s.argument),
-        }),
-        Expression::ArrayExpression(a) => a.elements.iter().any(|e| match e {
-            ArrayExpressionElement::SpreadElement(s) => expr_has_top_await(&s.argument),
-            other => other.as_expression().is_some_and(expr_has_top_await),
-        }),
-        Expression::StaticMemberExpression(m) => expr_has_top_await(&m.object),
-        Expression::ComputedMemberExpression(m) => {
-            expr_has_top_await(&m.object) || expr_has_top_await(&m.expression)
-        }
-        // Do NOT descend into function/arrow bodies (their await is theirs).
-        _ => false,
-    }
-}
-
-fn arg_has_top_await(arg: &Argument) -> bool {
-    match arg {
-        Argument::SpreadElement(s) => expr_has_top_await(&s.argument),
-        _ => arg.as_expression().is_some_and(expr_has_top_await),
-    }
-}
+// A Nota document's `Doc` (and a nested `%`-statement IIFE) is always emitted **synchronous**: the
+// reader does not auto-`async`ify a function from the presence of `await` in its body. Source that
+// uses top-level `await` therefore emits JS that does not parse — by design, not a silent rewrite.

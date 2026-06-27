@@ -14,7 +14,7 @@ use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
 use super::{
     BLOCK_COMPONENT, DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H,
-    INLINE_COMPONENT, f1_constructor_name, is_markup_call, statement_uses_await,
+    INLINE_COMPONENT, f1_constructor_name, is_markup_call,
 };
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
@@ -288,11 +288,11 @@ impl<'a> NotaLowering<'a> {
         ast.expression_call(span, callee, NONE, arguments, false)
     }
 
-    /// `(() => { …stmts…; return Fragment(...rest); })()` (async iff a statement used `await`).
+    /// `(() => { …stmts…; return Fragment(...rest); })()`. Always synchronous — the reader does not
+    /// `async`ify the IIFE from the presence of `await` in `stmts`.
     pub(super) fn build_statement_iife(
         &self,
         mut stmts: ArenaVec<'a, Statement<'a>>,
-        is_async: bool,
         rest: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
         let ast = self.ast;
@@ -303,7 +303,7 @@ impl<'a> NotaLowering<'a> {
         let arrow = ast.expression_arrow_function(
             empty,
             false,
-            is_async,
+            false, // never async
             NONE,
             ast.formal_parameters(
                 empty,
@@ -431,17 +431,13 @@ impl<'a> NotaLowering<'a> {
 
     /// Route a parsed top-level statement: `import`/`export`/component bindings hoist to module
     /// scope (component bindings add `export` + the name argument); everything else prepends into
-    /// `Doc`. Sets `is_async` if the statement uses `await`.
+    /// `Doc`.
     pub(super) fn route_statement(
         &mut self,
         stmt: Statement<'a>,
         module_items: &mut ArenaVec<'a, Statement<'a>>,
         doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
-        is_async: &mut bool,
     ) {
-        if statement_uses_await(&stmt) {
-            *is_async = true;
-        }
         // Diagnose a binding / default-export that would collide with the reader's emit surface
         // (`Doc`, the runtime imports) before routing it — the oxc parser cannot catch these (the
         // collision is with names the *lowering* injects, not with anything in the source).
@@ -529,12 +525,12 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// Build the `export default function Doc() { …prelude…; return decode(Fragment(...)); }` module.
+    /// `Doc` is always synchronous — the reader does not `async`ify it from `await` in the prelude.
     pub(super) fn build_document(
         &self,
         siblings: ArenaVec<'a, Expression<'a>>,
         module_items: ArenaVec<'a, Statement<'a>>,
         doc_prelude: ArenaVec<'a, Statement<'a>>,
-        is_async: bool,
     ) -> Program<'a> {
         let ast = self.ast;
         let empty = Span::empty(0);
@@ -552,7 +548,7 @@ impl<'a> NotaLowering<'a> {
             FunctionType::FunctionDeclaration,
             Some(ast.binding_identifier(empty, DOC)),
             false,
-            is_async,
+            false, // never async
             false,
             NONE,
             NONE,
