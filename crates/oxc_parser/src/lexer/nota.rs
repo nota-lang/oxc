@@ -140,10 +140,12 @@ impl<C: Config> Lexer<'_, C> {
 // lexer side. Pure functions of `(source, offset)` — they never touch the lexer cursor.
 // ================================================================================================
 
-/// Scan a custom-element name tail at `at`: one or more `-`-joined runs of identifier chars
-/// (`@my-widget`, `@x-y-z`). Returns the offset past the tail, or `None` if `at` is not a `-`
-/// directly followed by an identifier char. (The JS lexer stops a bare identifier at `-`, so the
-/// tail is read here over the source bytes — the markup analog of JSX's `continue_lex_jsx_identifier`.)
+/// Scan a custom-element name tail (`@my-widget`, `@x-y-z`) at `at`.
+///
+/// One or more `-`-joined runs of identifier chars. Returns the offset past the tail, or `None` if
+/// `at` is not a `-` directly followed by an identifier char. (The JS lexer stops a bare identifier at
+/// `-`, so the tail is read here over the source bytes — the markup analog of JSX's
+/// `continue_lex_jsx_identifier`.)
 pub fn scan_hyphen_tail(source: &str, at: u32) -> Option<u32> {
     let bytes = source.as_bytes();
     let mut i = at as usize;
@@ -200,8 +202,9 @@ pub fn matches_keyword(source: &str, at: usize, kw: &[u8]) -> bool {
     }
 }
 
-/// Scan for an `else`/`else if` continuation after an `@if` branch that closed at `close_end`:
-/// skip inline whitespace and up to one newline (a blank line breaks the chain), then match `else`
+/// Scan for an `else`/`else if` continuation after an `@if` branch that closed at `close_end`.
+///
+/// Skip inline whitespace and up to one newline (a blank line breaks the chain), then match `else`
 /// (rejecting an escaped `\else`) and classify what follows (`if` → else-if, `{` → else-block).
 pub fn else_peek(source: &str, close_end: u32) -> ElsePeek {
     let bytes = source.as_bytes();
@@ -491,10 +494,11 @@ pub fn find_fence_close(source: &str, inner_start: u32) -> (u32, u32) {
     (bytes.len() as u32, bytes.len() as u32)
 }
 
-/// Compute the source extent `[start, end)` of a `@head:` colon-sugar body: the rest of the `@head:`
-/// line (from `colon_end`, after its one separating space) plus subsequent lines indented strictly
-/// past `head_indent`. When `clip_at_brace`, a depth-0 `}` (closing an enclosing `{…}` body) ends the
-/// first line early; `\{`/`\}` escapes are skipped.
+/// Compute the source extent `[start, end)` of a `@head:` colon-sugar body.
+///
+/// The rest of the `@head:` line (from `colon_end`, after its one separating space) plus subsequent
+/// lines indented strictly past `head_indent`. When `clip_at_brace`, a depth-0 `}` (closing an
+/// enclosing `{…}` body) ends the first line early; `\{`/`\}` escapes are skipped.
 pub fn colon_block_extent(
     source: &str,
     colon_end: u32,
@@ -596,11 +600,13 @@ fn is_escaped(source: &str, off: u32) -> bool {
     n % 2 == 1
 }
 
-/// Can a `*`/`_` at byte `off` in `source` **open** an emphasis span? Used by `next_nota_child`'s
-/// marker classification (Typst's `'*' if !in_word()`). The marker must be unescaped, not intra-word
-/// (the word-boundary rule), and immediately followed by *content* — a non-whitespace byte that is not
-/// another copy of the same marker — so `* x`, runs `**`/`***`, and intra-word `a*b` stay literal.
-/// (Whether a matching *close* exists is decided later by [`find_emphasis_close`].)
+/// Can a `*`/`_` at byte `off` in `source` **open** an emphasis span?
+///
+/// Used by `next_nota_child`'s marker classification (Typst's `'*' if !in_word()`). The marker must be
+/// unescaped, not intra-word (the word-boundary rule), and immediately followed by *content* — a
+/// non-whitespace byte that is not another copy of the same marker — so `* x`, runs `**`/`***`, and
+/// intra-word `a*b` stay literal. (Whether a matching *close* exists is decided later by
+/// [`find_emphasis_close`].)
 pub fn emphasis_can_open(source: &str, off: usize, marker: u8) -> bool {
     let bytes = source.as_bytes();
     if is_escaped(source, off as u32) {
@@ -722,10 +728,11 @@ fn skip_raw_span(source: &str, at: usize) -> usize {
     }
 }
 
-/// Find the matching close marker for an emphasis opened at `open` (raw offset of the marker), or
-/// `None`. Scans forward for the next valid close `marker`, bounded by the emphasis *scope*: stops at
-/// a blank line (paragraph break), at the `}` closing the enclosing body (depth below open level), or
-/// EOF. Nested balanced `{…}`, raw spans, and `@`-forms are skipped so their inner `*`/`_` can't close.
+/// Find the matching close marker for an emphasis opened at `open` (raw offset of the marker), or `None`.
+///
+/// Scans forward for the next valid close `marker`, bounded by the emphasis *scope*: stops at a blank
+/// line (paragraph break), at the `}` closing the enclosing body (depth below open level), or EOF.
+/// Nested balanced `{…}`, raw spans, and `@`-forms are skipped so their inner `*`/`_` can't close.
 pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
     let bytes = source.as_bytes();
     let mut i = open as usize + 1;
@@ -780,9 +787,11 @@ pub enum CodeScan<'a> {
     Literal { run: &'a str, resume: u32 },
 }
 
-/// Scan a code span whose opening backtick run starts at `tick_off`. A `≥3` run that is the last
-/// non-whitespace on its line (modulo a trailing language tag) is a *fenced block*; otherwise it is
-/// inline code closed by the next run of `≥ fence_len` backticks. With no close the run is literal.
+/// Scan a code span whose opening backtick run starts at `tick_off`.
+///
+/// A `≥3` run that is the last non-whitespace on its line (modulo a trailing language tag) is a
+/// *fenced block*; otherwise it is inline code closed by the next run of `≥ fence_len` backticks. With
+/// no close the run is literal.
 pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
     let bytes = source.as_bytes();
     let mut i = tick_off as usize;

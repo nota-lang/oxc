@@ -37,9 +37,11 @@ pub enum ESTreeKind {
 const KINDS_LEN: usize = Kind::VARIANTS.len();
 
 // Verify number of `Kind` variants, so we catch if new variants are added.
-// (170 since the Nota reader adds `Kind::MarkupText` for markup body text; it is appended near the
-// end of `Kind`, so the 0–11 discriminants the `to_kind` mapping relies on are unaffected.)
-const _: () = assert!(KINDS_LEN == 170);
+// (175 = 169 JS/TS kinds + the 6 the Nota reader appends: `MarkupText` plus the typed markup sigils
+// `NotaNewline`/`NotaUnderscore`/`NotaBackslash`/`NotaBacktick`/`NotaDollar`. They are appended at the
+// end of `Kind`, so the 0–11 discriminants the `to_kind` mapping relies on are unaffected, and they
+// fall through to the `CONVERSION_TABLE` catch-all — they never reach the raw-transfer token path.)
+const _: () = assert!(KINDS_LEN == 175);
 
 // Verify that the `Kind` discriminants we rely on for `to_kind` haven't shifted.
 // If any of these assertions fail, the `to_kind` mapping needs updating.
