@@ -451,14 +451,14 @@ pub struct NotaListItem<'a> {
     pub children: Vec<'a, NotaChild<'a>>,
 }
 
-/// Whether a list item is unordered (`-`/`+` → `nota-ul-li`) or ordered (`N.` → `nota-ol-li`).
+/// Whether a list item is unordered (`-` → `nota-ul-li`) or ordered (`+`/`N.` → `nota-ol-li`).
 #[ast]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
 pub enum NotaListKind {
-    /// `-` or `+`.
+    /// `-`.
     Unordered = 0,
-    /// `N.`.
+    /// `+` or `N.`.
     Ordered = 1,
 }
 

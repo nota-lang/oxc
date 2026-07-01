@@ -228,10 +228,10 @@ pub fn compile(source: &str) -> Result<JsValue, JsError> {
 /// well-formed Nota.
 #[wasm_bindgen(js_name = parseAst)]
 pub fn parse_ast(source: &str) -> Result<JsValue, JsError> {
-    // One arena for the parse; the `Program` borrows from it, so serialize before it drops. Plain mjs
-    // source type, matching `oxc::nota::compile` (embedded TS is out of scope for the reader).
+    // One arena for the parse; the `Program` borrows from it, so serialize before it drops.
+    // `tsx` is the canonical Nota parse mode (embedded TS admitted), matching the compile entries.
     let allocator = Allocator::default();
-    match Parser::new(&allocator, source, SourceType::default()).parse_nota_document() {
+    match Parser::new(&allocator, source, SourceType::tsx()).parse_nota_document() {
         Ok(program) => to_js(&ParseAstResult { ast: program.to_estree_js_json(true) }),
         Err(errors) => Err(diagnostics_to_error(&errors)),
     }

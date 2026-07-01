@@ -9,6 +9,10 @@
 //! Entry: [`NotaLowering`]. The document is rebuilt by [`NotaLowering::lower_document_program`] (Doc
 //! skeleton, `%`-statement routing / F1 hoist+export, decode-wraps); embedded `@`-forms are then
 //! replaced by a [`oxc_ast_visit::VisitMut`] walk. Optionally collects Volar [`NotaMappingMark`]s.
+//!
+//! Semantic pin: `Doc` and the nested-`%` IIFE are always emitted **synchronous** — the presence of
+//! `await` does not auto-`async`ify them. Top-level `await` therefore emits JS that does not parse,
+//! by design (not a silent rewrite).
 
 use oxc_ast::ast::*;
 
@@ -70,18 +74,10 @@ fn is_markup_call(expr: &Expression) -> bool {
     matches!(callee.name.as_str(), H | FRAGMENT)
 }
 
-/// The component constructor name if `init` is a call to `inlineComponent`/`blockComponent`, else
-/// `None`.
-fn f1_constructor_name<'a>(init: &Expression<'a>) -> Option<&'a str> {
-    let Expression::CallExpression(call) = init else { return None };
-    let Expression::Identifier(callee) = &call.callee else { return None };
-    match callee.name.as_str() {
-        INLINE_COMPONENT => Some(INLINE_COMPONENT),
-        BLOCK_COMPONENT => Some(BLOCK_COMPONENT),
-        _ => None,
-    }
+/// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
+/// binding is F1-hoistable.
+fn is_f1_constructor(init: &Expression<'_>) -> bool {
+    let Expression::CallExpression(call) = init else { return false };
+    let Expression::Identifier(callee) = &call.callee else { return false };
+    matches!(callee.name.as_str(), INLINE_COMPONENT | BLOCK_COMPONENT)
 }
-
-// A Nota document's `Doc` (and a nested `%`-statement IIFE) is always emitted **synchronous**: the
-// reader does not auto-`async`ify a function from the presence of `await` in its body. Source that
-// uses top-level `await` therefore emits JS that does not parse — by design, not a silent rewrite.

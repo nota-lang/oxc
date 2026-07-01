@@ -1,9 +1,6 @@
-//! Hyperscript emit primitives + document/F1 assembly for [`super::lower::NotaLowering`].
-//!
-//! These build the lowered `h`/`Fragment`/`decode`/`String.raw` `Expression`s and the document
-//! `Program` (Doc skeleton, `%`-statement routing, F1 component hoist+export, decode-wraps). They are
-//! the leaf builders the [`NotaLowering`] methods call — moved here from the parser (they no longer
-//! depend on parse state, only on the lowering's [`oxc_ast::AstBuilder`] + mapping accumulator).
+//! Hyperscript emit primitives + document/F1 assembly for [`super::lower::NotaLowering`]: the
+//! `h`/`Fragment`/`decode`/`String.raw` `Expression` builders and the document `Program` assembly
+//! (Doc skeleton, `%`-statement routing, F1 component hoist+export, decode-wraps).
 
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
@@ -14,7 +11,7 @@ use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
 use super::{
     BLOCK_COMPONENT, DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H,
-    INLINE_COMPONENT, f1_constructor_name, is_markup_call,
+    INLINE_COMPONENT, is_f1_constructor, is_markup_call,
 };
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
@@ -92,6 +89,25 @@ impl<'a> NotaLowering<'a> {
             elements.push(ArrayExpressionElement::from(child));
         }
         ast.expression_array(Span::empty(span.end), elements)
+    }
+
+    /// A plain `key: value` (or shorthand) object property.
+    pub(super) fn init_prop(
+        &self,
+        span: Span,
+        key: PropertyKey<'a>,
+        value: Expression<'a>,
+        shorthand: bool,
+    ) -> ObjectPropertyKind<'a> {
+        ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
+            span,
+            PropertyKind::Init,
+            key,
+            value,
+            false,
+            shorthand,
+            false,
+        ))
     }
 
     /// Pick a fresh identifier name for a reader-injected binding (`_i`, `_Tag`) that cannot collide
@@ -205,16 +221,7 @@ impl<'a> NotaLowering<'a> {
         let key_props = {
             let key_name = ast.expression_identifier(empty, index_name);
             let key = PropertyKey::StaticIdentifier(ast.alloc_identifier_name(empty, "key"));
-            let prop = ast.alloc_object_property(
-                empty,
-                PropertyKind::Init,
-                key,
-                key_name,
-                false,
-                false,
-                false,
-            );
-            ast.vec1(ObjectPropertyKind::ObjectProperty(prop))
+            ast.vec1(self.init_prop(empty, key, key_name, false))
         };
         let fragment = self.build_keyed_fragment(span, key_props, children);
 
@@ -589,10 +596,7 @@ impl<'a> NotaLowering<'a> {
     fn is_f1_component_decl(decl: &VariableDeclaration<'a>) -> bool {
         decl.declarations.len() == 1
             && decl.declarations[0].id.get_binding_identifier().is_some()
-            && decl.declarations[0]
-                .init
-                .as_ref()
-                .is_some_and(|init| f1_constructor_name(init).is_some())
+            && decl.declarations[0].init.as_ref().is_some_and(is_f1_constructor)
     }
 
     /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`), and
