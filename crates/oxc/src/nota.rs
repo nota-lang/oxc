@@ -333,25 +333,26 @@ fn build_code_mappings(
     marks: &[NotaMappingMark],
     offset_log: &[(u32, u32, u32)],
 ) -> Vec<CodeMapping> {
-    // Sort + dedup the log (emit order → range order). Drop zero-length entries.
+    // Sort + dedup the log (emit order → range order). Drop zero-length entries. The order is
+    // (start ASC, end DESC, gen): a composite node sorts before everything it contains.
     let mut log: Vec<(u32, u32, u32)> =
         offset_log.iter().copied().filter(|&(src_start, src_end, _)| src_end > src_start).collect();
-    log.sort_unstable();
+    log.sort_unstable_by_key(|&(start, end, gen_start)| (start, std::cmp::Reverse(end), gen_start));
     log.dedup();
 
     // Keep only innermost leaves: drop an entry that *strictly* contains another entry's source
     // range (those are composite nodes whose generated text was reformatted, hence not byte-exact).
+    // AST spans nest or are disjoint — never partially overlap — so under the sort above an
+    // entry's contained entries immediately follow its run of same-span duplicates: entry `k` is
+    // a composite iff the next different-span entry starts before `k` ends. One forward pass.
     let leaves: Vec<(u32, u32, u32)> = log
         .iter()
-        .copied()
-        .filter(|&(a_start, a_end, _)| {
-            !log.iter().any(|&(b_start, b_end, _)| {
-                b_start >= a_start
-                    && b_end <= a_end
-                    && (b_start > a_start || b_end < a_end)
-                    && b_end > b_start
-            })
+        .enumerate()
+        .filter(|&(k, &(start, end, _))| {
+            let next_different = log[k + 1..].iter().find(|&&(s2, e2, _)| (s2, e2) != (start, end));
+            next_different.is_none_or(|&(s2, _, _)| s2 >= end)
         })
+        .map(|(_, &entry)| entry)
         .collect();
 
     // A leaf segment is valid iff its source slice and generated slice are byte-identical (the
@@ -369,12 +370,16 @@ fn build_code_mappings(
         let (s, e) = (mark.span.start, mark.span.end);
         let data = MappingCapabilities::from_kind(mark.kind);
 
-        // One segment per byte-exact leaf whose source range is contained in this mark's `[s, e)`.
+        // One segment per byte-exact leaf whose source range is contained in this mark's `[s, e)`;
+        // leaves are start-sorted, so the candidates are one binary-searched run.
+        let lo = leaves.partition_point(|&(src_start, ..)| src_start < s);
         let mut source_offsets = Vec::new();
         let mut generated_offsets = Vec::new();
         let mut lengths = Vec::new();
-        for &(src_start, src_end, gen_start) in &leaves {
-            if src_start >= s && src_end <= e && byte_exact(src_start, src_end, gen_start) {
+        for &(src_start, src_end, gen_start) in
+            leaves[lo..].iter().take_while(|&&(src_start, ..)| src_start < e)
+        {
+            if src_end <= e && byte_exact(src_start, src_end, gen_start) {
                 source_offsets.push(src_start);
                 generated_offsets.push(gen_start);
                 lengths.push(src_end - src_start);

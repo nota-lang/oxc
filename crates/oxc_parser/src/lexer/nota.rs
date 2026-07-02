@@ -10,7 +10,9 @@
 //! The free functions below are the reader's *scans*: pure `(source, offset) → offsets/spans/&str`
 //! lookups the parser calls to find extents (lines, statements, blocks, emphasis closes, raw spans).
 //! They never touch the lexer cursor; all raw byte-munging lives here so the parser can stay on
-//! typed tokens and AST construction.
+//! typed tokens and AST construction. Line-start classifiers are `lazy-regex` patterns over the
+//! line slice; the extent walkers step a shared [`Scan`] byte cursor, so each scan reads as its
+//! grammar rule rather than index arithmetic.
 
 // Source offsets and substring lengths are cast to `u32` throughout: oxc's `Span` is `u32`-based
 // (sources are bounded to 4 GiB), so these `as u32` casts cannot truncate in practice.
@@ -172,33 +174,126 @@ pub fn is_ident_start_at(source: &str, off: u32) -> bool {
     source[off as usize..].chars().next().is_some_and(is_identifier_start)
 }
 
-/// Skip spaces/tabs from `i`; returns the first non-inline-whitespace offset.
-fn skip_inline_ws(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
-        i += 1;
-    }
-    i
+/// A byte cursor over the raw source — the shared stepping machinery of the extent walkers below.
+///
+/// Methods are grammar-shaped (`eat_run`, `skip_while`, `eat_keyword`, …) so a scan reads as its
+/// rule rather than index arithmetic. The cursor is `Copy`: a scan looks ahead by stepping a
+/// throwaway copy. Reads go through `get` (an escape's `advance(2)` may overshoot the end by one
+/// byte); [`Scan::pos`] clamps to the source end.
+#[derive(Clone, Copy)]
+struct Scan<'a> {
+    source: &'a str,
+    i: usize,
 }
 
-/// The end of the run of byte `b` starting at `i`.
-fn skip_run(bytes: &[u8], mut i: usize, b: u8) -> usize {
-    while i < bytes.len() && bytes[i] == b {
-        i += 1;
+impl<'a> Scan<'a> {
+    fn new(source: &'a str, at: u32) -> Self {
+        Self { source, i: at as usize }
     }
-    i
+
+    fn bytes(self) -> &'a [u8] {
+        self.source.as_bytes()
+    }
+
+    /// The cursor's byte offset, clamped to the source end.
+    fn pos(self) -> u32 {
+        self.i.min(self.source.len()) as u32
+    }
+
+    fn is_eof(self) -> bool {
+        self.i >= self.source.len()
+    }
+
+    fn peek(self) -> Option<u8> {
+        self.bytes().get(self.i).copied()
+    }
+
+    fn peek_at(self, k: usize) -> Option<u8> {
+        self.bytes().get(self.i + k).copied()
+    }
+
+    /// Are the next two bytes exactly `a`, `b`?
+    fn at2(self, a: u8, b: u8) -> bool {
+        self.peek() == Some(a) && self.peek_at(1) == Some(b)
+    }
+
+    fn bump(&mut self) {
+        self.i += 1;
+    }
+
+    fn advance(&mut self, n: usize) {
+        self.i += n;
+    }
+
+    fn goto(&mut self, pos: u32) {
+        self.i = pos as usize;
+    }
+
+    /// Consume the run of `b`; returns its length.
+    fn eat_run(&mut self, b: u8) -> usize {
+        let start = self.i;
+        while self.peek() == Some(b) {
+            self.i += 1;
+        }
+        self.i - start
+    }
+
+    /// Consume bytes while `pred` holds.
+    fn skip_while(&mut self, pred: impl Fn(u8) -> bool) {
+        while self.peek().is_some_and(&pred) {
+            self.i += 1;
+        }
+    }
+
+    /// Consume spaces/tabs.
+    fn skip_inline_ws(&mut self) {
+        self.skip_while(|b| matches!(b, b' ' | b'\t'));
+    }
+
+    /// Jump to the next occurrence of `b` at/after the cursor (a `memchr` jump); `false` leaves
+    /// the cursor at the source end.
+    fn find(&mut self, b: u8) -> bool {
+        let at = self.i.min(self.source.len());
+        if let Some(k) = memchr::memchr(b, &self.bytes()[at..]) {
+            self.i = at + k;
+            true
+        } else {
+            self.i = self.source.len();
+            false
+        }
+    }
+
+    /// Consume `kw` if the source continues with it followed by a word boundary (so `else`
+    /// matches but `elsewhere` does not).
+    fn eat_keyword(&mut self, kw: &[u8]) -> bool {
+        let Some(rest) = self.bytes().get(self.i..) else { return false };
+        if !rest.starts_with(kw) {
+            return false;
+        }
+        let boundary = match rest.get(kw.len()) {
+            Some(&b) => !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$') || b >= 0x80),
+            None => true,
+        };
+        if boundary {
+            self.i += kw.len();
+        }
+        boundary
+    }
 }
 
 /// The end of the run of `byte` starting at `off` (for literal sigil-run fallbacks).
 pub fn sigil_run_end(source: &str, off: u32, byte: u8) -> u32 {
-    skip_run(source.as_bytes(), off as usize, byte) as u32
+    let mut s = Scan::new(source, off);
+    s.eat_run(byte);
+    s.pos()
 }
 
 /// `(content_offset, is_blank)` for the line starting at `line_start`: the offset of its first
 /// non-inline-whitespace byte, and whether the line has no content.
-fn line_probe(source: &str, line_start: u32) -> (usize, bool) {
-    let bytes = source.as_bytes();
-    let i = skip_inline_ws(bytes, line_start as usize);
-    (i, i >= bytes.len() || bytes[i] == b'\n')
+fn line_probe(source: &str, line_start: u32) -> (u32, bool) {
+    let mut s = Scan::new(source, line_start);
+    s.skip_inline_ws();
+    (s.pos(), s.peek().is_none_or(|b| b == b'\n'))
 }
 
 // ================================================================================================
@@ -232,7 +327,9 @@ pub fn line_indent_of(source: &str, offset: u32) -> usize {
     while start > 0 && bytes[start - 1] != b'\n' {
         start -= 1;
     }
-    skip_inline_ws(bytes, start) - start
+    let mut s = Scan::new(source, start as u32);
+    s.skip_inline_ws();
+    s.pos() as usize - start
 }
 
 /// The end of an indentation-scoped block: starting at line `line_start`, consume lines that are
@@ -241,8 +338,7 @@ pub fn line_indent_of(source: &str, offset: u32) -> usize {
 fn indented_block_end(source: &str, mut line_start: u32, min_indent: u32) -> u32 {
     while (line_start as usize) < source.len() {
         let (content, is_blank) = line_probe(source, line_start);
-        let indent = content as u32 - line_start;
-        if !is_blank && indent <= min_indent {
+        if !is_blank && content - line_start <= min_indent {
             break;
         }
         line_start = next_line_start(source, line_start);
@@ -259,19 +355,15 @@ fn indented_block_end(source: &str, mut line_start: u32, min_indent: u32) -> u32
 /// a `-` directly followed by an identifier char. (The JS lexer stops a bare identifier at `-`, so
 /// the tail is read here — the markup analog of JSX's `continue_lex_jsx_identifier`.)
 pub fn scan_hyphen_tail(source: &str, at: u32) -> Option<u32> {
-    let bytes = source.as_bytes();
-    let mut i = at as usize;
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut s = Scan::new(source, at);
     let mut consumed = false;
-    while bytes.get(i) == Some(&b'-')
-        && bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
-    {
-        i += 1;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-            i += 1;
-        }
+    while s.peek() == Some(b'-') && s.peek_at(1).is_some_and(is_ident) {
+        s.bump();
+        s.skip_while(is_ident);
         consumed = true;
     }
-    consumed.then_some(i as u32)
+    consumed.then_some(s.pos())
 }
 
 /// Classify the byte at `after` as the trigger glued to an `@`-form head. This is the one
@@ -302,50 +394,34 @@ pub fn escape_span(source: &str, esc_off: u32) -> Span {
     }
 }
 
-/// Does `source[at..]` begin with keyword `kw` followed by a word boundary (so `else`/`if` match
-/// but `elsewhere`/`iffy` do not)?
-fn matches_keyword(source: &str, at: usize, kw: &[u8]) -> bool {
-    let bytes = source.as_bytes();
-    if at + kw.len() > bytes.len() || &bytes[at..at + kw.len()] != kw {
-        return false;
-    }
-    match bytes.get(at + kw.len()) {
-        Some(b) => !(b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$') || *b >= 0x80),
-        None => true,
-    }
-}
-
 /// Scan for an `else`/`else if` continuation after an `@if` branch that closed at `close_end`:
 /// skip inline whitespace and at most one newline (a blank line breaks the chain), reject an
 /// escaped `\else`, then classify what follows `else` (`if` → else-if, `{` → else-block).
 pub fn else_peek(source: &str, close_end: u32) -> ElsePeek {
-    let bytes = source.as_bytes();
-    let mut i = close_end as usize;
+    let mut s = Scan::new(source, close_end);
     let mut newlines = 0u32;
-    while i < bytes.len() {
-        match bytes[i] {
-            b' ' | b'\t' | b'\r' => i += 1,
-            b'\n' => {
+    loop {
+        match s.peek() {
+            Some(b' ' | b'\t' | b'\r') => s.bump(),
+            Some(b'\n') => {
                 newlines += 1;
                 if newlines >= 2 {
                     return ElsePeek::None;
                 }
-                i += 1;
+                s.bump();
             }
             _ => break,
         }
     }
-    if bytes.get(i) == Some(&b'\\') || !matches_keyword(source, i, b"else") {
+    if s.peek() == Some(b'\\') || !s.eat_keyword(b"else") {
         return ElsePeek::None;
     }
-    let mut j = i + 4;
-    while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
-        j += 1;
-    }
-    if matches_keyword(source, j, b"if") {
-        ElsePeek::ElseIf { if_offset: j as u32 }
-    } else if bytes.get(j) == Some(&b'{') {
-        ElsePeek::Else { brace_offset: j as u32 }
+    s.skip_while(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n'));
+    let after_else = s.pos();
+    if s.eat_keyword(b"if") {
+        ElsePeek::ElseIf { if_offset: after_else }
+    } else if s.peek() == Some(b'{') {
+        ElsePeek::Else { brace_offset: after_else }
     } else {
         ElsePeek::None
     }
@@ -466,25 +542,26 @@ pub fn colon_block_extent(
     head_indent: usize,
     clip_at_brace: bool,
 ) -> (u32, u32) {
-    let bytes = source.as_bytes();
-    let start = skip_inline_ws(bytes, colon_end as usize) as u32;
+    let mut s = Scan::new(source, colon_end);
+    s.skip_inline_ws();
+    let start = s.pos();
     let mut depth = 0i32;
-    let mut j = colon_end as usize;
+    s.goto(colon_end);
     let first_line_end = loop {
-        match bytes.get(j) {
+        match s.peek() {
             None | Some(b'\n') => break next_line_start(source, colon_end),
-            Some(b'\\') => j += 2, // skip the escaped byte
-            Some(b'@') => j = skip_at_form(source, j),
+            Some(b'\\') => s.advance(2), // skip the escaped byte
+            Some(b'@') => s.skip_at_form(),
             Some(b'{') => {
                 depth += 1;
-                j += 1;
+                s.bump();
             }
-            Some(b'}') if depth == 0 && clip_at_brace => return (start, j as u32),
+            Some(b'}') if depth == 0 && clip_at_brace => return (start, s.pos()),
             Some(b'}') => {
                 depth = (depth - 1).max(0);
-                j += 1;
+                s.bump();
             }
-            _ => j += 1,
+            _ => s.bump(),
         }
     };
     (start, indented_block_end(source, first_line_end, head_indent as u32))
@@ -565,122 +642,134 @@ fn can_close(source: &str, off: u32) -> bool {
     }
 }
 
-/// Skip a JS string or template literal whose opening quote is at `at`, honoring `\`-escapes.
-/// Returns the offset just past the closing quote. An unterminated `'`/`"` stops at the newline
-/// (the scan resumes there); a template runs to its closing backtick (newlines allowed, `${…}`
-/// contents opaque). Unterminated at EOF → the source end.
-fn skip_js_string(source: &str, at: usize) -> usize {
-    let bytes = source.as_bytes();
-    let quote = bytes[at];
-    let mut i = at + 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'\n' if quote != b'`' => return i,
-            b if b == quote => return i + 1,
-            _ => i += 1,
+/// The embedded-JS / raw-span skips: extent walkers step *over* these regions so their contents
+/// cannot perturb the surrounding scan (a `*` in a string cannot close an emphasis, a `}` in a
+/// props string cannot clip a colon body).
+impl Scan<'_> {
+    /// Skip a JS string or template literal whose opening quote is next, honoring `\`-escapes;
+    /// leaves the cursor just past the closing quote. An unterminated `'`/`"` stops *at* the
+    /// newline (the scan resumes there); a template runs to its closing backtick (newlines
+    /// allowed, `${…}` contents opaque); unterminated at EOF stops at the source end.
+    fn skip_js_string(&mut self) {
+        let quote = self.peek();
+        self.bump();
+        loop {
+            match self.peek() {
+                None => return,
+                Some(b'\\') => self.advance(2),
+                Some(b'\n') if quote != Some(b'`') => return, // unterminated: stop at the newline
+                b if b == quote => {
+                    self.bump();
+                    return;
+                }
+                _ => self.bump(),
+            }
         }
     }
-    bytes.len()
-}
 
-/// Skip a balanced bracket group (`(…)`/`[…]`/`{…}`, nesting all three) whose opener is at `at`,
-/// returning the offset just past the matching closer, or `at + 1` if unterminated. The group is
-/// embedded JS, so string/template and comment contents are skipped — a bracket or emphasis
-/// marker inside `"…"`/`` `…` ``/`/*…*/` cannot unbalance it. (Regex literals are not recognized;
-/// these scans bound heuristic extents — the embedded JS is properly parsed afterwards.)
-fn skip_balanced(source: &str, at: usize) -> usize {
-    let bytes = source.as_bytes();
-    let mut depth = 0u32;
-    let mut i = at;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                i += 1;
+    /// Skip a balanced bracket group (`(…)`/`[…]`/`{…}`, nesting all three) whose opener is next;
+    /// leaves the cursor just past the matching closer, or one byte in if unterminated. The group
+    /// is embedded JS, so string/template and comment contents are skipped — a bracket or emphasis
+    /// marker inside `"…"`/`` `…` ``/`/*…*/` cannot unbalance it. (Regex literals are not
+    /// recognized; these scans bound heuristic extents — the embedded JS is properly parsed
+    /// afterwards.)
+    fn skip_balanced(&mut self) {
+        let entry = self.i;
+        let mut depth = 0u32;
+        while let Some(b) = self.peek() {
+            match b {
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    self.bump();
+                }
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    self.bump();
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                b'"' | b'\'' | b'`' => self.skip_js_string(),
+                b'/' if self.peek_at(1) == Some(b'/') => {
+                    self.goto(line_content_end(self.source, self.pos()));
+                }
+                b'/' if self.peek_at(1) == Some(b'*') => {
+                    self.i = match memchr::memmem::find(&self.bytes()[self.i + 2..], b"*/") {
+                        Some(k) => self.i + 2 + k + 2,
+                        None => self.source.len(),
+                    };
+                }
+                _ => self.bump(),
             }
-            b')' | b']' | b'}' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return i;
+        }
+        self.i = entry + 1; // unterminated: the opener is a single literal byte
+    }
+
+    /// Skip an `@`-form whose `@` is next: past the head and any adjacent `(…)`/`[…]` groups — so
+    /// a `*`/`_` inside an embedded expression cannot close an emphasis, and a stray bracket
+    /// inside that JS cannot perturb the caller's brace depth. A trailing `{…}` markup body is
+    /// left to the caller's depth-tracked scan.
+    fn skip_at_form(&mut self) {
+        self.bump(); // the `@`
+        self.skip_while(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'.') || b >= 0x80
+        });
+        while matches!(self.peek(), Some(b'(' | b'[')) {
+            self.skip_balanced();
+        }
+    }
+
+    /// Skip a raw span (inline/fenced code, math, or `|{ … }|` verbatim) whose opener byte is
+    /// next; leaves the cursor just past its close, or one byte in if it has no valid close (the
+    /// opener was literal). Lets emphasis matching step over raw content.
+    fn skip_raw_span(&mut self) {
+        let entry = self.i;
+        match self.peek() {
+            Some(b'`') => {
+                let fence_len = self.eat_run(b'`');
+                match find_backtick_close(self.source, self.pos(), fence_len) {
+                    Some(close) => self.i = close as usize + fence_len,
+                    None => self.i = entry + 1,
                 }
             }
-            b'"' | b'\'' | b'`' => i = skip_js_string(source, i),
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                i = line_content_end(source, i as u32) as usize;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i = match memchr::memmem::find(&bytes[i + 2..], b"*/") {
-                    Some(k) => i + 2 + k + 2,
-                    None => bytes.len(),
-                };
-            }
-            _ => i += 1,
-        }
-    }
-    at + 1
-}
-
-/// Skip an `@`-form whose `@` is at `at`: past the head and any adjacent `(…)`/`[…]` groups — so a
-/// `*`/`_` inside an embedded expression cannot close an emphasis, and a stray bracket inside that
-/// JS cannot perturb the caller's brace depth. A trailing `{…}` markup body is left to the
-/// caller's depth-tracked scan.
-fn skip_at_form(source: &str, at: usize) -> usize {
-    let bytes = source.as_bytes();
-    let mut i = at + 1;
-    while i < bytes.len()
-        && (bytes[i].is_ascii_alphanumeric()
-            || matches!(bytes[i], b'_' | b'$' | b'.')
-            || bytes[i] >= 0x80)
-    {
-        i += 1;
-    }
-    while matches!(bytes.get(i), Some(b'(' | b'[')) {
-        i = skip_balanced(source, i);
-    }
-    i
-}
-
-/// Skip a raw span (inline/fenced code, math, or `|{ … }|` verbatim) whose opener byte is at `at`,
-/// returning the offset just past its close, or `at + 1` if it has no valid close (the opener was
-/// literal). Lets emphasis matching step over raw content.
-fn skip_raw_span(source: &str, at: usize) -> usize {
-    let bytes = source.as_bytes();
-    match bytes[at] {
-        b'`' => {
-            let k = skip_run(bytes, at, b'`');
-            let fence_len = k - at;
-            match find_backtick_close(source, k, fence_len) {
-                Some(close) => close + fence_len,
-                None => at + 1,
-            }
-        }
-        b'$' => {
-            let display = bytes.get(at + 1) == Some(&b'$');
-            let delim = if display { 2 } else { 1 };
-            let mut k = at + delim;
-            while k < bytes.len() {
-                match bytes[k] {
-                    b'\\' => k += 2,
-                    b'$' if !display => return k + 1,
-                    b'$' if display && bytes.get(k + 1) == Some(&b'$') => return k + 2,
-                    _ => k += 1,
+            Some(b'$') => {
+                let display = self.peek_at(1) == Some(b'$');
+                self.advance(if display { 2 } else { 1 });
+                loop {
+                    match self.peek() {
+                        None => {
+                            self.i = entry + 1;
+                            return;
+                        }
+                        Some(b'\\') => self.advance(2),
+                        Some(b'$') if !display => {
+                            self.bump();
+                            return;
+                        }
+                        Some(b'$') if self.peek_at(1) == Some(b'$') => {
+                            self.advance(2);
+                            return;
+                        }
+                        _ => self.bump(),
+                    }
                 }
             }
-            at + 1
-        }
-        b'|' => {
-            let mut k = at + 2;
-            while k < bytes.len() {
-                if bytes[k] == b'}' && bytes.get(k + 1) == Some(&b'|') {
-                    return k + 2;
+            Some(b'|') => {
+                self.advance(2); // past `|{`
+                loop {
+                    if self.is_eof() {
+                        self.i = entry + 1;
+                        return;
+                    }
+                    if self.at2(b'}', b'|') {
+                        self.advance(2);
+                        return;
+                    }
+                    self.bump();
                 }
-                k += 1;
             }
-            at + 1
+            _ => self.i = entry + 1,
         }
-        _ => at + 1,
     }
 }
 
@@ -689,52 +778,44 @@ fn skip_raw_span(source: &str, at: usize) -> usize {
 /// (paragraph break), the `}` closing the enclosing body, or EOF. Balanced `{…}`, raw spans, and
 /// `@`-forms are skipped so their inner `*`/`_` cannot close.
 pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
-    let bytes = source.as_bytes();
-    let mut i = open as usize + 1;
-    let mut depth: i32 = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
+    let mut s = Scan::new(source, open + 1);
+    let mut depth = 0i32;
+    while let Some(b) = s.peek() {
         match b {
-            b'\\' => i += 2, // skip the escaped char (so `\*` cannot close)
+            b'\\' => s.advance(2), // skip the escaped char (so `\*` cannot close)
             b'\n' => {
-                let j = skip_inline_ws_and_cr(bytes, i + 1);
-                if j >= bytes.len() || bytes[j] == b'\n' {
+                let mut rest = s;
+                rest.bump();
+                rest.skip_while(|b| matches!(b, b' ' | b'\t' | b'\r'));
+                if rest.peek().is_none_or(|b| b == b'\n') {
                     return None; // blank line ends the scope
                 }
-                i += 1;
+                s.bump();
             }
             b'{' => {
                 depth += 1;
-                i += 1;
+                s.bump();
             }
             b'}' => {
                 if depth == 0 {
                     return None; // enclosing body closes before a matching marker
                 }
                 depth -= 1;
-                i += 1;
+                s.bump();
             }
-            b'`' | b'$' => i = skip_raw_span(source, i),
-            b'|' if bytes.get(i + 1) == Some(&b'{') => i = skip_raw_span(source, i),
-            b'@' => i = skip_at_form(source, i),
+            b'`' | b'$' => s.skip_raw_span(),
+            b'|' if s.peek_at(1) == Some(b'{') => s.skip_raw_span(),
+            b'@' => s.skip_at_form(),
             _ if b == marker && depth == 0 => {
-                if i as u32 > open + 1 && can_close(source, i as u32) {
-                    return Some(i as u32);
+                if s.pos() > open + 1 && can_close(source, s.pos()) {
+                    return Some(s.pos());
                 }
-                i += 1;
+                s.bump();
             }
-            _ => i += 1,
+            _ => s.bump(),
         }
     }
     None
-}
-
-/// Skip spaces/tabs/`\r` from `i` (blank-line detection inside [`find_emphasis_close`]).
-fn skip_inline_ws_and_cr(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r') {
-        i += 1;
-    }
-    i
 }
 
 // ================================================================================================
@@ -755,9 +836,9 @@ pub enum CodeScan<'a> {
 /// code closed by the next run of `≥ fence_len` backticks (shorter runs are literal). With no
 /// close the run is literal.
 pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
-    let bytes = source.as_bytes();
-    let content_start = skip_run(bytes, tick_off as usize, b'`');
-    let fence_len = content_start - tick_off as usize;
+    let mut s = Scan::new(source, tick_off);
+    let fence_len = s.eat_run(b'`');
+    let content_start = s.pos();
 
     if fence_len >= 3
         && let Some(code) = scan_fenced_code(source, tick_off, fence_len, content_start)
@@ -766,32 +847,26 @@ pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
     }
 
     if let Some(close) = find_backtick_close(source, content_start, fence_len) {
-        let resume = close as u32 + fence_len as u32;
+        let resume = close + fence_len as u32;
         return CodeScan::Code {
             span: Span::new(tick_off, resume),
             is_block: false,
             lang: None,
-            content: &source[content_start..close],
+            content: &source[content_start as usize..close as usize],
             resume,
         };
     }
-    CodeScan::Literal { resume: content_start as u32 }
+    CodeScan::Literal { resume: content_start }
 }
 
 /// Find the next run of at least `fence_len` backticks at/after `from` (the offset of its first
 /// backtick), or `None`. Shorter runs are literal content.
-fn find_backtick_close(source: &str, from: usize, fence_len: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    let mut i = from;
-    while i < bytes.len() {
-        if bytes[i] == b'`' {
-            let run_start = i;
-            i = skip_run(bytes, i, b'`');
-            if i - run_start >= fence_len {
-                return Some(run_start);
-            }
-        } else {
-            i += 1;
+fn find_backtick_close(source: &str, from: u32, fence_len: usize) -> Option<u32> {
+    let mut s = Scan::new(source, from);
+    while s.find(b'`') {
+        let run_start = s.pos();
+        if s.eat_run(b'`') >= fence_len {
+            return Some(run_start);
         }
     }
     None
@@ -805,54 +880,46 @@ fn scan_fenced_code(
     source: &str,
     tick_off: u32,
     fence_len: usize,
-    content_start: usize,
+    content_start: u32,
 ) -> Option<CodeScan<'_>> {
-    let bytes = source.as_bytes();
-    let mut j = content_start;
-    while j < bytes.len() && bytes[j] != b'\n' {
-        if bytes[j] == b'`' {
-            return None; // backticks on the opener line ⇒ inline run, not a fence
-        }
-        j += 1;
-    }
-    if j >= bytes.len() {
-        return None; // no newline after the opener ⇒ not a block
+    // The opener line's tail is the info string: it must contain no backticks (⇒ inline run, not
+    // a fence) and must end in a newline (a fence needs a body).
+    let opener_end = line_content_end(source, content_start);
+    let info = &source[content_start as usize..opener_end as usize];
+    if info.contains('`') || (opener_end as usize) >= source.len() {
+        return None;
     }
     // Language = first token of the info string (```` ```js extra ```` → `js`).
-    let lang = source[content_start..j].split_whitespace().next();
-    let body_start = j + 1;
+    let lang = info.split_whitespace().next();
+    let body_start = opener_end + 1;
 
     let mut line_start = body_start;
-    loop {
-        if line_start >= bytes.len() {
-            // Unterminated fence: code runs to EOF.
+    while (line_start as usize) < source.len() {
+        let mut s = Scan::new(source, line_start);
+        s.skip_inline_ws();
+        if s.eat_run(b'`') >= fence_len {
+            // Close fence: body ends before the fence line's `\n` (a non-first line always
+            // follows one). Resume right after the backtick run — trailing content (e.g. a `}`
+            // closing an enclosing body) is the collector's.
+            let code_end = if line_start > body_start { line_start - 1 } else { line_start };
             return Some(CodeScan::Code {
-                span: Span::new(tick_off, bytes.len() as u32),
+                span: Span::new(tick_off, s.pos()),
                 is_block: true,
                 lang,
-                content: &source[body_start..],
-                resume: bytes.len() as u32,
+                content: &source[body_start as usize..code_end as usize],
+                resume: s.pos(),
             });
         }
-        let run_start = skip_inline_ws(bytes, line_start);
-        let k = skip_run(bytes, run_start, b'`');
-        if k - run_start >= fence_len {
-            // Close fence: body ends before the fence line's `\n`. Resume right after the backtick
-            // run — trailing content (e.g. a `}` closing an enclosing body) is the collector's.
-            let mut code_end = line_start;
-            if code_end > body_start && bytes[code_end - 1] == b'\n' {
-                code_end -= 1;
-            }
-            return Some(CodeScan::Code {
-                span: Span::new(tick_off, k as u32),
-                is_block: true,
-                lang,
-                content: &source[body_start..code_end],
-                resume: k as u32,
-            });
-        }
-        line_start = next_line_start(source, line_start as u32) as usize;
+        line_start = next_line_start(source, line_start);
     }
+    // Unterminated fence: code runs to EOF.
+    Some(CodeScan::Code {
+        span: Span::new(tick_off, source.len() as u32),
+        is_block: true,
+        lang,
+        content: &source[body_start as usize..],
+        resume: source.len() as u32,
+    })
 }
 
 // ================================================================================================
@@ -879,41 +946,34 @@ pub enum MathBoundary {
 /// single `$` inside display math is literal. The `@name` scan is ASCII and excludes `$` so the
 /// math delimiter wins (`@i$`).
 pub fn math_boundary(source: &str, from: u32, display: bool) -> (u32, MathBoundary) {
-    let bytes = source.as_bytes();
     let delim: u32 = if display { 2 } else { 1 };
-    let mut i = from as usize;
+    let mut s = Scan::new(source, from);
     loop {
-        match bytes.get(i) {
-            None => return (bytes.len() as u32, MathBoundary::Eof),
-            Some(b'\\') => i += 2,
-            Some(b'$') if !display || bytes.get(i + 1) == Some(&b'$') => {
-                return (i as u32, MathBoundary::Close { after: i as u32 + delim });
+        match s.peek() {
+            None => return (s.pos(), MathBoundary::Eof),
+            Some(b'\\') => s.advance(2),
+            Some(b'$') if !display || s.peek_at(1) == Some(b'$') => {
+                return (s.pos(), MathBoundary::Close { after: s.pos() + delim });
             }
             Some(b'@') => {
-                let name_start = i + 1;
-                let boundary = if bytes.get(name_start) == Some(&b'(') {
+                let at = s.pos();
+                let boundary = if s.peek_at(1) == Some(b'(') {
                     MathBoundary::InterpParen
                 } else {
-                    let name_end = skip_ascii_ident(bytes, name_start);
-                    if name_end == name_start {
+                    s.bump(); // the `@`
+                    let name_start = s.pos();
+                    s.skip_while(|b| b.is_ascii_alphanumeric() || b == b'_');
+                    if s.pos() == name_start {
                         MathBoundary::LiteralAt
                     } else {
-                        MathBoundary::InterpName { name_end: name_end as u32 }
+                        MathBoundary::InterpName { name_end: s.pos() }
                     }
                 };
-                return (i as u32, boundary);
+                return (at, boundary);
             }
-            Some(_) => i += 1,
+            Some(_) => s.bump(),
         }
     }
-}
-
-/// The end of the ASCII identifier run (`[A-Za-z0-9_]*`) starting at `i`.
-fn skip_ascii_ident(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-        i += 1;
-    }
-    i
 }
 
 // ================================================================================================
@@ -934,21 +994,24 @@ pub enum VerbatimBoundary {
 /// `|@` escape, or EOF. Returns `(run_end, boundary)` where `[from, run_end)` is the raw slice —
 /// for a close, a single trailing newline right before `}|` is dropped (the `}`-newline rule).
 pub fn verbatim_boundary(source: &str, from: u32) -> (u32, VerbatimBoundary) {
-    let bytes = source.as_bytes();
-    let mut i = from as usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'}' if bytes.get(i + 1) == Some(&b'|') => {
-                let run_end = if i > from as usize && bytes[i - 1] == b'\n' { i - 1 } else { i };
-                return (run_end as u32, VerbatimBoundary::Close { after: i as u32 + 2 });
-            }
-            b'|' if bytes.get(i + 1) == Some(&b'@') => {
-                return (i as u32, VerbatimBoundary::ArmedAt { at: i as u32 + 1 });
-            }
-            _ => i += 1,
+    let mut s = Scan::new(source, from);
+    while !s.is_eof() {
+        if s.at2(b'}', b'|') {
+            // Drop a single trailing newline right before `}|` (the `}`-newline rule).
+            let close = s.pos();
+            let run_end = if close > from && byte_at(source, close - 1) == Some(b'\n') {
+                close - 1
+            } else {
+                close
+            };
+            return (run_end, VerbatimBoundary::Close { after: close + 2 });
         }
+        if s.at2(b'|', b'@') {
+            return (s.pos(), VerbatimBoundary::ArmedAt { at: s.pos() + 1 });
+        }
+        s.bump();
     }
-    (bytes.len() as u32, VerbatimBoundary::Eof)
+    (s.pos(), VerbatimBoundary::Eof)
 }
 
 #[cfg(test)]

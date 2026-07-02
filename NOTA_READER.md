@@ -80,9 +80,9 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   continuation): the closers are multi-byte and context-dependent — a poor fit for token lexing —
   and raw-source matching is robust to lexer mode and to escapes (`\else`, `\*`) that are not
   clean JS tokens. Line-start classifiers (`%`/fence/heading/list/`|`-prop lines) are `lazy-regex`
-  patterns over the line slice; extent scans that step over an `@`-form's `(…)`/`[…]` groups skip
-  JS string/template/comment contents (`skip_js_string`), so a bracket or `*` inside `"…"` cannot
-  unbalance them.
+  patterns over the line slice; the extent walkers step a shared `Scan` byte cursor whose
+  embedded-JS skips (`skip_js_string`/`skip_balanced`/`skip_at_form`) make an `@`-form's
+  `(…)`/`[…]` groups opaque — a bracket or `*` inside `"…"` cannot unbalance them.
 - **Embedded JS is parsed by oxc itself** (`parse_expr` / `parse_statement_list_item` /
   `parse_binding_pattern`) with `nota_markup` left on, so `@`-forms nest inside embedded JS. A
   `%`/`%%%` statement's parse is **bounded** by temporarily clamping the lexer's source end
