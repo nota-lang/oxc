@@ -375,6 +375,17 @@ fn colon_body_brace_handling() {
     );
 }
 
+#[test]
+fn colon_body_props_string_brace_does_not_clip() {
+    // A `}` inside an `@`-form's props string on the colon line is embedded JS, not markup — the
+    // extent scan must not clip the body there (it previously cut mid-string → a fatal lexer
+    // error). The depth-0 `}` after it still closes the enclosing braced body.
+    nota_expr(
+        "@p{@a: @f[x: \"}\"] y}",
+        r#"h("p", {}, [h("a", {}, [h("f", { x: "}" }, []), " y"])])"#,
+    );
+}
+
 // ===============================================================================================
 // Diagnostics
 // ===============================================================================================
@@ -1024,6 +1035,21 @@ fn math_display_plain() {
 #[test]
 fn math_interp_paren_expr() {
     nota_expr(r"@p{$a_@(i + 1)$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_${i + 1}`])])"#);
+}
+
+#[test]
+fn math_interp_with_template_breaker_falls_back_to_cooked_template() {
+    // A backtick (or literal `${`) cannot ride through `String.raw` with substitutions — the `\`
+    // escaping it would leak into the runtime string (`String.raw` does not process escapes).
+    // The reader emits a plain (cooked) template instead, whose value reproduces the raw text.
+    let js = nota_expr_raw("@p{$a`b_@i$}");
+    assert!(!js.contains("String.raw"), "breaker content must not use String.raw: {js}");
+    assert_js_eq(&js, r#"h("p", {}, [h(Math, {}, [`a\`b_${i}`])])"#);
+
+    // `${` in display math (a single `$` is literal there): same fallback.
+    let js = nota_expr_raw("@p{$$a${b}_@i$$}");
+    assert!(!js.contains("String.raw"), "breaker content must not use String.raw: {js}");
+    assert_js_eq(&js, r#"h("p", {}, [h(Math, { display: true }, [`a\${b}_${i}`])])"#);
 }
 
 #[test]

@@ -31,11 +31,12 @@ use crate::{
     error_handler::FatalError,
     lexer::Kind,
     lexer::nota::{
-        CodeScan, ElsePeek, MarkupTrigger, byte_at, colon_block_extent, colon_prop_line_at,
-        else_peek, escape_span, find_emphasis_close, find_fence_close, heading_at,
-        is_ident_start_at, is_statement_line, lex_code_span, line_content_end, line_indent_of,
-        list_item_extent, list_marker_at, markup_trigger, next_line_start,
-        next_percent_line_or_end, percent_line_is_empty, scan_hyphen_tail, statement_kind,
+        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, byte_at,
+        colon_block_extent, colon_prop_line_at, else_peek, escape_span, find_emphasis_close,
+        find_fence_close, heading_at, is_ident_start_at, is_statement_line, lex_code_span,
+        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
+        math_boundary, next_line_start, next_percent_line_or_end, percent_line_is_empty,
+        scan_hyphen_tail, sigil_run_end, statement_kind, verbatim_boundary,
     },
 };
 
@@ -269,30 +270,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Classify the trigger glued to the head, then consume the head's boundary token in the lexer
     /// mode that trigger implies. This is the one place the boundary token is consumed, uniform
-    /// across named and dynamic heads.
+    /// across named and dynamic heads. (Seeks, not bumps: an *extended* hyphenated head runs past
+    /// the lexer's current boundary token, and a seek from `head.end` covers both cases.)
     fn commit_head(&mut self, head: &NotaHead<'a>, in_body: bool) -> MarkupTrigger {
         let trigger = markup_trigger(self.source_text, head.end);
-        // An *extended* (hyphenated) head runs past the lexer's current boundary token, so a plain
-        // bump would mis-position; seek to `head.end` instead.
-        let extended = self.cur_token().end() != head.end;
         match trigger {
+            // Lex the trigger (`{` / `[` / `:`) as the next JS token.
             MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => {
-                if extended {
-                    self.nota_seek_to(head.end);
-                } else {
-                    self.bump_any();
-                }
+                self.nota_seek_to(head.end);
             }
             // The verbatim body is scanned by absolute offset from `head.end`; the boundary token
             // stays current (the JS lexer must not eat the `|`).
             MarkupTrigger::Verbatim => {}
-            MarkupTrigger::None => {
-                if in_body {
-                    self.advance_for_nota_child();
-                } else {
-                    self.bump_any();
-                }
-            }
+            // No trigger ⇒ interpolation: resume the surrounding context past the head.
+            MarkupTrigger::None => self.resume_at(head.end, in_body),
         }
         trigger
     }
@@ -341,13 +332,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
 
         let (children, end) = if self.at(Kind::LCurly) {
-            self.parse_body(in_body)
+            let (children, end) = self.parse_braced_body();
+            self.resume_at(end, in_body);
+            (children, end)
         } else {
             // Self-closing. The current JS token already ran past the `]`; re-lex the trailing
             // markup text from right after it so no body text is dropped.
             let end = self.prev_token_end;
             if in_body {
-                self.nota_seek_markup(end);
+                self.resume_at(end, true);
             }
             (self.ast.vec(), end)
         };
@@ -359,7 +352,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// `@{ body }` → a fragment node. `@` already consumed.
     fn parse_fragment(&mut self, span_start: u32, in_body: bool) -> NotaFragment<'a> {
-        let (children, end) = self.parse_body(in_body);
+        let (children, end) = self.parse_braced_body();
+        self.resume_at(end, in_body);
         let span = Span::new(span_start, end);
         self.ast.nota_fragment(span, children)
     }
@@ -368,27 +362,42 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // Body collection
     // ===========================================================================================
 
-    /// Parse a `{ … }` markup body into children + the end offset (one past `}`). Entered at the
-    /// body-open `{`. `in_body` governs how the closing `}` resumes lexing.
-    fn parse_body(&mut self, in_body: bool) -> (ArenaVec<'a, NotaChild<'a>>, u32) {
+    /// Parse a `{ … }` markup body → `(children, end)`, `end` one past the closing `}`. The `}`
+    /// is left as the current token — element/fragment callers [`Self::resume_at`] `end`
+    /// immediately; control-flow callers first scan past it for an `else` continuation. Entered
+    /// at the body `{`; a missing `{` is fatal (only reachable from control flow — element
+    /// dispatch guarantees the brace).
+    fn parse_braced_body(&mut self) -> (ArenaVec<'a, NotaChild<'a>>, u32) {
+        if !self.at(Kind::LCurly) {
+            let error = diagnostics::nota_control_expects_body(self.cur_token().span());
+            self.set_fatal_error(error);
+            return (self.ast.vec(), self.prev_token_end);
+        }
         let open = self.cur_token().span();
-        debug_assert!(self.at(Kind::LCurly), "parse_body entered not at `{{`");
         self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
         let mut items = self.ast.vec();
         match self.collect_markup(&mut items, BodyMode::Body) {
-            MarkupClose::Curly { end } => {
-                if in_body {
-                    self.advance_for_nota_child();
-                } else {
-                    self.bump_any();
-                }
-                (items, end)
-            }
+            MarkupClose::Curly { end } => (items, end),
             MarkupClose::Eof => {
                 self.expect_markup_body_close(open);
                 (items, self.prev_token_end)
             }
+        }
+    }
+
+    /// Resume lexing at raw offset `offset` in the mode the surrounding context implies: markup
+    /// text when the just-parsed form is a markup-body child, a normal JS token otherwise. The
+    /// single mode-switch primitive every construct exits through. No-op after a fatal error
+    /// (the collectors bail out; nothing left to lex).
+    fn resume_at(&mut self, offset: u32, in_body: bool) {
+        if self.has_fatal_error() {
+            return;
+        }
+        if in_body {
+            self.nota_seek_markup(offset);
+        } else {
+            self.nota_seek_to(offset);
         }
     }
 
@@ -786,13 +795,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return self.fatal_error(error);
         }
         let cond = self.parse_paren_expression();
-        let cons = self.parse_branch_fragment(span_start);
+        let (cons, close_end) = self.parse_branch_fragment(span_start);
         if self.has_fatal_error() {
             let span = self.end_span(span_start);
             return self.ast.nota_if(span, cond, cons, None);
         }
         // The branch's `}` is the current token; scan for a continuation from one past it.
-        let close_end = self.cur_token().end();
         let alternate = self.parse_else_continuation(close_end, in_body);
         let span = Span::new(span_start, self.prev_token_end);
         self.ast.nota_if(span, cond, cons, alternate)
@@ -804,7 +812,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_else_continuation(&mut self, close_end: u32, in_body: bool) -> Option<NotaElse<'a>> {
         match else_peek(self.source_text, close_end) {
             ElsePeek::None => {
-                self.resume_after_control(close_end, in_body);
+                self.resume_at(close_end, in_body);
                 None
             }
             ElsePeek::ElseIf { if_offset } => {
@@ -816,12 +824,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             ElsePeek::Else { brace_offset } => {
                 self.nota_seek_to(brace_offset);
                 let span_start = self.cur_token().start();
-                let alt = self.parse_branch_fragment(span_start);
-                if self.has_fatal_error() {
-                    return Some(NotaElse::Else(self.ast.alloc(alt)));
-                }
-                let else_end = self.cur_token().end();
-                self.resume_after_control(else_end, in_body);
+                let (alt, else_end) = self.parse_branch_fragment(span_start);
+                self.resume_at(else_end, in_body);
                 Some(NotaElse::Else(self.ast.alloc(alt)))
             }
         }
@@ -841,52 +845,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.bump_any(); // consume `of`
         let iter = self.parse_assignment_expression_or_higher();
         self.expect_closing(Kind::RParen, open);
-        let (children, body_end) = self.parse_control_branch();
-        let body = self.ast.nota_fragment(Span::new(span_start, body_end), children);
-        if self.has_fatal_error() {
-            let span = self.end_span(span_start);
-            return self.ast.nota_for(span, bind, iter, body);
-        }
+        let (body, body_end) = self.parse_branch_fragment(span_start);
         let span = Span::new(span_start, body_end);
-        self.resume_after_control(body_end, in_body);
+        self.resume_at(body_end, in_body);
         self.ast.nota_for(span, bind, iter, body)
     }
 
-    /// Parse an `@if`/`else` branch body into a fragment (`span_start` is the form's start).
-    fn parse_branch_fragment(&mut self, span_start: u32) -> NotaFragment<'a> {
-        let (children, end) = self.parse_control_branch();
-        self.ast.nota_fragment(Span::new(span_start, end), children)
-    }
-
-    /// Parse a control-flow body `{ … }` into children + the end offset (one past `}`), leaving
-    /// the `}` as the current token — the caller scans for a continuation / resumes.
-    fn parse_control_branch(&mut self) -> (ArenaVec<'a, NotaChild<'a>>, u32) {
-        if !self.at(Kind::LCurly) {
-            let error = diagnostics::nota_control_expects_body(self.cur_token().span());
-            self.set_fatal_error(error);
-            return (self.ast.vec(), self.prev_token_end);
-        }
-        let open = self.cur_token().span();
-        self.advance_for_nota_child();
-
-        let mut items = self.ast.vec();
-        match self.collect_markup(&mut items, BodyMode::Body) {
-            MarkupClose::Curly { end } => (items, end),
-            MarkupClose::Eof => {
-                self.expect_markup_body_close(open);
-                (items, self.prev_token_end)
-            }
-        }
-    }
-
-    /// Resume the outer context after a control-flow chain ends at `offset` (one past the final
-    /// `}`): markup text if this form is a body child, else a normal JS token.
-    fn resume_after_control(&mut self, offset: u32, in_body: bool) {
-        if in_body {
-            self.nota_seek_markup(offset);
-        } else {
-            self.nota_seek_to(offset);
-        }
+    /// Parse an `@if`/`else`/`@for` branch body into a fragment + its end offset (`span_start` is
+    /// the form's start). The body's `}` is left current ([`Self::parse_braced_body`]).
+    fn parse_branch_fragment(&mut self, span_start: u32) -> (NotaFragment<'a>, u32) {
+        let (children, end) = self.parse_braced_body();
+        (self.ast.nota_fragment(Span::new(span_start, end), children), end)
     }
 }
 
@@ -977,68 +946,49 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let span = Span::new(span_start, after);
         let tag = self.head_to_tag(head);
         let element = self.ast.nota_verbatim(span, tag, parts);
-        if in_body {
-            self.nota_seek_markup(after);
-        } else {
-            self.nota_seek_to(after);
-        }
+        self.resume_at(after, in_body);
         element
     }
 
-    /// Collect a verbatim body from `start` (just past `|{`): raw runs, with each `|@` re-arming
-    /// one Nota `@`-form as a sibling child; ends at `}|`. Returns `(parts, after)` where `after`
-    /// is one past the closing `}|` (or EOF, with a diagnostic).
+    /// Collect a verbatim body from `start` (just past `|{`): raw runs bounded by
+    /// [`verbatim_boundary`], with each `|@` re-arming one Nota `@`-form as a sibling child; ends
+    /// at `}|`. Returns `(parts, after)` where `after` is one past the closing `}|` (or EOF, with
+    /// a diagnostic).
     fn collect_verbatim_body(&mut self, start: u32) -> (ArenaVec<'a, NotaVerbatimPart<'a>>, u32) {
-        let bytes = self.source_text.as_bytes();
         let mut children = self.ast.vec();
         // Drop a single leading newline right after `|{` (the Scribble `{`-newline rule);
         // otherwise the body is fully raw — no indent strip, no trimming.
-        let mut start = start as usize;
-        if bytes.get(start) == Some(&b'\n') {
-            start += 1;
-        }
+        let start = if byte_at(self.source_text, start) == Some(b'\n') { start + 1 } else { start };
         let mut run_start = start;
-        let mut i = start;
         loop {
-            if i >= bytes.len() {
-                self.push_raw_run(&mut children, run_start, bytes.len());
-                let span = Span::new(start as u32, bytes.len() as u32);
-                self.set_fatal_error(diagnostics::nota_unterminated_verbatim(span));
-                return (children, bytes.len() as u32);
+            let (run_end, boundary) = verbatim_boundary(self.source_text, run_start);
+            self.push_raw_run(&mut children, run_start, run_end);
+            match boundary {
+                VerbatimBoundary::Close { after } => return (children, after),
+                VerbatimBoundary::ArmedAt { at } => {
+                    // Armed escape: parse one `@`-form, resume the raw scan after it.
+                    self.nota_seek_to(at);
+                    debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
+                    let child = self.parse_nota_form(false, false);
+                    children.push(NotaVerbatimPart::Child(self.ast.alloc(child)));
+                    run_start = self.prev_token_end;
+                }
+                VerbatimBoundary::Eof => {
+                    let span = Span::new(start, run_end);
+                    self.set_fatal_error(diagnostics::nota_unterminated_verbatim(span));
+                    return (children, run_end);
+                }
             }
-            if bytes[i] == b'}' && bytes.get(i + 1) == Some(&b'|') {
-                // Drop a single trailing newline right before `}|` (the `}`-newline rule).
-                let run_end = if i > run_start && bytes[i - 1] == b'\n' { i - 1 } else { i };
-                self.push_raw_run(&mut children, run_start, run_end);
-                return (children, i as u32 + 2);
-            }
-            if bytes[i] == b'|' && bytes.get(i + 1) == Some(&b'@') {
-                // Armed escape: flush the raw run, parse one `@`-form, resume the raw scan after it.
-                self.push_raw_run(&mut children, run_start, i);
-                self.nota_seek_to(i as u32 + 1);
-                debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
-                let child = self.parse_nota_form(false, false);
-                children.push(NotaVerbatimPart::Child(self.ast.alloc(child)));
-                i = self.prev_token_end as usize;
-                run_start = i;
-                continue;
-            }
-            i += 1;
         }
     }
 
     /// Push the raw slice `[from, to)` as a verbatim raw part (skipped if empty).
-    fn push_raw_run(
-        &self,
-        children: &mut ArenaVec<'a, NotaVerbatimPart<'a>>,
-        from: usize,
-        to: usize,
-    ) {
+    fn push_raw_run(&self, children: &mut ArenaVec<'a, NotaVerbatimPart<'a>>, from: u32, to: u32) {
         if to <= from {
             return;
         }
-        let raw: &'a str = &self.source_text[from..to];
-        let text = self.ast.nota_text(Span::new(from as u32, to as u32), raw);
+        let raw: &'a str = &self.source_text[from as usize..to as usize];
+        let text = self.ast.nota_text(Span::new(from, to), raw);
         children.push(NotaVerbatimPart::Raw(self.ast.alloc(text)));
     }
 
@@ -1065,64 +1015,61 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if let Some(resume) = self.parse_math_span(items, dollar_off) {
             self.nota_seek_markup(resume);
         } else {
-            let bytes = self.source_text.as_bytes();
-            let mut i = dollar_off as usize;
-            while i < bytes.len() && bytes[i] == b'$' {
-                i += 1;
-            }
-            self.push_text(items, dollar_off, i as u32);
-            self.nota_seek_markup(i as u32);
+            let run_end = sigil_run_end(self.source_text, dollar_off, b'$');
+            self.push_text(items, dollar_off, run_end);
+            self.nota_seek_markup(run_end);
         }
     }
 
     /// Parse a math span whose opening `$`-run starts at `dollar_off` (`$` inline, `$$` display).
-    /// The body is raw LaTeX — `\<c>` keeps its backslash (LaTeX's own escape) — split at
-    /// `@`-interpolations. Returns the resume offset, or `None` if unterminated (the `$` run is
-    /// then literal).
+    /// Raw-content extents come from [`math_boundary`]; only an `@(expr)` interpolation delegates
+    /// to the JS parser here (the parens bound it — an `@name` is scanned lexically because the JS
+    /// lexer would swallow the closing math delimiter: `$` is an identifier-continue byte, so
+    /// `@i$` would lex as `i$`). Returns the resume offset, or `None` if unterminated (the `$` run
+    /// is then literal).
     fn parse_math_span(
         &mut self,
         items: &mut ArenaVec<'a, NotaChild<'a>>,
         dollar_off: u32,
     ) -> Option<u32> {
-        let bytes = self.source_text.as_bytes();
-        let display = bytes.get(dollar_off as usize + 1) == Some(&b'$');
+        let display = byte_at(self.source_text, dollar_off + 1) == Some(b'$');
         let delim_len: u32 = if display { 2 } else { 1 };
-        let content_start = dollar_off + delim_len;
 
         let mut parts = self.ast.vec();
-        let mut run_start = content_start;
-        let mut i = content_start as usize;
-        let close = loop {
-            if i >= bytes.len() {
-                return None;
-            }
-            match bytes[i] {
-                // `\$` does not close and `\@` does not interpolate; the `\` stays in the raw text.
-                b'\\' => i += 2,
-                b'$' => {
-                    if !display {
-                        break i;
-                    }
-                    if bytes.get(i + 1) == Some(&b'$') {
-                        break i;
-                    }
-                    i += 1; // a single `$` inside display math is literal LaTeX
+        let mut run_start = dollar_off + delim_len;
+        let after = loop {
+            let (run_end, boundary) = math_boundary(self.source_text, run_start, display);
+            self.push_math_raw(&mut parts, run_start, run_end);
+            run_start = match boundary {
+                MathBoundary::Close { after } => break after,
+                MathBoundary::Eof => return None,
+                MathBoundary::InterpName { name_end } => {
+                    let span = Span::new(run_end + 1, name_end);
+                    let name: &'a str = &self.source_text[span.start as usize..span.end as usize];
+                    self.push_math_interp(&mut parts, self.ast.expression_identifier(span, name));
+                    name_end
                 }
-                b'@' => {
-                    self.push_math_raw(&mut parts, run_start, i as u32);
-                    let (expr, after) = self.parse_math_interp(i as u32);
-                    let sp = expr.span();
-                    let interp = self.ast.nota_interpolation(sp, expr);
-                    parts.push(NotaMathPart::Interpolation(self.ast.alloc(interp)));
-                    i = after as usize;
-                    run_start = after;
+                MathBoundary::InterpParen => {
+                    self.nota_seek_to(run_end);
+                    self.bump_any(); // `@`
+                    self.bump_any(); // `(`
+                    let expr = self.parse_expr();
+                    self.expect(Kind::RParen);
+                    self.push_math_interp(&mut parts, expr);
+                    self.prev_token_end
                 }
-                _ => i += 1,
-            }
+                MathBoundary::LiteralAt => {
+                    // `@` with no head: splice a literal `"@"` so the template stays well-formed.
+                    let span = Span::new(run_end, run_end + 1);
+                    self.push_math_interp(
+                        &mut parts,
+                        self.ast.expression_string_literal(span, "@", None),
+                    );
+                    run_end + 1
+                }
+            };
         };
-        self.push_math_raw(&mut parts, run_start, close as u32);
 
-        let after = close as u32 + delim_len;
         let element = self.ast.nota_math(Span::new(dollar_off, after), display, parts);
         items.push(NotaChild::Math(self.ast.alloc(element)));
         Some(after)
@@ -1138,40 +1085,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         parts.push(NotaMathPart::Raw(self.ast.alloc(text)));
     }
 
-    /// Parse one math `@`-interpolation at `at_off` (the `@`) → `(expr, after)`.
-    ///
-    /// `@(expr)` delegates to the JS parser (the parens bound it). `@name` is scanned over the raw
-    /// source, stopping at `$` — the JS lexer would swallow the closing math delimiter (`$` is an
-    /// identifier-continue byte, `@i$` would lex as `i$`).
-    fn parse_math_interp(&mut self, at_off: u32) -> (Expression<'a>, u32) {
-        let bytes = self.source_text.as_bytes();
-        if bytes.get(at_off as usize + 1) == Some(&b'(') {
-            self.nota_seek_to(at_off);
-            self.bump_any(); // `@`
-            self.bump_any(); // `(`
-            let expr = self.parse_expr();
-            self.expect(Kind::RParen);
-            let after = self.prev_token_end;
-            (expr, after)
-        } else {
-            // ASCII identifier scan; `$` excluded so the math delimiter wins. (Unicode identifiers
-            // in math interpolation are out of scope.)
-            let name_start = at_off as usize + 1;
-            let mut j = name_start;
-            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
-            }
-            if j == name_start {
-                // `@` not followed by an identifier: splice a literal `"@"` so the template stays
-                // well-formed.
-                let at_lit =
-                    self.ast.expression_string_literal(Span::new(at_off, at_off + 1), "@", None);
-                return (at_lit, at_off + 1);
-            }
-            let name: &'a str = &self.source_text[name_start..j];
-            let name_span = Span::new(name_start as u32, j as u32);
-            (self.ast.expression_identifier(name_span, name), j as u32)
-        }
+    /// Push `expr` as a math interpolation part.
+    fn push_math_interp(&self, parts: &mut ArenaVec<'a, NotaMathPart<'a>>, expr: Expression<'a>) {
+        let interp = self.ast.nota_interpolation(expr.span(), expr);
+        parts.push(NotaMathPart::Interpolation(self.ast.alloc(interp)));
     }
 }
 
@@ -1221,11 +1138,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.collect_colon_body(body_src_start, body_src_end, &mut props, &mut items);
 
         let span = Span::new(span_start, body_src_end);
-        if in_body {
-            self.nota_seek_markup(body_src_end);
-        } else {
-            self.nota_seek_to(body_src_end);
-        }
+        self.resume_at(body_src_end, in_body);
         let tag = self.head_to_tag(head);
         self.ast.nota_element(span, tag, props, items, /* is_colon */ true)
     }

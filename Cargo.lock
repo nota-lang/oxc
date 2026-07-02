@@ -2290,6 +2290,7 @@ version = "0.132.0"
 dependencies = [
  "bitflags",
  "cow-utils",
+ "lazy-regex",
  "memchr",
  "num-bigint",
  "num-traits",
@@ -2306,6 +2307,7 @@ dependencies = [
  "pico-args",
  "rustc-hash",
  "seq-macro",
+ "unicode-script",
 ]
 
 [[package]]
@@ -2579,7 +2581,9 @@ dependencies = [
  "compact_str",
  "indexmap",
  "insta",
+ "itertools",
  "itoa",
+ "lazy-regex",
  "memchr",
  "oxc_allocator",
  "oxc_ast",
@@ -3820,6 +3824,12 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-script"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
 
 [[package]]
 name = "unicode-segmentation"

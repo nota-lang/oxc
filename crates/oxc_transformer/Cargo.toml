@@ -44,7 +44,9 @@ oxc_traverse = { workspace = true }
 base64 = { workspace = true }
 compact_str = { workspace = true }
 indexmap = { workspace = true }
+itertools = { workspace = true }
 itoa = { workspace = true }
+lazy-regex = { workspace = true }
 memchr = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

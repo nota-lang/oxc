@@ -36,7 +36,9 @@ num-traits = { workspace = true }
 rustc-hash = { workspace = true }
 seq-macro = { workspace = true }
 
+lazy-regex = { workspace = true }
 memchr = { workspace = true }
+unicode-script = { workspace = true }
 
 [dev-dependencies]
 oxc_ast = { workspace = true, features = ["serialize"] }

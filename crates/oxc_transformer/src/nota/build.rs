@@ -2,10 +2,13 @@
 //! `h`/`Fragment`/`decode`/`String.raw` `Expression` builders and the document `Program` assembly
 //! (Doc skeleton, `%`-statement routing, F1 component hoist+export, decode-wraps).
 
+use lazy_regex::{Regex, regex};
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
 use oxc_diagnostics::OxcDiagnostic;
+use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
+use oxc_syntax::identifier::is_identifier_name;
 
 use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
@@ -44,61 +47,103 @@ fn duplicate_default_export(span: Span) -> OxcDiagnostic {
 
 impl<'a> NotaLowering<'a> {
     // ===========================================================================================
-    // Element / fragment emit primitives
+    // Synthesized-node shorthands
+    //
+    // Every node the lowering fabricates carries `Span::empty(at)` — *anchored* at the source
+    // construct (sourcemap entries for scaffolding point into it) but *empty* (the H1 offset log
+    // never treats scaffolding as a mapped source range).
     // ===========================================================================================
 
-    /// `h(tag, { props }, [children])`.
-    pub(super) fn build_h(
+    /// A synthesized identifier reference.
+    fn ident(&self, at: u32, name: &'a str) -> Expression<'a> {
+        self.ast.expression_identifier(Span::empty(at), name)
+    }
+
+    /// `<callee>(<args>)` — the call node carries `span`.
+    fn call(
         &self,
         span: Span,
-        tag: Expression<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
+        callee: Expression<'a>,
+        args: impl IntoIterator<Item = Expression<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), H);
-        let props_obj = ast.expression_object(Span::empty(span.start), props);
-        let children_arr = self.children_array(span, children);
-        let mut arguments = ast.vec_with_capacity(3);
-        arguments.push(Argument::from(tag));
-        arguments.push(Argument::from(props_obj));
-        arguments.push(Argument::from(children_arr));
-        ast.expression_call(span, callee, NONE, arguments, false)
+        let args = self.ast.vec_from_iter(args.into_iter().map(Argument::from));
+        self.ast.expression_call(span, callee, NONE, args, false)
     }
 
-    /// `Fragment(...children)` — variadic call (no props, no array wrap).
-    pub(super) fn build_fragment(
+    /// `<object>.<property>` — a synthesized static member access.
+    fn member(&self, at: u32, object: Expression<'a>, property: &'a str) -> Expression<'a> {
+        let empty = Span::empty(at);
+        Expression::StaticMemberExpression(self.ast.alloc_static_member_expression(
+            empty,
+            object,
+            self.ast.identifier_name(empty, property),
+            false,
+        ))
+    }
+
+    /// `(<params>) => { <stmts> }` — or `(<params>) => <expr>` when `expression` (then `stmts` is
+    /// the single wrapped expression statement). Plain params; never `async` (the sync pin).
+    fn arrow(
         &self,
-        span: Span,
-        children: ArenaVec<'a, Expression<'a>>,
+        at: u32,
+        params: impl IntoIterator<Item = BindingPattern<'a>>,
+        expression: bool,
+        stmts: ArenaVec<'a, Statement<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
-        let mut arguments = ast.vec_with_capacity(children.len());
-        for child in children {
-            arguments.push(Argument::from(child));
-        }
-        ast.expression_call(span, callee, NONE, arguments, false)
+        let empty = Span::empty(at);
+        let params = self.ast.vec_from_iter(params.into_iter().map(|pat| {
+            self.ast.formal_parameter(
+                empty,
+                self.ast.vec(),
+                pat,
+                NONE,
+                NONE,
+                false,
+                None,
+                false,
+                false,
+            )
+        }));
+        let params = self.ast.formal_parameters(
+            empty,
+            FormalParameterKind::ArrowFormalParameters,
+            params,
+            NONE,
+        );
+        let body = self.ast.function_body(empty, self.ast.vec(), stmts);
+        self.ast.expression_arrow_function(empty, expression, false, NONE, params, NONE, body)
     }
 
-    /// `[children]` array-expression for the third `h(...)` argument.
-    fn children_array(&self, span: Span, children: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
-        let ast = self.ast;
-        let mut elements = ast.vec_with_capacity(children.len());
-        for child in children {
-            elements.push(ArrayExpressionElement::from(child));
-        }
-        ast.expression_array(Span::empty(span.end), elements)
-    }
-
-    /// A plain `key: value` (or shorthand) object property.
-    pub(super) fn init_prop(
+    /// `(() => { <stmts>; return <ret>; })()` — the call node carries `span`. Never `async`.
+    fn iife(
         &self,
         span: Span,
-        key: PropertyKey<'a>,
+        mut stmts: ArenaVec<'a, Statement<'a>>,
+        ret: Expression<'a>,
+    ) -> Expression<'a> {
+        stmts.push(self.ast.statement_return(Span::empty(span.start), Some(ret)));
+        self.call(
+            span,
+            self.arrow(span.start, std::iter::empty(), false, stmts),
+            std::iter::empty(),
+        )
+    }
+
+    /// A `key: value` object property (or shorthand). The key is a bare identifier when `name` is
+    /// a valid JS identifier (incl. keywords), a string literal otherwise (`data-x`, `aria-label`).
+    pub(super) fn obj_prop(
+        &self,
+        span: Span,
+        key_span: Span,
+        name: &'a str,
         value: Expression<'a>,
         shorthand: bool,
     ) -> ObjectPropertyKind<'a> {
+        let key = if is_identifier_name(name) {
+            PropertyKey::StaticIdentifier(self.ast.alloc_identifier_name(key_span, name))
+        } else {
+            PropertyKey::StringLiteral(self.ast.alloc_string_literal(key_span, name, None))
+        };
         ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
             span,
             PropertyKind::Init,
@@ -110,27 +155,63 @@ impl<'a> NotaLowering<'a> {
         ))
     }
 
+    // ===========================================================================================
+    // Element / fragment emit primitives
+    // ===========================================================================================
+
+    /// `h(tag, { props }, [children])`.
+    pub(super) fn build_h(
+        &self,
+        span: Span,
+        tag: Expression<'a>,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let props_obj = self.ast.expression_object(Span::empty(span.start), props);
+        let children_arr = self.ast.expression_array(
+            Span::empty(span.end),
+            self.ast.vec_from_iter(children.into_iter().map(ArrayExpressionElement::from)),
+        );
+        self.call(span, self.ident(span.start, H), [tag, props_obj, children_arr])
+    }
+
+    /// `Fragment(...children)` — variadic call (no props, no array wrap).
+    pub(super) fn build_fragment(
+        &self,
+        span: Span,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        self.call(span, self.ident(span.start, FRAGMENT), children)
+    }
+
+    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg.
+    fn build_keyed_fragment(
+        &self,
+        span: Span,
+        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let props_obj = self.ast.expression_object(Span::empty(span.start), props);
+        self.call(
+            span,
+            self.ident(span.start, FRAGMENT),
+            std::iter::once(props_obj).chain(children),
+        )
+    }
+
     /// Pick a fresh identifier name for a reader-injected binding (`_i`, `_Tag`) that cannot collide
     /// with a user identifier in the construct at `span`. Returns `candidate` unless it appears as a
     /// whole word in the construct's source (`@for(_i of …)`, `@(_Tag)`), in which case a numeric
     /// suffix is appended until free. (Scanning the source over-approximates — a name in a string or
     /// comment also bumps — which only ever yields a *more* distinct name, never a colliding one.)
     fn fresh_name(&self, candidate: &'static str, span: Span) -> &'a str {
-        fn contains_word(haystack: &str, needle: &str) -> bool {
-            let bytes = haystack.as_bytes();
-            let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
-            let mut from = 0;
-            while let Some(pos) = haystack[from..].find(needle) {
-                let start = from + pos;
-                let end = start + needle.len();
-                let before = start == 0 || !is_ident(bytes[start - 1]);
-                let after = end >= bytes.len() || !is_ident(bytes[end]);
-                if before && after {
-                    return true;
-                }
-                from = start + 1;
-            }
-            false
+        /// Does `needle` occur in `hay` as a whole word? Boundaries are JS-identifier chars in the
+        /// ASCII class `[0-9A-Za-z_$]` — a multibyte char conservatively counts as a boundary
+        /// (over-approximation is the safe direction, see above).
+        fn contains_word(hay: &str, needle: &str) -> bool {
+            let pattern =
+                format!(r"(?:^|[^0-9A-Za-z_$]){}(?:[^0-9A-Za-z_$]|$)", regex::escape(needle));
+            Regex::new(&pattern).expect("escaped word pattern is valid").is_match(hay)
         }
         let src = &self.source_text[span.start as usize..span.end as usize];
         if !contains_word(src, candidate) {
@@ -154,13 +235,12 @@ impl<'a> NotaLowering<'a> {
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
         let empty = Span::empty(span.start);
         let tag_binding = self.fresh_name(DYNAMIC_TAG_BINDING, span);
 
         // `const _Tag = <expr>;`
-        let binding = ast.binding_pattern_binding_identifier(empty, tag_binding);
-        let declarator = ast.variable_declarator(
+        let binding = self.ast.binding_pattern_binding_identifier(empty, tag_binding);
+        let declarator = self.ast.variable_declarator(
             empty,
             VariableDeclarationKind::Const,
             binding,
@@ -168,41 +248,15 @@ impl<'a> NotaLowering<'a> {
             Some(tag_expr),
             false,
         );
-        let decl = ast.declaration_variable(
+        let decl = self.ast.declaration_variable(
             empty,
             VariableDeclarationKind::Const,
-            ast.vec1(declarator),
+            self.ast.vec1(declarator),
             false,
         );
-        let const_stmt = Statement::from(decl);
 
-        // `return h(_Tag, { props }, [children]);`
-        let tag_ref = ast.expression_identifier(empty, tag_binding);
-        let h_call = self.build_h(span, tag_ref, props, children);
-        let return_stmt = ast.statement_return(empty, Some(h_call));
-
-        // `() => { … }`
-        let body = ast.function_body(empty, ast.vec(), {
-            let mut stmts = ast.vec_with_capacity(2);
-            stmts.push(const_stmt);
-            stmts.push(return_stmt);
-            stmts
-        });
-        let arrow = ast.expression_arrow_function(
-            empty,
-            false, // not an expression body
-            false, // not async
-            NONE,
-            ast.formal_parameters(
-                empty,
-                FormalParameterKind::ArrowFormalParameters,
-                ast.vec(),
-                NONE,
-            ),
-            NONE,
-            body,
-        );
-        ast.expression_call(span, arrow, NONE, ast.vec(), false)
+        let h_call = self.build_h(span, self.ident(span.start, tag_binding), props, children);
+        self.iife(span, self.ast.vec1(Statement::from(decl)), h_call)
     }
 
     /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))`.
@@ -213,115 +267,39 @@ impl<'a> NotaLowering<'a> {
         iter: Expression<'a>,
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
         let empty = Span::empty(span.start);
         let index_name = self.fresh_name(FOR_KEY_PARAM, span);
 
-        // The arrow's wrapping `Fragment({ key: _i }, ...children)`.
-        let key_props = {
-            let key_name = ast.expression_identifier(empty, index_name);
-            let key = PropertyKey::StaticIdentifier(ast.alloc_identifier_name(empty, "key"));
-            ast.vec1(self.init_prop(empty, key, key_name, false))
-        };
+        // The arrow's expression body: `Fragment({ key: _i }, ...children)`.
+        let key_props = self.ast.vec1(self.obj_prop(
+            empty,
+            empty,
+            "key",
+            self.ident(span.start, index_name),
+            false,
+        ));
         let fragment = self.build_keyed_fragment(span, key_props, children);
 
-        // `(bind, _i) => Fragment(...)`.
-        let mut params = ast.vec_with_capacity(2);
-        params.push(ast.formal_parameter(
-            empty,
-            ast.vec(),
-            bind,
-            NONE,
-            NONE,
-            false,
-            None,
-            false,
-            false,
-        ));
-        let index_pat = ast.binding_pattern_binding_identifier(empty, index_name);
-        params.push(ast.formal_parameter(
-            empty,
-            ast.vec(),
-            index_pat,
-            NONE,
-            NONE,
-            false,
-            None,
-            false,
-            false,
-        ));
-        let body = ast.function_body(
-            empty,
-            ast.vec(),
-            ast.vec1(ast.statement_expression(empty, fragment)),
+        // `iter.map((bind, _i) => Fragment(...))`.
+        let index_pat = self.ast.binding_pattern_binding_identifier(empty, index_name);
+        let arrow = self.arrow(
+            span.start,
+            [bind, index_pat],
+            true,
+            self.ast.vec1(self.ast.statement_expression(empty, fragment)),
         );
-        let arrow = ast.expression_arrow_function(
-            empty,
-            true, // expression body
-            false,
-            NONE,
-            ast.formal_parameters(empty, FormalParameterKind::ArrowFormalParameters, params, NONE),
-            NONE,
-            body,
-        );
-
-        // `iter.map(<arrow>)`.
-        let map_member = Expression::StaticMemberExpression(ast.alloc_static_member_expression(
-            empty,
-            iter,
-            ast.identifier_name(empty, "map"),
-            false,
-        ));
-        let mut args = ast.vec_with_capacity(1);
-        args.push(Argument::from(arrow));
-        ast.expression_call(span, map_member, NONE, args, false)
-    }
-
-    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg.
-    fn build_keyed_fragment(
-        &self,
-        span: Span,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), FRAGMENT);
-        let props_obj = ast.expression_object(Span::empty(span.start), props);
-        let mut arguments = ast.vec_with_capacity(children.len() + 1);
-        arguments.push(Argument::from(props_obj));
-        for child in children {
-            arguments.push(Argument::from(child));
-        }
-        ast.expression_call(span, callee, NONE, arguments, false)
+        self.call(span, self.member(span.start, iter, "map"), [arrow])
     }
 
     /// `(() => { …stmts…; return Fragment(...rest); })()`. Always synchronous — the reader does not
     /// `async`ify the IIFE from the presence of `await` in `stmts`.
     pub(super) fn build_statement_iife(
         &self,
-        mut stmts: ArenaVec<'a, Statement<'a>>,
+        stmts: ArenaVec<'a, Statement<'a>>,
         rest: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(0);
-        let fragment = self.build_fragment(empty, rest);
-        stmts.push(ast.statement_return(empty, Some(fragment)));
-        let body = ast.function_body(empty, ast.vec(), stmts);
-        let arrow = ast.expression_arrow_function(
-            empty,
-            false,
-            false, // never async
-            NONE,
-            ast.formal_parameters(
-                empty,
-                FormalParameterKind::ArrowFormalParameters,
-                ast.vec(),
-                NONE,
-            ),
-            NONE,
-            body,
-        );
-        ast.expression_call(empty, arrow, NONE, ast.vec(), false)
+        let fragment = self.build_fragment(Span::empty(0), rest);
+        self.iife(Span::empty(0), stmts, fragment)
     }
 
     // ===========================================================================================
@@ -348,30 +326,57 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// `String.raw\`q0${e0}q1${e1}…\`` — a tagged template with substitutions (math `@`-interp).
+    ///
+    /// When any quasi contains a template-syntax breaker, `String.raw` cannot carry it (a `\`
+    /// escape would leak into the runtime string — see [`Self::build_string_raw`]), and the
+    /// whole-span cooked-literal fallback is unavailable (there are substitutions). We emit a
+    /// **plain (cooked) template** instead, its quasis escaped so each cooked value reproduces the
+    /// raw text exactly; substitution semantics (`ToString`) are identical with or without the
+    /// `String.raw` tag.
     pub(super) fn build_string_raw_interp(
         &self,
         span: Span,
         quasis_raw: Vec<&'a str>,
         exprs: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let ast = self.ast;
         debug_assert_eq!(quasis_raw.len(), exprs.len() + 1);
+        let cooked = quasis_raw.iter().any(|q| Self::has_template_breaker(q));
         let last = quasis_raw.len() - 1;
-        let mut quasis = ast.vec_with_capacity(quasis_raw.len());
+        let mut quasis = self.ast.vec_with_capacity(quasis_raw.len());
         for (i, q) in quasis_raw.into_iter().enumerate() {
-            quasis.push(self.raw_quasi(span, q, i == last));
+            let quasi = if cooked {
+                self.cooked_quasi(span, q, i == last)
+            } else {
+                self.raw_quasi(span, q, i == last)
+            };
+            quasis.push(quasi);
         }
-        let quasi = ast.template_literal(span, quasis, exprs);
-        self.tag_string_raw(span, quasi)
+        let template = self.ast.template_literal(span, quasis, exprs);
+        if cooked {
+            Expression::TemplateLiteral(self.ast.alloc(template))
+        } else {
+            self.tag_string_raw(span, template)
+        }
     }
 
-    /// One template-literal quasi carrying `raw` as its **raw** value with `cooked: None` (so a
-    /// `String.raw` tag reproduces `raw`: `\` and `{}` are NOT interpreted). We do **not** use
-    /// codegen's `escape_raw` (which doubles every `\`); we escape only the two template-syntax
-    /// breakers — a backtick and a `${` — by prefixing a `\`.
+    /// One template-literal quasi carrying `raw` **verbatim** as its raw value, `cooked: None` (a
+    /// `String.raw` tag reads only the raw text: `\` and `{}` are NOT interpreted). We do **not**
+    /// use codegen's `escape_raw` (which doubles every `\`, wrong for `String.raw`); the caller
+    /// guarantees `raw` is breaker-free.
     fn raw_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
-        let escaped = self.escape_raw_template_syntax(raw);
-        let value = TemplateElementValue { raw: self.ast.str(escaped), cooked: None };
+        debug_assert!(!Self::has_template_breaker(raw));
+        let value = TemplateElementValue { raw: self.ast.str(raw), cooked: None };
+        self.ast.template_element(span, value, tail, false)
+    }
+
+    /// One **cooked** template quasi whose runtime value is exactly `raw`: the raw text escapes
+    /// `\` `` ` `` `${` and CR ([`Self::escape_cooked_template`]), and `cooked` records the
+    /// original.
+    fn cooked_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
+        let value = TemplateElementValue {
+            raw: self.ast.str(self.escape_cooked_template(raw)),
+            cooked: Some(self.ast.str(raw)),
+        };
         self.ast.template_element(span, value, tail, false)
     }
 
@@ -385,38 +390,28 @@ impl<'a> NotaLowering<'a> {
             .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')))
     }
 
-    /// Prefix a `\` before each backtick and each `${` in `raw` (the only template-syntax breakers),
-    /// returning the original slice unchanged when neither occurs (the common case — no allocation).
-    fn escape_raw_template_syntax(&self, raw: &'a str) -> &'a str {
-        let bytes = raw.as_bytes();
-        if !Self::has_template_breaker(raw) {
-            return raw;
-        }
-        let mut out = String::with_capacity(bytes.len() + 8);
-        let mut i = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            if b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')) {
-                out.push('\\');
+    /// Escape `raw` for a **plain** template quasi so its cooked value reproduces `raw` exactly:
+    /// `\` and `` ` `` and a `$` opening `${` get a `\` prefix (cooked processing strips it), and a
+    /// literal CR becomes `\r` (the spec normalizes raw CR/CRLF to LF).
+    fn escape_cooked_template(&self, raw: &str) -> &'a str {
+        let mut out = String::with_capacity(raw.len() + 8);
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '`' => out.push_str("\\`"),
+                '\r' => out.push_str("\\r"),
+                '$' if chars.peek() == Some(&'{') => out.push_str("\\$"),
+                c => out.push(c),
             }
-            let ch_len =
-                if b < 0x80 { 1 } else { raw[i..].chars().next().map_or(1, char::len_utf8) };
-            out.push_str(&raw[i..i + ch_len]);
-            i += ch_len;
         }
         self.ast.allocator.alloc_str(&out)
     }
 
     /// `String.raw` — the member-expression callee for the raw tagged template.
     fn tag_string_raw(&self, span: Span, quasi: TemplateLiteral<'a>) -> Expression<'a> {
-        let ast = self.ast;
-        let empty = Span::empty(span.start);
-        let object = ast.expression_identifier(empty, "String");
-        let property = ast.identifier_name(empty, "raw");
-        let tag = Expression::StaticMemberExpression(
-            ast.alloc_static_member_expression(empty, object, property, false),
-        );
-        ast.expression_tagged_template(span, tag, NONE, quasi)
+        let tag = self.member(span.start, self.ident(span.start, "String"), "raw");
+        self.ast.expression_tagged_template(span, tag, NONE, quasi)
     }
 
     /// Build the ambient-prelude element `h(<Name>, { <props> }, [<raw-children>])` for a code/math
@@ -428,8 +423,7 @@ impl<'a> NotaLowering<'a> {
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let tag = self.ast.expression_identifier(Span::new(span.start, span.start), name);
-        self.build_h(span, tag, props, children)
+        self.build_h(span, self.ident(span.start, name), props, children)
     }
 
     // ===========================================================================================
@@ -469,66 +463,29 @@ impl<'a> NotaLowering<'a> {
     /// binding named like a reserved emit name ([`is_reserved_emit_name`]), or a `% export default`
     /// (a second default export beside `export default function Doc`). The statement is still routed
     /// as usual — the diagnostic is advisory (the emit would be broken/ambiguous JS otherwise).
+    ///
+    /// Bindings come from ECMA's `BoundNames` ([`oxc_ecmascript::BoundNames`]), so destructured
+    /// names collide too (`%const { h } = lib`, `%const [Doc] = xs`, rest elements), as do import
+    /// locals and `% export`-wrapped declarations.
     fn check_reserved_collisions(&mut self, stmt: &Statement<'a>) {
         match stmt {
             Statement::ExportDefaultDeclaration(d) => self.error(duplicate_default_export(d.span)),
-            Statement::ImportDeclaration(imp) => {
-                let Some(specifiers) = &imp.specifiers else { return };
-                for spec in specifiers {
-                    let local = match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) => &s.local,
-                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => &s.local,
-                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => &s.local,
-                    };
-                    self.check_reserved_binding(local.name.as_str(), local.span);
-                }
-            }
-            Statement::VariableDeclaration(v) => self.check_var_decl_bindings(v),
-            Statement::FunctionDeclaration(f) => {
-                if let Some(id) = &f.id {
-                    self.check_reserved_binding(id.name.as_str(), id.span);
-                }
-            }
-            Statement::ClassDeclaration(c) => {
-                if let Some(id) = &c.id {
-                    self.check_reserved_binding(id.name.as_str(), id.span);
-                }
-            }
-            // `% export const Doc = …` / `% export function h() {}` — check the inner declaration.
-            Statement::ExportNamedDeclaration(e) => match &e.declaration {
-                Some(Declaration::VariableDeclaration(v)) => self.check_var_decl_bindings(v),
-                Some(Declaration::FunctionDeclaration(f)) => {
-                    if let Some(id) = &f.id {
-                        self.check_reserved_binding(id.name.as_str(), id.span);
-                    }
-                }
-                Some(Declaration::ClassDeclaration(c)) => {
-                    if let Some(id) = &c.id {
-                        self.check_reserved_binding(id.name.as_str(), id.span);
-                    }
-                }
-                _ => {}
-            },
+            Statement::ImportDeclaration(d) => self.check_bound_names(&**d),
+            Statement::VariableDeclaration(d) => self.check_bound_names(&**d),
+            Statement::FunctionDeclaration(d) => self.check_bound_names(&**d),
+            Statement::ClassDeclaration(d) => self.check_bound_names(&**d),
+            Statement::ExportNamedDeclaration(d) => self.check_bound_names(&**d),
             _ => {}
         }
     }
 
-    /// Check every binding identifier of a `let/const/var` declaration against the reserved set,
-    /// walking the binding PATTERN so destructured names collide too (`%const { h } = lib`,
-    /// `%const [Doc] = xs`, `%const { x: h } = …`, rest elements), not only a plain `%const h = …`.
-    fn check_var_decl_bindings(&mut self, decl: &VariableDeclaration<'a>) {
-        for d in &decl.declarations {
-            for id in d.id.get_binding_identifiers() {
-                self.check_reserved_binding(id.name.as_str(), id.span);
+    /// Emit a collision diagnostic for every bound name of `decl` that is reserved.
+    fn check_bound_names(&mut self, decl: &impl BoundNames<'a>) {
+        decl.bound_names(&mut |id| {
+            if is_reserved_emit_name(id.name.as_str()) {
+                self.error(reserved_name_collision(id.name.as_str(), id.span));
             }
-        }
-    }
-
-    /// Emit a collision diagnostic iff `name` is a reserved emit-surface name.
-    fn check_reserved_binding(&mut self, name: &str, span: Span) {
-        if is_reserved_emit_name(name) {
-            self.error(reserved_name_collision(name, span));
-        }
+        });
     }
 
     /// Build the `export default function Doc() { …prelude…; return decode(Fragment(...)); }` module.
@@ -585,11 +542,7 @@ impl<'a> NotaLowering<'a> {
 
     /// `decode(<expr>)`.
     fn build_decode(&self, span: Span, expr: Expression<'a>) -> Expression<'a> {
-        let ast = self.ast;
-        let callee = ast.expression_identifier(Span::empty(span.start), DECODE);
-        let mut args = ast.vec_with_capacity(1);
-        args.push(Argument::from(expr));
-        ast.expression_call(span, callee, NONE, args, false)
+        self.call(span, self.ident(span.start, DECODE), [expr])
     }
 
     /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding?

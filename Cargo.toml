@@ -165,6 +165,7 @@ serde = "1" # Serialization framework
 serde_json = "1" # JSON serialization
 syn = { version = "2", default-features = false } # Rust parser for macros
 unicode-id-start = "1" # Unicode identifier validation
+unicode-script = "0.5.7" # Unicode Script property lookup
 
 #
 javascript-globals = "1.5.0" # JavaScript global definitions

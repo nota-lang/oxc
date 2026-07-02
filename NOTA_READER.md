@@ -72,9 +72,13 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   `%`/`%%%` statements, list runs, then a heading — each resumes at a line start that may open the
   next.
 - **Multi-byte extents are measured over the raw source** by the pure scans in `lexer/nota.rs`
-  (emphasis close, raw spans, list/colon block extents, `else` continuation): the closers are
-  multi-byte and context-dependent — a poor fit for token lexing — and raw-source matching is
-  robust to lexer mode and to escapes (`\else`, `\*`) that are not clean JS tokens.
+  (emphasis close, raw spans, math/verbatim boundaries, list/colon block extents, `else`
+  continuation): the closers are multi-byte and context-dependent — a poor fit for token lexing —
+  and raw-source matching is robust to lexer mode and to escapes (`\else`, `\*`) that are not
+  clean JS tokens. Line-start classifiers (`%`/fence/heading/list/`|`-prop lines) are `lazy-regex`
+  patterns over the line slice; extent scans that step over an `@`-form's `(…)`/`[…]` groups skip
+  JS string/template/comment contents (`skip_js_string`), so a bracket or `*` inside `"…"` cannot
+  unbalance them.
 - **Embedded JS is parsed by oxc itself** (`parse_expr` / `parse_statement_list_item` /
   `parse_binding_pattern`) with `nota_markup` left on, so `@`-forms nest inside embedded JS. A
   `%`/`%%%` statement's parse is **bounded** by temporarily clamping the lexer's source end
@@ -130,6 +134,7 @@ reinterpretations. Every surviving segment round-trips byte-for-byte.
 | What | Where | Run |
 |---|---|---|
 | E2E fixtures (exact emit + validity invariant) | `oxc_codegen/tests/integration/nota.rs` | `cargo test -p oxc_codegen --test integration nota` |
+| Lexer scan units (boundaries, classifiers, string-aware skips) | `oxc_parser` lib (`lexer/nota.rs`) | `cargo test -p oxc_parser --lib nota` |
 | Scribble whitespace + mapping marks | `oxc_transformer` lib | `cargo test -p oxc_transformer --lib nota` |
 | Compile entries + H1/H2 mappings | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
 | AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |

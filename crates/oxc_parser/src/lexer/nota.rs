@@ -19,8 +19,10 @@
     reason = "source offsets/lengths fit in u32 (oxc's Span model)"
 )]
 
+use lazy_regex::{Lazy, Regex, lazy_regex};
 use oxc_span::Span;
 use oxc_syntax::identifier::{is_identifier_part, is_identifier_start};
+use unicode_script::{Script, UnicodeScript};
 
 use super::{
     Kind, Lexer, Token,
@@ -186,6 +188,11 @@ fn skip_run(bytes: &[u8], mut i: usize, b: u8) -> usize {
     i
 }
 
+/// The end of the run of `byte` starting at `off` (for literal sigil-run fallbacks).
+pub fn sigil_run_end(source: &str, off: u32, byte: u8) -> u32 {
+    skip_run(source.as_bytes(), off as usize, byte) as u32
+}
+
 /// `(content_offset, is_blank)` for the line starting at `line_start`: the offset of its first
 /// non-inline-whitespace byte, and whether the line has no content.
 fn line_probe(source: &str, line_start: u32) -> (usize, bool) {
@@ -200,10 +207,16 @@ fn line_probe(source: &str, line_start: u32) -> (usize, bool) {
 
 /// The offset of the terminating `\n` of the line containing `from` (or EOF if none).
 pub fn line_content_end(source: &str, from: u32) -> u32 {
-    match source.as_bytes()[from as usize..].iter().position(|&b| b == b'\n') {
+    match memchr::memchr(b'\n', &source.as_bytes()[from as usize..]) {
         Some(k) => from + k as u32,
         None => source.len() as u32,
     }
+}
+
+/// The line containing `from`, from `from` up to (not including) its terminating `\n` — the slice
+/// the line-classifier regexes below match against.
+fn line_at(source: &str, from: u32) -> &str {
+    &source[from as usize..line_content_end(source, from) as usize]
 }
 
 /// Offset just past the next `\n` at/after `offset` (or EOF if none) — the start of the next line.
@@ -342,43 +355,36 @@ pub fn else_peek(source: &str, close_end: u32) -> ElsePeek {
 // Line-start constructs: `%`/`%%%` statements, headings, lists, colon-sugar prop lines
 // ================================================================================================
 
+/// A line whose first non-whitespace is `%` (a `%`/`%%%` statement line).
+static PERCENT_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*%");
+/// A `%%%` fence line: a run of ≥3 `%` alone on its line.
+static FENCE_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*%{3,}[ \t\r]*$");
+/// A `%%%`-or-longer run at line start (a fence *close* tolerates trailing content).
+static FENCE_CLOSE_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*%{3,}");
+/// A `%` statement body that is a no-op: empty/whitespace, or only a `//` line comment.
+static EMPTY_STATEMENT: Lazy<Regex> = lazy_regex!(r"^[ \t]*(//.*)?$");
+
 /// Does the line at `line_start` open a `%`/`%%%` statement (first non-whitespace is `%`)?
 pub fn is_statement_line(source: &str, line_start: u32) -> bool {
-    let (content, _) = line_probe(source, line_start);
-    byte_at(source, content as u32) == Some(b'%')
+    PERCENT_LINE.is_match(line_at(source, line_start))
 }
 
 /// Classify the statement line at `line_start`. Returns `(content_or_inner_start, is_fence)`: for
 /// a `%%%` fence line (a `≥3` run alone on its line), the offset of the line *after* the opener;
 /// for a `%` statement, the offset just past the first `%`.
 pub fn statement_kind(source: &str, line_start: u32) -> Option<(u32, bool)> {
-    let bytes = source.as_bytes();
-    let run_start = skip_inline_ws(bytes, line_start as usize);
-    let run_end = skip_run(bytes, run_start, b'%');
-    if run_end == run_start {
-        return None;
+    let line = line_at(source, line_start);
+    if FENCE_LINE.is_match(line) {
+        return Some((next_line_start(source, line_start), true));
     }
-    if run_end - run_start >= 3 {
-        let mut j = run_end;
-        while j < bytes.len() && bytes[j] != b'\n' {
-            if !matches!(bytes[j], b' ' | b'\t' | b'\r') {
-                return Some((run_start as u32 + 1, false)); // content after the run: a `%` statement
-            }
-            j += 1;
-        }
-        let inner_start = if j < bytes.len() { j as u32 + 1 } else { j as u32 };
-        return Some((inner_start, true));
-    }
-    Some((run_start as u32 + 1, false))
+    let m = PERCENT_LINE.find(line)?;
+    Some((line_start + m.end() as u32, false))
 }
 
 /// Is the `%` statement whose body begins at `content` a no-op (rest-of-line empty/whitespace, or
 /// only a `//` line comment)? Such a line yields no statement.
 pub fn percent_line_is_empty(source: &str, content: u32) -> bool {
-    let bytes = source.as_bytes();
-    let line_end = line_content_end(source, content) as usize;
-    let i = skip_inline_ws(bytes, content as usize);
-    i >= line_end || (bytes.get(i) == Some(&b'/') && bytes.get(i + 1) == Some(&b'/'))
+    EMPTY_STATEMENT.is_match(line_at(source, content))
 }
 
 /// The start of the next line after `content`'s whose first non-whitespace is `%` (the delimiter
@@ -398,11 +404,9 @@ pub fn next_percent_line_or_end(source: &str, content: u32) -> u32 {
 /// Find the `%%%` fence close at/after `inner_start`. Returns `(inner_end, after_fence)`: the
 /// closing-fence line start, and the offset past that line (the resume point).
 pub fn find_fence_close(source: &str, inner_start: u32) -> (u32, u32) {
-    let bytes = source.as_bytes();
     let mut line_start = inner_start;
-    while (line_start as usize) < bytes.len() {
-        let run_start = skip_inline_ws(bytes, line_start as usize);
-        if skip_run(bytes, run_start, b'%') - run_start >= 3 {
+    while (line_start as usize) < source.len() {
+        if FENCE_CLOSE_LINE.is_match(line_at(source, line_start)) {
             return (line_start, next_line_start(source, line_start));
         }
         line_start = next_line_start(source, line_start);
@@ -410,49 +414,32 @@ pub fn find_fence_close(source: &str, inner_start: u32) -> (u32, u32) {
     (source.len() as u32, source.len() as u32)
 }
 
+/// An ATX heading marker: 1–6 `#` (captured) + one space/tab, leading indentation tolerated.
+static HEADING: Lazy<Regex> = lazy_regex!(r"^[ \t]*(#{1,6})[ \t]");
+/// A list marker line: indentation (captured), then `- ` / `+ ` / `N. ` (marker captured).
+static LIST_MARKER: Lazy<Regex> = lazy_regex!(r"^([ \t]*)([-+]|[0-9]+\.) ");
+/// A colon-sugar `|`-prop line: first non-whitespace is `|`.
+static PROP_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*\|");
+
 /// Detect an ATX heading marker (1–6 `#` + one space/tab) at `line_start` (leading indentation
 /// tolerated). Returns `(level, body_start, line_end)`, or `None` if not a heading.
 pub fn heading_at(source: &str, line_start: u32) -> Option<(u8, u32, u32)> {
-    let bytes = source.as_bytes();
-    let run_start = skip_inline_ws(bytes, line_start as usize);
-    let i = skip_run(bytes, run_start, b'#');
-    let level = i - run_start;
-    if !(1..=6).contains(&level) || !matches!(bytes.get(i), Some(b' ' | b'\t')) {
-        return None;
-    }
-    Some((level as u8, i as u32 + 1, line_content_end(source, line_start)))
+    let caps = HEADING.captures(line_at(source, line_start))?;
+    let level = caps[1].len() as u8;
+    Some((level, line_start + caps[0].len() as u32, line_content_end(source, line_start)))
 }
 
 /// Classify a list marker at the first non-whitespace of the line at `line_start`
 /// (`- ` / `+ ` / `N. `), or `None`.
 pub fn list_marker_at(source: &str, line_start: u32) -> Option<ListMarker> {
-    let bytes = source.as_bytes();
-    let i = skip_inline_ws(bytes, line_start as usize);
-    let indent = (i - line_start as usize) as u32;
-    let offset = i as u32;
-    match bytes.get(i)? {
-        b'-' | b'+' if bytes.get(i + 1) == Some(&b' ') => {
-            Some(ListMarker { ordered: bytes[i] == b'+', indent, offset, body_col: i as u32 + 2 })
-        }
-        b'0'..=b'9' => {
-            let j = skip_run_digits(bytes, i);
-            (bytes.get(j) == Some(&b'.') && bytes.get(j + 1) == Some(&b' ')).then(|| ListMarker {
-                ordered: true,
-                indent,
-                offset,
-                body_col: j as u32 + 2,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// The end of the digit run starting at `i`.
-fn skip_run_digits(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    i
+    let caps = LIST_MARKER.captures(line_at(source, line_start))?;
+    let indent = caps[1].len() as u32;
+    Some(ListMarker {
+        ordered: &caps[2] != "-",
+        indent,
+        offset: line_start + indent,
+        body_col: line_start + caps[0].len() as u32,
+    })
 }
 
 /// The end offset of a list item's body: lines after the marker line that are blank or indented
@@ -464,14 +451,15 @@ pub fn list_item_extent(source: &str, first_line_end: u32, marker_indent: u32) -
 /// If the line at `line_start` is a colon-sugar `|`-prop line (first non-whitespace is `|`),
 /// return the offset just past the `|` (where the prop entries begin); else `None`.
 pub fn colon_prop_line_at(source: &str, line_start: u32) -> Option<u32> {
-    let (content, _) = line_probe(source, line_start);
-    (byte_at(source, content as u32) == Some(b'|')).then_some(content as u32 + 1)
+    let m = PROP_LINE.find(line_at(source, line_start))?;
+    Some(line_start + m.end() as u32)
 }
 
 /// Compute the source extent `[start, end)` of a `@head:` colon-sugar body: the rest of the
 /// `@head:` line (after inline whitespace) plus following lines indented strictly past
 /// `head_indent`. When `clip_at_brace`, a depth-0 `}` (closing an enclosing `{…}` body) ends the
-/// body on the first line; `\`-escaped bytes are skipped.
+/// body on the first line; `\`-escaped bytes are skipped, and an `@`-form's head + `(…)`/`[…]`
+/// groups are opaque ([`skip_at_form`]) — a `}` inside embedded-JS props cannot clip the body.
 pub fn colon_block_extent(
     source: &str,
     colon_end: u32,
@@ -485,13 +473,19 @@ pub fn colon_block_extent(
     let first_line_end = loop {
         match bytes.get(j) {
             None | Some(b'\n') => break next_line_start(source, colon_end),
-            Some(b'\\') => j += 1, // skip the escaped byte
-            Some(b'{') => depth += 1,
+            Some(b'\\') => j += 2, // skip the escaped byte
+            Some(b'@') => j = skip_at_form(source, j),
+            Some(b'{') => {
+                depth += 1;
+                j += 1;
+            }
             Some(b'}') if depth == 0 && clip_at_brace => return (start, j as u32),
-            Some(b'}') if depth > 0 => depth -= 1,
-            _ => {}
+            Some(b'}') => {
+                depth = (depth - 1).max(0);
+                j += 1;
+            }
+            _ => j += 1,
         }
-        j += 1;
     };
     (start, indented_block_end(source, first_line_end, head_indent as u32))
 }
@@ -509,17 +503,10 @@ fn is_wordy(c: Option<char>) -> bool {
     }
 }
 
-/// Approximate the CJK scripts Typst excludes from `in_word` (Han/Hiragana/Katakana/Hangul) by
-/// Unicode block ranges — avoids a `unicode-script` dependency.
+/// The CJK scripts Typst excludes from `in_word` (Han/Hiragana/Katakana/Hangul — scripts with no
+/// word boundaries to respect), by Unicode `Script` property.
 fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF        // Hiragana + Katakana
-        | 0x3400..=0x4DBF      // CJK Ext A
-        | 0x4E00..=0x9FFF      // CJK Unified
-        | 0xAC00..=0xD7AF      // Hangul syllables
-        | 0xF900..=0xFAFF      // CJK compat
-        | 0x20000..=0x2FA1F    // CJK Ext B+ / compat supplement
-    )
+    matches!(c.script(), Script::Han | Script::Hiragana | Script::Katakana | Script::Hangul)
 }
 
 /// The `char` ending at byte `offset` (immediately before it), or `None` at source start.
@@ -578,25 +565,59 @@ fn can_close(source: &str, off: u32) -> bool {
     }
 }
 
+/// Skip a JS string or template literal whose opening quote is at `at`, honoring `\`-escapes.
+/// Returns the offset just past the closing quote. An unterminated `'`/`"` stops at the newline
+/// (the scan resumes there); a template runs to its closing backtick (newlines allowed, `${…}`
+/// contents opaque). Unterminated at EOF → the source end.
+fn skip_js_string(source: &str, at: usize) -> usize {
+    let bytes = source.as_bytes();
+    let quote = bytes[at];
+    let mut i = at + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'\n' if quote != b'`' => return i,
+            b if b == quote => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
 /// Skip a balanced bracket group (`(…)`/`[…]`/`{…}`, nesting all three) whose opener is at `at`,
-/// returning the offset just past the matching closer, or `at + 1` if unterminated. Brackets
-/// only — string/comment contents are not interpreted.
+/// returning the offset just past the matching closer, or `at + 1` if unterminated. The group is
+/// embedded JS, so string/template and comment contents are skipped — a bracket or emphasis
+/// marker inside `"…"`/`` `…` ``/`/*…*/` cannot unbalance it. (Regex literals are not recognized;
+/// these scans bound heuristic extents — the embedded JS is properly parsed afterwards.)
 fn skip_balanced(source: &str, at: usize) -> usize {
     let bytes = source.as_bytes();
     let mut depth = 0u32;
     let mut i = at;
     while i < bytes.len() {
         match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
             b')' | b']' | b'}' => {
                 depth -= 1;
+                i += 1;
                 if depth == 0 {
-                    return i + 1;
+                    return i;
                 }
             }
-            _ => {}
+            b'"' | b'\'' | b'`' => i = skip_js_string(source, i),
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                i = line_content_end(source, i as u32) as usize;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = match memchr::memmem::find(&bytes[i + 2..], b"*/") {
+                    Some(k) => i + 2 + k + 2,
+                    None => bytes.len(),
+                };
+            }
+            _ => i += 1,
         }
-        i += 1;
     }
     at + 1
 }
@@ -831,5 +852,235 @@ fn scan_fenced_code(
             });
         }
         line_start = next_line_start(source, line_start as u32) as usize;
+    }
+}
+
+// ================================================================================================
+// Math spans (`$…$` / `$$…$$`) — the raw-content boundary scan
+// ================================================================================================
+
+/// A boundary reached while scanning a math span's raw content ([`math_boundary`]).
+pub enum MathBoundary {
+    /// The closing `$`/`$$` run: the span ends; markup resumes at `after`.
+    Close { after: u32 },
+    /// `@name` — a lexical interpolation; the identifier spans `[run_end + 1, name_end)`.
+    InterpName { name_end: u32 },
+    /// `@(` — the parser parses the parenthesized expression (positioned at the `@`).
+    InterpParen,
+    /// `@` with no interpolation head — spliced as a literal `"@"`.
+    LiteralAt,
+    /// No closing delimiter before end of source (the opening `$` run is then literal).
+    Eof,
+}
+
+/// Scan a math span's raw LaTeX from `from` to the next boundary: the closing delimiter, an
+/// `@`-interpolation, or EOF. Returns `(run_end, boundary)` where `[from, run_end)` is raw
+/// content: `\<c>` keeps its backslash (LaTeX's own escape, so `\$`/`\@` stay literal), and a
+/// single `$` inside display math is literal. The `@name` scan is ASCII and excludes `$` so the
+/// math delimiter wins (`@i$`).
+pub fn math_boundary(source: &str, from: u32, display: bool) -> (u32, MathBoundary) {
+    let bytes = source.as_bytes();
+    let delim: u32 = if display { 2 } else { 1 };
+    let mut i = from as usize;
+    loop {
+        match bytes.get(i) {
+            None => return (bytes.len() as u32, MathBoundary::Eof),
+            Some(b'\\') => i += 2,
+            Some(b'$') if !display || bytes.get(i + 1) == Some(&b'$') => {
+                return (i as u32, MathBoundary::Close { after: i as u32 + delim });
+            }
+            Some(b'@') => {
+                let name_start = i + 1;
+                let boundary = if bytes.get(name_start) == Some(&b'(') {
+                    MathBoundary::InterpParen
+                } else {
+                    let name_end = skip_ascii_ident(bytes, name_start);
+                    if name_end == name_start {
+                        MathBoundary::LiteralAt
+                    } else {
+                        MathBoundary::InterpName { name_end: name_end as u32 }
+                    }
+                };
+                return (i as u32, boundary);
+            }
+            Some(_) => i += 1,
+        }
+    }
+}
+
+/// The end of the ASCII identifier run (`[A-Za-z0-9_]*`) starting at `i`.
+fn skip_ascii_ident(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+        i += 1;
+    }
+    i
+}
+
+// ================================================================================================
+// Verbatim bodies (`|{ … }|`) — the raw-run boundary scan
+// ================================================================================================
+
+/// A boundary reached while scanning a verbatim body's raw run ([`verbatim_boundary`]).
+pub enum VerbatimBoundary {
+    /// The closing `}|`: the element resumes at `after`.
+    Close { after: u32 },
+    /// `|@` — an armed escape: the parser parses one `@`-form at `at` (the `@`).
+    ArmedAt { at: u32 },
+    /// Unterminated: no `}|` before end of source.
+    Eof,
+}
+
+/// Scan a verbatim body's raw run from `from` to the next boundary: the closing `}|`, an armed
+/// `|@` escape, or EOF. Returns `(run_end, boundary)` where `[from, run_end)` is the raw slice —
+/// for a close, a single trailing newline right before `}|` is dropped (the `}`-newline rule).
+pub fn verbatim_boundary(source: &str, from: u32) -> (u32, VerbatimBoundary) {
+    let bytes = source.as_bytes();
+    let mut i = from as usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'}' if bytes.get(i + 1) == Some(&b'|') => {
+                let run_end = if i > from as usize && bytes[i - 1] == b'\n' { i - 1 } else { i };
+                return (run_end as u32, VerbatimBoundary::Close { after: i as u32 + 2 });
+            }
+            b'|' if bytes.get(i + 1) == Some(&b'@') => {
+                return (i as u32, VerbatimBoundary::ArmedAt { at: i as u32 + 1 });
+            }
+            _ => i += 1,
+        }
+    }
+    (bytes.len() as u32, VerbatimBoundary::Eof)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The string-aware [`skip_balanced`]: a bracket or `*` inside a JS string/comment in an
+    /// `@`-form's groups must not end the group early (nor let an emphasis close inside it).
+    #[test]
+    fn emphasis_close_skips_strings_in_at_form_groups() {
+        // Old behavior: the `)` inside `")*"` ended the group scan mid-string, and the `*` right
+        // after it (still inside the string) closed the emphasis.
+        let src = r#"*a @f(")*") b*"#;
+        assert_eq!(find_emphasis_close(src, 0, b'*'), Some(src.len() as u32 - 1));
+
+        let src = r#"*a @f[x: "}*"] b*"#;
+        assert_eq!(find_emphasis_close(src, 0, b'*'), Some(src.len() as u32 - 1));
+    }
+
+    #[test]
+    fn emphasis_close_skips_comments_in_at_form_groups() {
+        // The `)` and `*` inside the block comment are not group/emphasis structure.
+        let src = "*a @f(/*)*/x) b*";
+        assert_eq!(find_emphasis_close(src, 0, b'*'), Some(src.len() as u32 - 1));
+    }
+
+    #[test]
+    fn emphasis_close_unterminated_string_stops_at_newline() {
+        // An unterminated `"` must not swallow the rest of the body: the scan resumes at the
+        // newline, and the blank line still ends the emphasis scope (→ literal opener).
+        let src = "*a @f(\"x\n\n b*";
+        assert_eq!(find_emphasis_close(src, 0, b'*'), None);
+    }
+
+    #[test]
+    fn colon_extent_is_opaque_to_at_form_groups() {
+        // A `}` inside a props string must not clip the colon body; the depth-0 `}` after it does.
+        let src = "@a: @f[x: \"}\"] y} tail";
+        let colon_end = src.find(':').unwrap() as u32 + 1;
+        let (start, end) = colon_block_extent(src, colon_end, 0, true);
+        assert_eq!(&src[start as usize..end as usize], "@f[x: \"}\"] y");
+    }
+
+    #[test]
+    fn math_boundary_walks_interps_and_close() {
+        let src = "$a_@i + @(f(x)) @@ b$ tail";
+        let (e, b) = math_boundary(src, 1, false);
+        assert_eq!(&src[1..e as usize], "a_");
+        let MathBoundary::InterpName { name_end } = b else { panic!("expected @i interp") };
+        assert_eq!(&src[e as usize + 1..name_end as usize], "i");
+
+        let (e, b) = math_boundary(src, name_end, false);
+        assert_eq!(&src[name_end as usize..e as usize], " + ");
+        assert!(matches!(b, MathBoundary::InterpParen));
+
+        // `@(f(x))` is the parser's; resume after it (offset 15). `@@` yields two literal `@`s
+        // (each `@` has no interpolation head), then ` b` and the closing `$`.
+        let (e, b) = math_boundary(src, 15, false);
+        assert_eq!(&src[15..e as usize], " ");
+        assert!(matches!(b, MathBoundary::LiteralAt));
+        let (e, b) = math_boundary(src, e + 1, false);
+        assert_eq!(e, 17);
+        assert!(matches!(b, MathBoundary::LiteralAt));
+        let (e, b) = math_boundary(src, e + 1, false);
+        assert_eq!(&src[18..e as usize], " b");
+        assert!(matches!(b, MathBoundary::Close { after: 21 }));
+
+        // A `\$` stays raw; the unescaped `$` closes.
+        let src = r"$a\$b$ t";
+        let (e, b) = math_boundary(src, 1, false);
+        assert_eq!(&src[1..e as usize], r"a\$b");
+        assert!(matches!(b, MathBoundary::Close { after } if after == e + 1));
+
+        // Display math: a single `$` is literal; `$$` closes.
+        let src = "$$a$b$$";
+        let (e, b) = math_boundary(src, 2, true);
+        assert_eq!(&src[2..e as usize], "a$b");
+        assert!(matches!(b, MathBoundary::Close { after } if after == e + 2));
+
+        // Unterminated → Eof.
+        assert!(matches!(math_boundary("$abc", 1, false), (4, MathBoundary::Eof)));
+    }
+
+    #[test]
+    fn verbatim_boundary_close_armed_eof() {
+        // Close, with the single trailing newline dropped from the run.
+        let src = "raw\n}| t";
+        let (run_end, b) = verbatim_boundary(src, 0);
+        assert_eq!(&src[0..run_end as usize], "raw");
+        assert!(matches!(b, VerbatimBoundary::Close { after: 6 }));
+
+        // Armed `|@`: the run ends before the `|`, the `@` position is reported.
+        let src = "ab|@x{y}}|";
+        let (run_end, b) = verbatim_boundary(src, 0);
+        assert_eq!(&src[0..run_end as usize], "ab");
+        assert!(matches!(b, VerbatimBoundary::ArmedAt { at: 3 }));
+
+        // Unterminated → Eof with the full tail as the run.
+        let (run_end, b) = verbatim_boundary("abc", 0);
+        assert_eq!(run_end, 3);
+        assert!(matches!(b, VerbatimBoundary::Eof));
+    }
+
+    #[test]
+    fn line_classifiers() {
+        // statement lines
+        assert!(is_statement_line("  % const x = 1", 0));
+        assert!(!is_statement_line("  x % y", 0));
+        assert_eq!(statement_kind("  % f()\n", 0), Some((3, false)));
+        assert_eq!(statement_kind("%%%\nbody\n", 0), Some((4, true)));
+        assert_eq!(statement_kind("%%% x\n", 0), Some((1, false))); // content after run → statement
+        assert_eq!(statement_kind("x\n", 0), None);
+        assert!(percent_line_is_empty("%   \nx", 1));
+        assert!(percent_line_is_empty("% // note\nx", 1));
+        assert!(!percent_line_is_empty("% f()\n", 1));
+
+        // headings
+        assert_eq!(heading_at("### Sub\n", 0), Some((3, 4, 7)));
+        assert_eq!(heading_at("####### seven\n", 0), None);
+        assert_eq!(heading_at("#nospace\n", 0), None);
+
+        // list markers
+        let m = list_marker_at("  - item\n", 0).unwrap();
+        assert!(!m.ordered);
+        assert_eq!((m.indent, m.offset, m.body_col), (2, 2, 4));
+        let m = list_marker_at("12. item\n", 0).unwrap();
+        assert!(m.ordered);
+        assert_eq!(m.body_col, 4);
+        assert!(list_marker_at("-nospace\n", 0).is_none());
+
+        // `|` prop lines
+        assert_eq!(colon_prop_line_at("  | x: 1\n", 0), Some(3));
+        assert_eq!(colon_prop_line_at("  x | y\n", 0), None);
     }
 }

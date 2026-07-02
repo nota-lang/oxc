@@ -10,12 +10,12 @@
 //! nodes via `unbox()`. The emit primitives live in [`super::build`]; the whitespace algorithm in
 //! [`super::scribble`].
 
+use itertools::Itertools;
 use oxc_allocator::{Allocator, Vec as ArenaVec};
 use oxc_ast::{AstBuilder, ast::*};
 use oxc_ast_visit::{VisitMut, walk_mut};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
-use oxc_syntax::identifier::is_identifier_name;
 
 use super::mapping::{NotaMappingKind, NotaMappingMark};
 use super::{is_valid_tag_expr, scribble};
@@ -168,27 +168,23 @@ impl<'a> NotaLowering<'a> {
         is_brace: bool,
     ) -> ArenaVec<'a, Expression<'a>> {
         let mut segs: Vec<scribble::Seg<'a, Expression<'a>>> = Vec::with_capacity(items.len());
-        let mut iter = items.into_iter();
+        let mut iter = items.into_iter().peekable();
         while let Some(child) = iter.next() {
             match child {
                 NotaChild::Text(t) => segs.push(scribble::Seg::Text(t.unbox().value.as_str())),
                 NotaChild::Statement(first) => {
-                    // Peel the leading statement run; the rest of the siblings lower recursively
-                    // into the IIFE's returned Fragment.
+                    // Peel the statement run; the remaining siblings lower recursively into the
+                    // IIFE's returned Fragment.
                     let mut stmts = self.ast.vec1(first.unbox().statement);
-                    let mut tail = self.ast.vec();
-                    let mut in_run = true;
-                    for c in iter.by_ref() {
-                        match c {
-                            NotaChild::Statement(s) if in_run => {
-                                stmts.push(s.unbox().statement);
-                            }
-                            other => {
-                                in_run = false;
-                                tail.push(other);
-                            }
-                        }
-                    }
+                    stmts.extend(
+                        iter.peeking_take_while(|c| matches!(c, NotaChild::Statement(_))).map(
+                            |c| {
+                                let NotaChild::Statement(s) = c else { unreachable!() };
+                                s.unbox().statement
+                            },
+                        ),
+                    );
+                    let tail = self.ast.vec_from_iter(iter.by_ref());
                     let rest = self.lower_children(tail, is_brace);
                     segs.push(scribble::Seg::Elem(self.build_statement_iife(stmts, rest)));
                     break; // `iter` was drained into the IIFE
@@ -275,19 +271,6 @@ impl<'a> NotaLowering<'a> {
             out.push(match prop {
                 NotaProp::Field(f) => {
                     let NotaFieldProp { span, name, value, .. } = f.unbox();
-                    // A key that is not a valid JS identifier (`data-x`, `aria-label`) must be a
-                    // string-literal key; valid identifiers (incl. keywords) stay bare.
-                    let key = if is_identifier_name(name.name.as_str()) {
-                        PropertyKey::StaticIdentifier(
-                            self.ast.alloc_identifier_name(name.span, name.name.as_str()),
-                        )
-                    } else {
-                        PropertyKey::StringLiteral(self.ast.alloc_string_literal(
-                            name.span,
-                            name.name.as_str(),
-                            None,
-                        ))
-                    };
                     let value = match value {
                         NotaPropValue::Expression(e) => {
                             let expr = e.unbox().expression;
@@ -296,17 +279,15 @@ impl<'a> NotaLowering<'a> {
                         }
                         NotaPropValue::Markup(m) => self.lower_markup(m.unbox()),
                     };
-                    self.init_prop(span, key, value, false)
+                    // `obj_prop` picks a bare vs string-literal key (`data-x`) by ident validity.
+                    self.obj_prop(span, name.span, name.name.as_str(), value, false)
                 }
                 NotaProp::Shorthand(s) => {
                     let id = s.unbox().name;
                     let (name, key_span) = (id.name.as_str(), id.span);
                     self.record_nota_mapping(key_span, NotaMappingKind::EmbeddedJs);
-                    let key = PropertyKey::StaticIdentifier(
-                        self.ast.alloc_identifier_name(key_span, name),
-                    );
                     let value = Expression::Identifier(self.ast.alloc(id));
-                    self.init_prop(key_span, key, value, true)
+                    self.obj_prop(key_span, key_span, name, value, true)
                 }
                 NotaProp::Spread(sp) => {
                     let NotaSpreadProp { span, argument, .. } = sp.unbox();
@@ -375,11 +356,8 @@ impl<'a> NotaLowering<'a> {
         if block {
             let mut props = self.ast.vec();
             if let Some(lang) = language {
-                let key = PropertyKey::StaticIdentifier(
-                    self.ast.alloc_identifier_name(Span::empty(0), "lang"),
-                );
                 let val = self.ast.expression_string_literal(Span::empty(0), lang.as_str(), None);
-                props.push(self.init_prop(Span::empty(0), key, val, false));
+                props.push(self.obj_prop(Span::empty(0), Span::empty(0), "lang", val, false));
             }
             self.build_raw_element(span, super::CODE_BLOCK, props, children)
         } else {
@@ -417,11 +395,8 @@ impl<'a> NotaLowering<'a> {
         };
         let mut props = self.ast.vec();
         if display {
-            let key = PropertyKey::StaticIdentifier(
-                self.ast.alloc_identifier_name(Span::empty(0), "display"),
-            );
             let val = self.ast.expression_boolean_literal(Span::empty(0), true);
-            props.push(self.init_prop(Span::empty(0), key, val, false));
+            props.push(self.obj_prop(Span::empty(0), Span::empty(0), "display", val, false));
         }
         self.build_raw_element(span, super::MATH, props, self.ast.vec1(raw_child))
     }
@@ -458,7 +433,7 @@ impl<'a> NotaLowering<'a> {
 
     fn lower_heading(&mut self, h: NotaHeading<'a>) -> Expression<'a> {
         let NotaHeading { span, level, children, .. } = h;
-        let tag_name: &'a str = self.ast.allocator.alloc_str(&format!("h{level}"));
+        let tag_name = ["h1", "h2", "h3", "h4", "h5", "h6"][usize::from(level - 1)];
         let children = self.lower_children(children, false);
         let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
         self.build_h(span, tag, self.ast.vec(), children)
