@@ -801,6 +801,23 @@ impl GetAddress for TSModuleReference<'_> {
     }
 }
 
+impl GetAddress for NotaForm<'_> {
+    // `#[inline]` because compiler should boil this down to a single assembly instruction
+    #[inline]
+    fn address(&self) -> Address {
+        match self {
+            Self::Element(it) => GetAddress::address(it),
+            Self::Fragment(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+            Self::If(it) => GetAddress::address(it),
+            Self::For(it) => GetAddress::address(it),
+            Self::Code(it) => GetAddress::address(it),
+            Self::Math(it) => GetAddress::address(it),
+            Self::Verbatim(it) => GetAddress::address(it),
+        }
+    }
+}
+
 impl GetAddress for NotaMarkupKind<'_> {
     // `#[inline]` because compiler should boil this down to a single assembly instruction
     #[inline]
@@ -826,6 +843,9 @@ impl GetAddress for NotaChild<'_> {
         match self {
             Self::Text(it) => GetAddress::address(it),
             Self::Statement(it) => GetAddress::address(it),
+            Self::Emphasis(it) => GetAddress::address(it),
+            Self::Heading(it) => GetAddress::address(it),
+            Self::ListItem(it) => GetAddress::address(it),
             Self::Element(it) => GetAddress::address(it),
             Self::Fragment(it) => GetAddress::address(it),
             Self::Interpolation(it) => GetAddress::address(it),
@@ -834,9 +854,6 @@ impl GetAddress for NotaChild<'_> {
             Self::Code(it) => GetAddress::address(it),
             Self::Math(it) => GetAddress::address(it),
             Self::Verbatim(it) => GetAddress::address(it),
-            Self::Emphasis(it) => GetAddress::address(it),
-            Self::Heading(it) => GetAddress::address(it),
-            Self::ListItem(it) => GetAddress::address(it),
         }
     }
 }
@@ -871,7 +888,14 @@ impl GetAddress for NotaPropValue<'_> {
     fn address(&self) -> Address {
         match self {
             Self::Expression(it) => GetAddress::address(it),
-            Self::Markup(it) => GetAddress::address(it),
+            Self::Element(it) => GetAddress::address(it),
+            Self::Fragment(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+            Self::If(it) => GetAddress::address(it),
+            Self::For(it) => GetAddress::address(it),
+            Self::Code(it) => GetAddress::address(it),
+            Self::Math(it) => GetAddress::address(it),
+            Self::Verbatim(it) => GetAddress::address(it),
         }
     }
 }
@@ -904,7 +928,14 @@ impl GetAddress for NotaVerbatimPart<'_> {
     fn address(&self) -> Address {
         match self {
             Self::Raw(it) => GetAddress::address(it),
-            Self::Child(it) => GetAddress::address(it),
+            Self::Element(it) => GetAddress::address(it),
+            Self::Fragment(it) => GetAddress::address(it),
+            Self::Interpolation(it) => GetAddress::address(it),
+            Self::If(it) => GetAddress::address(it),
+            Self::For(it) => GetAddress::address(it),
+            Self::Code(it) => GetAddress::address(it),
+            Self::Math(it) => GetAddress::address(it),
+            Self::Verbatim(it) => GetAddress::address(it),
         }
     }
 }

@@ -28,7 +28,11 @@ entries. The cross-team spec is `design/contract.md` (authoritative), with surfa
 | E2E fixtures (parse→lower→codegen, exact-emit) | `crates/oxc_codegen/tests/integration/nota.rs` |
 
 **Parse-then-lower** (the shape oxc uses for JSX): the parser leaves every `@`-form in place as
-`Expression::NotaMarkup` and a whole file as one `NotaMarkupKind::Document` statement;
+`Expression::NotaMarkup` and a whole file as one `NotaMarkupKind::Document` statement. The eight
+`@`-forms live in the `NotaForm` sub-enum, inherited (via `inherit_variants!`, the
+`Statement`/`Declaration` pattern) by every position that can hold a form — `NotaMarkupKind`,
+`NotaChild`, `NotaPropValue`, `NotaVerbatimPart` — so `parse_nota_form` returns one `NotaForm`
+that converts by zero-cost `From`, and the lowering has a single `lower_form` dispatch;
 `NotaLowering` (a `VisitMut` + document rebuild) produces the emitted module. This supersedes
 `design/implementation.md` D1/D2 (parse-time lowering, zero new AST nodes) — the faithful AST buys
 the playground's `parseAst` ESTree view, testable stages, and the groundwork for a `.nota`

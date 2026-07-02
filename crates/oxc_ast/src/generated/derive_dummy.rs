@@ -3243,6 +3243,15 @@ impl<'a> Dummy<'a> for NotaMarkup<'a> {
     }
 }
 
+impl<'a> Dummy<'a> for NotaForm<'a> {
+    /// Create a dummy [`NotaForm`].
+    ///
+    /// Has cost of making 1 allocation (40 bytes).
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Fragment(Dummy::dummy(allocator))
+    }
+}
+
 impl<'a> Dummy<'a> for NotaMarkupKind<'a> {
     /// Create a dummy [`NotaMarkupKind`].
     ///
@@ -3363,7 +3372,7 @@ impl<'a> Dummy<'a> for NotaProp<'a> {
 impl<'a> Dummy<'a> for NotaFieldProp<'a> {
     /// Create a dummy [`NotaFieldProp`].
     ///
-    /// Has cost of making 2 allocations (48 bytes).
+    /// Has cost of making 1 allocation (40 bytes).
     fn dummy(allocator: &'a Allocator) -> Self {
         Self {
             node_id: Dummy::dummy(allocator),
@@ -3390,9 +3399,9 @@ impl<'a> Dummy<'a> for NotaPropName<'a> {
 impl<'a> Dummy<'a> for NotaPropValue<'a> {
     /// Create a dummy [`NotaPropValue`].
     ///
-    /// Has cost of making 2 allocations (48 bytes).
+    /// Has cost of making 1 allocation (40 bytes).
     fn dummy(allocator: &'a Allocator) -> Self {
-        Self::Expression(Dummy::dummy(allocator))
+        Self::Fragment(Dummy::dummy(allocator))
     }
 }
 

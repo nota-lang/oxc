@@ -15,6 +15,7 @@
 /// * `ModuleDeclaration`
 /// * `TSType`
 /// * `TSTypeName`
+/// * `NotaForm`
 ///
 /// # Expansion
 ///
@@ -727,6 +728,54 @@ macro_rules! inherit_variants {
             to_ts_type_name,
             to_ts_type_name_mut,
             [IdentifierReference, QualifiedName, ThisExpression]
+        );
+    };
+
+    // Inherit `NotaForm` variants
+    (
+        $(#[$attr:meta])*
+        pub enum $ty:ident<'a> {
+            $($(#[$variant_attr:meta])* $variant_name:ident($variant_type:ty) = $variant_discrim:literal,)*
+            @inherit NotaForm
+            $($rest:tt)*
+        }
+    ) => {
+        $crate::ast::macros::inherit_variants! {
+            $(#[$attr])*
+            pub enum $ty<'a> {
+                $($(#[$variant_attr])* $variant_name($variant_type) = $variant_discrim,)*
+
+                /// Inherited from [`NotaForm`]: `@p[..]{..}` / `@Aside{..}` / `@(expr){..}`.
+                Element(Box<'a, NotaElement<'a>>) = 0,
+                /// Inherited from [`NotaForm`]: `@{..}`.
+                Fragment(Box<'a, NotaFragment<'a>>) = 1,
+                /// Inherited from [`NotaForm`]: `@name` / `@(expr)`.
+                Interpolation(Box<'a, NotaInterpolation<'a>>) = 2,
+                /// Inherited from [`NotaForm`]: `@if (c) {..} else {..}`.
+                If(Box<'a, NotaIf<'a>>) = 3,
+                /// Inherited from [`NotaForm`]: `@for (x of xs) {..}`.
+                For(Box<'a, NotaFor<'a>>) = 4,
+                /// Inherited from [`NotaForm`]: `` `code` `` / fenced ```` ```lang ````.
+                Code(Box<'a, NotaCode<'a>>) = 5,
+                /// Inherited from [`NotaForm`]: `$math$` / `$$display$$`.
+                Math(Box<'a, NotaMath<'a>>) = 6,
+                /// Inherited from [`NotaForm`]: `@tag|{ raw }|`.
+                Verbatim(Box<'a, NotaVerbatim<'a>>) = 7,
+
+                $($rest)*
+            }
+        }
+
+        $crate::ast::macros::shared_enum_variants!(
+            $ty,
+            NotaForm,
+            is_nota_form,
+            into_nota_form,
+            as_nota_form,
+            as_nota_form_mut,
+            to_nota_form,
+            to_nota_form_mut,
+            [Element, Fragment, Interpolation, If, For, Code, Math, Verbatim]
         );
     };
 

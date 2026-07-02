@@ -479,6 +479,8 @@ impl<'a> TakeIn<'a> for JSDocUnknownType {}
 
 impl<'a> TakeIn<'a> for NotaMarkup<'a> {}
 
+impl<'a> TakeIn<'a> for NotaForm<'a> {}
+
 impl<'a> TakeIn<'a> for NotaMarkupKind<'a> {}
 
 impl<'a> TakeIn<'a> for NotaDocument<'a> {}

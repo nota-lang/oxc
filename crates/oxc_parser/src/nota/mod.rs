@@ -40,22 +40,6 @@ use crate::{
     },
 };
 
-/// Demote a markup form to a body child, reusing the boxed node. The document form never appears
-/// as a body child.
-fn markup_to_child(markup: NotaMarkup<'_>) -> NotaChild<'_> {
-    match markup.kind {
-        NotaMarkupKind::Element(e) => NotaChild::Element(e),
-        NotaMarkupKind::Fragment(f) => NotaChild::Fragment(f),
-        NotaMarkupKind::Interpolation(i) => NotaChild::Interpolation(i),
-        NotaMarkupKind::If(n) => NotaChild::If(n),
-        NotaMarkupKind::For(n) => NotaChild::For(n),
-        NotaMarkupKind::Code(c) => NotaChild::Code(c),
-        NotaMarkupKind::Math(m) => NotaChild::Math(m),
-        NotaMarkupKind::Verbatim(v) => NotaChild::Verbatim(v),
-        NotaMarkupKind::Document(_) => unreachable!("a document is never a body child"),
-    }
-}
-
 /// How a markup-collection loop ([`ParserImpl::collect_markup`]) terminated.
 enum MarkupClose {
     /// Closed by the body's `}` (depth 0); `end` is one byte past it.
@@ -105,8 +89,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     pub(crate) fn parse_nota_expression(mut self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
         self.nota_markup = true;
         self.bump_any(); // prime `token` onto the first token
-        let markup = self.parse_nota_form(false, false);
-        let expr = Expression::NotaMarkup(self.ast.alloc(markup));
+        let expr = self.parse_nota_markup_expression(false, false);
         self.finish_nota(expr)
     }
 
@@ -160,7 +143,24 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // `@`-form dispatch (element / fragment / interpolation / control flow / verbatim)
     // ===========================================================================================
 
-    /// Parse one `@`-form. Entered with the current token at [`Kind::At`].
+    /// Parse one `@`-form in JS *expression position*, wrapped as `Expression::NotaMarkup`. The
+    /// umbrella [`NotaMarkup`] span covers the whole form from its `@` (an inner node's span may
+    /// exclude it — an interpolation's span is its expression's).
+    pub(crate) fn parse_nota_markup_expression(
+        &mut self,
+        in_body: bool,
+        brace_significant: bool,
+    ) -> Expression<'a> {
+        let span_start = self.start_span();
+        let form = self.parse_nota_form(in_body, brace_significant);
+        let span = self.end_span(span_start);
+        let markup = self.ast.nota_markup(span, NotaMarkupKind::from(form));
+        Expression::NotaMarkup(self.ast.alloc(markup))
+    }
+
+    /// Parse one `@`-form. Entered with the current token at [`Kind::At`]. The returned
+    /// [`NotaForm`] converts into any form-holding position (`NotaChild`, `NotaPropValue`,
+    /// `NotaVerbatimPart`, `NotaMarkupKind`) via the inherited-variant `From` impls.
     ///
     /// `in_body`: this form is a child of a markup body, so its trailing context resumes as markup
     /// text (the JSX `in_jsx_child` analog); `false` in JS expression position.
@@ -170,7 +170,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         in_body: bool,
         brace_significant: bool,
-    ) -> NotaMarkup<'a> {
+    ) -> NotaForm<'a> {
         let span_start = self.start_span();
 
         // Consume `@` and lex the head. An identifier-start head (`@foo`, `@if`, `@café`) is lexed
@@ -185,55 +185,49 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.bump_any();
         }
 
-        let kind = match self.cur_kind() {
-            Kind::If => NotaMarkupKind::If({
+        match self.cur_kind() {
+            Kind::If => NotaForm::If({
                 let n = self.parse_nota_if(span_start, in_body);
                 self.ast.alloc(n)
             }),
-            Kind::For => NotaMarkupKind::For({
+            Kind::For => NotaForm::For({
                 let n = self.parse_nota_for(span_start, in_body);
                 self.ast.alloc(n)
             }),
-            Kind::LCurly => NotaMarkupKind::Fragment({
+            Kind::LCurly => NotaForm::Fragment({
                 let f = self.parse_fragment(span_start, in_body);
                 self.ast.alloc(f)
             }),
             _ => {
                 let Some(head) = self.parse_nota_head() else {
                     // `@` with no valid head (`@@`, `@ `, `@1`, EOF, …): diagnose, but recover as
-                    // an empty fragment — the `unexpected()` dummy is a `Document`, which would
-                    // panic in `markup_to_child` when this form is a body child.
+                    // an empty fragment so the form stays well-shaped in any position.
                     self.set_unexpected();
                     let span = self.end_span(span_start);
                     let frag = self.ast.nota_fragment(span, self.ast.vec());
-                    return self
-                        .ast
-                        .nota_markup(span, NotaMarkupKind::Fragment(self.ast.alloc(frag)));
+                    return NotaForm::Fragment(self.ast.alloc(frag));
                 };
                 match self.commit_head(&head, in_body) {
-                    MarkupTrigger::Brace | MarkupTrigger::Bracket => NotaMarkupKind::Element({
+                    MarkupTrigger::Brace | MarkupTrigger::Bracket => NotaForm::Element({
                         let e = self.parse_element(span_start, head, in_body);
                         self.ast.alloc(e)
                     }),
-                    MarkupTrigger::Colon => NotaMarkupKind::Element({
+                    MarkupTrigger::Colon => NotaForm::Element({
                         let e = self.parse_colon_body(span_start, head, in_body, brace_significant);
                         self.ast.alloc(e)
                     }),
-                    MarkupTrigger::Verbatim => NotaMarkupKind::Verbatim({
+                    MarkupTrigger::Verbatim => NotaForm::Verbatim({
                         let v = self.parse_verbatim_element(span_start, head, in_body);
                         self.ast.alloc(v)
                     }),
                     // No trigger glued to the head ⇒ interpolation.
-                    MarkupTrigger::None => NotaMarkupKind::Interpolation({
+                    MarkupTrigger::None => NotaForm::Interpolation({
                         let i = self.finish_interpolation(head);
                         self.ast.alloc(i)
                     }),
                 }
             }
-        };
-
-        let span = self.end_span(span_start);
-        self.ast.nota_markup(span, kind)
+        }
     }
 
     /// Parse an `@`-form head: `@(expr)` or a bare (possibly hyphenated) identifier. The head's
@@ -483,8 +477,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // A depth-0 `}` closes an element/control body, so a child form's colon sugar
                     // must clip before it; not so where `}` is literal.
                     let brace_significant = matches!(mode, BodyMode::Body);
-                    let child = self.parse_nota_form(true, brace_significant);
-                    items.push(markup_to_child(child));
+                    let form = self.parse_nota_form(true, brace_significant);
+                    items.push(NotaChild::from(form));
                 }
                 Kind::Star | Kind::NotaUnderscore => {
                     // The lexer emits these only for a valid opener (the Typst word-boundary
@@ -729,8 +723,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if self.eat(Kind::Colon) {
             // `key: value` — the value is embedded JS, or markup (`@`-form).
             let value = if self.at(Kind::At) {
-                let markup = self.parse_nota_form(false, false);
-                NotaPropValue::Markup(self.ast.alloc(markup))
+                NotaPropValue::from(self.parse_nota_form(false, false))
             } else {
                 let expr = self.parse_assignment_expression_or_higher();
                 let span = expr.span();
@@ -969,8 +962,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // Armed escape: parse one `@`-form, resume the raw scan after it.
                     self.nota_seek_to(at);
                     debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
-                    let child = self.parse_nota_form(false, false);
-                    children.push(NotaVerbatimPart::Child(self.ast.alloc(child)));
+                    let form = self.parse_nota_form(false, false);
+                    children.push(NotaVerbatimPart::from(form));
                     run_start = self.prev_token_end;
                 }
                 VerbatimBoundary::Eof => {

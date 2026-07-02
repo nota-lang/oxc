@@ -244,8 +244,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             Kind::At if self.nota_markup => {
                 // Expression position: a `}` is not an enclosing markup-body close (`brace_significant`
                 // = false).
-                let markup = self.parse_nota_form(false, false);
-                Expression::NotaMarkup(self.ast.alloc(markup))
+                self.parse_nota_markup_expression(false, false)
             }
             Kind::At => self.parse_decorated_expression(),
             // Literal, RegularExpressionLiteral

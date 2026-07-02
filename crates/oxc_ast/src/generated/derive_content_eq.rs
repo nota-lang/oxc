@@ -2545,6 +2545,22 @@ impl ContentEq for NotaMarkup<'_> {
     }
 }
 
+impl ContentEq for NotaForm<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Element(a), Self::Element(b)) => a.content_eq(b),
+            (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            (Self::If(a), Self::If(b)) => a.content_eq(b),
+            (Self::For(a), Self::For(b)) => a.content_eq(b),
+            (Self::Code(a), Self::Code(b)) => a.content_eq(b),
+            (Self::Math(a), Self::Math(b)) => a.content_eq(b),
+            (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
+            _ => false,
+        }
+    }
+}
+
 impl ContentEq for NotaMarkupKind<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -2573,6 +2589,9 @@ impl ContentEq for NotaChild<'_> {
         match (self, other) {
             (Self::Text(a), Self::Text(b)) => a.content_eq(b),
             (Self::Statement(a), Self::Statement(b)) => a.content_eq(b),
+            (Self::Emphasis(a), Self::Emphasis(b)) => a.content_eq(b),
+            (Self::Heading(a), Self::Heading(b)) => a.content_eq(b),
+            (Self::ListItem(a), Self::ListItem(b)) => a.content_eq(b),
             (Self::Element(a), Self::Element(b)) => a.content_eq(b),
             (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
             (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
@@ -2581,9 +2600,6 @@ impl ContentEq for NotaChild<'_> {
             (Self::Code(a), Self::Code(b)) => a.content_eq(b),
             (Self::Math(a), Self::Math(b)) => a.content_eq(b),
             (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
-            (Self::Emphasis(a), Self::Emphasis(b)) => a.content_eq(b),
-            (Self::Heading(a), Self::Heading(b)) => a.content_eq(b),
-            (Self::ListItem(a), Self::ListItem(b)) => a.content_eq(b),
             _ => false,
         }
     }
@@ -2661,7 +2677,14 @@ impl ContentEq for NotaPropValue<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Expression(a), Self::Expression(b)) => a.content_eq(b),
-            (Self::Markup(a), Self::Markup(b)) => a.content_eq(b),
+            (Self::Element(a), Self::Element(b)) => a.content_eq(b),
+            (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            (Self::If(a), Self::If(b)) => a.content_eq(b),
+            (Self::For(a), Self::For(b)) => a.content_eq(b),
+            (Self::Code(a), Self::Code(b)) => a.content_eq(b),
+            (Self::Math(a), Self::Math(b)) => a.content_eq(b),
+            (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
             _ => false,
         }
     }
@@ -2759,7 +2782,14 @@ impl ContentEq for NotaVerbatimPart<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Raw(a), Self::Raw(b)) => a.content_eq(b),
-            (Self::Child(a), Self::Child(b)) => a.content_eq(b),
+            (Self::Element(a), Self::Element(b)) => a.content_eq(b),
+            (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
+            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
+            (Self::If(a), Self::If(b)) => a.content_eq(b),
+            (Self::For(a), Self::For(b)) => a.content_eq(b),
+            (Self::Code(a), Self::Code(b)) => a.content_eq(b),
+            (Self::Math(a), Self::Math(b)) => a.content_eq(b),
+            (Self::Verbatim(a), Self::Verbatim(b)) => a.content_eq(b),
             _ => false,
         }
     }

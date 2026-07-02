@@ -5756,6 +5756,27 @@ unsafe fn walk_nota_markup<'a, State, Tr: Traverse<'a, State>>(
     traverser.exit_nota_markup(&mut *node, ctx);
 }
 
+unsafe fn walk_nota_form<'a, State, Tr: Traverse<'a, State>>(
+    traverser: &mut Tr,
+    node: *mut NotaForm<'a>,
+    ctx: &mut TraverseCtx<'a, State>,
+) {
+    traverser.enter_nota_form(&mut *node, ctx);
+    match &mut *node {
+        NotaForm::Element(node) => walk_nota_element(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::Fragment(node) => walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::Interpolation(node) => {
+            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
+        }
+        NotaForm::If(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::For(node) => walk_nota_for(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::Code(node) => walk_nota_code(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::Math(node) => walk_nota_math(traverser, (&mut **node) as *mut _, ctx),
+        NotaForm::Verbatim(node) => walk_nota_verbatim(traverser, (&mut **node) as *mut _, ctx),
+    }
+    traverser.exit_nota_form(&mut *node, ctx);
+}
+
 unsafe fn walk_nota_markup_kind<'a, State, Tr: Traverse<'a, State>>(
     traverser: &mut Tr,
     node: *mut NotaMarkupKind<'a>,
@@ -5766,20 +5787,14 @@ unsafe fn walk_nota_markup_kind<'a, State, Tr: Traverse<'a, State>>(
         NotaMarkupKind::Document(node) => {
             walk_nota_document(traverser, (&mut **node) as *mut _, ctx)
         }
-        NotaMarkupKind::Element(node) => walk_nota_element(traverser, (&mut **node) as *mut _, ctx),
-        NotaMarkupKind::Fragment(node) => {
-            walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx)
-        }
-        NotaMarkupKind::Interpolation(node) => {
-            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
-        }
-        NotaMarkupKind::If(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
-        NotaMarkupKind::For(node) => walk_nota_for(traverser, (&mut **node) as *mut _, ctx),
-        NotaMarkupKind::Code(node) => walk_nota_code(traverser, (&mut **node) as *mut _, ctx),
-        NotaMarkupKind::Math(node) => walk_nota_math(traverser, (&mut **node) as *mut _, ctx),
-        NotaMarkupKind::Verbatim(node) => {
-            walk_nota_verbatim(traverser, (&mut **node) as *mut _, ctx)
-        }
+        NotaMarkupKind::Element(_)
+        | NotaMarkupKind::Fragment(_)
+        | NotaMarkupKind::Interpolation(_)
+        | NotaMarkupKind::If(_)
+        | NotaMarkupKind::For(_)
+        | NotaMarkupKind::Code(_)
+        | NotaMarkupKind::Math(_)
+        | NotaMarkupKind::Verbatim(_) => walk_nota_form(traverser, node as *mut _, ctx),
     }
     traverser.exit_nota_markup_kind(&mut *node, ctx);
 }
@@ -5811,19 +5826,17 @@ unsafe fn walk_nota_child<'a, State, Tr: Traverse<'a, State>>(
     match &mut *node {
         NotaChild::Text(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Statement(node) => walk_nota_statement(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Element(node) => walk_nota_element(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Fragment(node) => walk_nota_fragment(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Interpolation(node) => {
-            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
-        }
-        NotaChild::If(node) => walk_nota_if(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::For(node) => walk_nota_for(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Code(node) => walk_nota_code(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Math(node) => walk_nota_math(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Verbatim(node) => walk_nota_verbatim(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Emphasis(node) => walk_nota_emphasis(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Heading(node) => walk_nota_heading(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::ListItem(node) => walk_nota_list_item(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Element(_)
+        | NotaChild::Fragment(_)
+        | NotaChild::Interpolation(_)
+        | NotaChild::If(_)
+        | NotaChild::For(_)
+        | NotaChild::Code(_)
+        | NotaChild::Math(_)
+        | NotaChild::Verbatim(_) => walk_nota_form(traverser, node as *mut _, ctx),
     }
     traverser.exit_nota_child(&mut *node, ctx);
 }
@@ -5986,7 +5999,14 @@ unsafe fn walk_nota_prop_value<'a, State, Tr: Traverse<'a, State>>(
         NotaPropValue::Expression(node) => {
             walk_nota_prop_expr(traverser, (&mut **node) as *mut _, ctx)
         }
-        NotaPropValue::Markup(node) => walk_nota_markup(traverser, (&mut **node) as *mut _, ctx),
+        NotaPropValue::Element(_)
+        | NotaPropValue::Fragment(_)
+        | NotaPropValue::Interpolation(_)
+        | NotaPropValue::If(_)
+        | NotaPropValue::For(_)
+        | NotaPropValue::Code(_)
+        | NotaPropValue::Math(_)
+        | NotaPropValue::Verbatim(_) => walk_nota_form(traverser, node as *mut _, ctx),
     }
     traverser.exit_nota_prop_value(&mut *node, ctx);
 }
@@ -6227,7 +6247,14 @@ unsafe fn walk_nota_verbatim_part<'a, State, Tr: Traverse<'a, State>>(
     traverser.enter_nota_verbatim_part(&mut *node, ctx);
     match &mut *node {
         NotaVerbatimPart::Raw(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
-        NotaVerbatimPart::Child(node) => walk_nota_markup(traverser, (&mut **node) as *mut _, ctx),
+        NotaVerbatimPart::Element(_)
+        | NotaVerbatimPart::Fragment(_)
+        | NotaVerbatimPart::Interpolation(_)
+        | NotaVerbatimPart::If(_)
+        | NotaVerbatimPart::For(_)
+        | NotaVerbatimPart::Code(_)
+        | NotaVerbatimPart::Math(_)
+        | NotaVerbatimPart::Verbatim(_) => walk_nota_form(traverser, node as *mut _, ctx),
     }
     traverser.exit_nota_verbatim_part(&mut *node, ctx);
 }

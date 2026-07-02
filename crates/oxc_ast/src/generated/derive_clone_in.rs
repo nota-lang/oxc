@@ -8533,6 +8533,44 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkup<'_> {
     }
 }
 
+impl<'new_alloc> CloneIn<'new_alloc> for NotaForm<'_> {
+    type Cloned = NotaForm<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Element(it) => NotaForm::Element(CloneIn::clone_in(it, allocator)),
+            Self::Fragment(it) => NotaForm::Fragment(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => NotaForm::Interpolation(CloneIn::clone_in(it, allocator)),
+            Self::If(it) => NotaForm::If(CloneIn::clone_in(it, allocator)),
+            Self::For(it) => NotaForm::For(CloneIn::clone_in(it, allocator)),
+            Self::Code(it) => NotaForm::Code(CloneIn::clone_in(it, allocator)),
+            Self::Math(it) => NotaForm::Math(CloneIn::clone_in(it, allocator)),
+            Self::Verbatim(it) => NotaForm::Verbatim(CloneIn::clone_in(it, allocator)),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        match self {
+            Self::Element(it) => {
+                NotaForm::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Fragment(it) => {
+                NotaForm::Fragment(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Interpolation(it) => {
+                NotaForm::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::If(it) => NotaForm::If(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::For(it) => NotaForm::For(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Code(it) => NotaForm::Code(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Math(it) => NotaForm::Math(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Verbatim(it) => {
+                NotaForm::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+        }
+    }
+}
+
 impl<'new_alloc> CloneIn<'new_alloc> for NotaMarkupKind<'_> {
     type Cloned = NotaMarkupKind<'new_alloc>;
 
@@ -8610,6 +8648,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
         match self {
             Self::Text(it) => NotaChild::Text(CloneIn::clone_in(it, allocator)),
             Self::Statement(it) => NotaChild::Statement(CloneIn::clone_in(it, allocator)),
+            Self::Emphasis(it) => NotaChild::Emphasis(CloneIn::clone_in(it, allocator)),
+            Self::Heading(it) => NotaChild::Heading(CloneIn::clone_in(it, allocator)),
+            Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
             Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
             Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
             Self::Interpolation(it) => NotaChild::Interpolation(CloneIn::clone_in(it, allocator)),
@@ -8618,9 +8659,6 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::Code(it) => NotaChild::Code(CloneIn::clone_in(it, allocator)),
             Self::Math(it) => NotaChild::Math(CloneIn::clone_in(it, allocator)),
             Self::Verbatim(it) => NotaChild::Verbatim(CloneIn::clone_in(it, allocator)),
-            Self::Emphasis(it) => NotaChild::Emphasis(CloneIn::clone_in(it, allocator)),
-            Self::Heading(it) => NotaChild::Heading(CloneIn::clone_in(it, allocator)),
-            Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
         }
     }
 
@@ -8629,6 +8667,15 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::Text(it) => NotaChild::Text(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Statement(it) => {
                 NotaChild::Statement(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Emphasis(it) => {
+                NotaChild::Emphasis(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Heading(it) => {
+                NotaChild::Heading(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::ListItem(it) => {
+                NotaChild::ListItem(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
             Self::Element(it) => {
                 NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
@@ -8645,15 +8692,6 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::Math(it) => NotaChild::Math(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Verbatim(it) => {
                 NotaChild::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
-            }
-            Self::Emphasis(it) => {
-                NotaChild::Emphasis(CloneIn::clone_in_with_semantic_ids(it, allocator))
-            }
-            Self::Heading(it) => {
-                NotaChild::Heading(CloneIn::clone_in_with_semantic_ids(it, allocator))
-            }
-            Self::ListItem(it) => {
-                NotaChild::ListItem(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
         }
     }
@@ -8861,7 +8899,16 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaPropValue<'_> {
     fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
         match self {
             Self::Expression(it) => NotaPropValue::Expression(CloneIn::clone_in(it, allocator)),
-            Self::Markup(it) => NotaPropValue::Markup(CloneIn::clone_in(it, allocator)),
+            Self::Element(it) => NotaPropValue::Element(CloneIn::clone_in(it, allocator)),
+            Self::Fragment(it) => NotaPropValue::Fragment(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => {
+                NotaPropValue::Interpolation(CloneIn::clone_in(it, allocator))
+            }
+            Self::If(it) => NotaPropValue::If(CloneIn::clone_in(it, allocator)),
+            Self::For(it) => NotaPropValue::For(CloneIn::clone_in(it, allocator)),
+            Self::Code(it) => NotaPropValue::Code(CloneIn::clone_in(it, allocator)),
+            Self::Math(it) => NotaPropValue::Math(CloneIn::clone_in(it, allocator)),
+            Self::Verbatim(it) => NotaPropValue::Verbatim(CloneIn::clone_in(it, allocator)),
         }
     }
 
@@ -8870,8 +8917,25 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaPropValue<'_> {
             Self::Expression(it) => {
                 NotaPropValue::Expression(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
-            Self::Markup(it) => {
-                NotaPropValue::Markup(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            Self::Element(it) => {
+                NotaPropValue::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Fragment(it) => {
+                NotaPropValue::Fragment(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Interpolation(it) => {
+                NotaPropValue::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::If(it) => NotaPropValue::If(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::For(it) => NotaPropValue::For(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Code(it) => {
+                NotaPropValue::Code(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Math(it) => {
+                NotaPropValue::Math(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Verbatim(it) => {
+                NotaPropValue::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
         }
     }
@@ -9141,7 +9205,16 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatimPart<'_> {
     fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
         match self {
             Self::Raw(it) => NotaVerbatimPart::Raw(CloneIn::clone_in(it, allocator)),
-            Self::Child(it) => NotaVerbatimPart::Child(CloneIn::clone_in(it, allocator)),
+            Self::Element(it) => NotaVerbatimPart::Element(CloneIn::clone_in(it, allocator)),
+            Self::Fragment(it) => NotaVerbatimPart::Fragment(CloneIn::clone_in(it, allocator)),
+            Self::Interpolation(it) => {
+                NotaVerbatimPart::Interpolation(CloneIn::clone_in(it, allocator))
+            }
+            Self::If(it) => NotaVerbatimPart::If(CloneIn::clone_in(it, allocator)),
+            Self::For(it) => NotaVerbatimPart::For(CloneIn::clone_in(it, allocator)),
+            Self::Code(it) => NotaVerbatimPart::Code(CloneIn::clone_in(it, allocator)),
+            Self::Math(it) => NotaVerbatimPart::Math(CloneIn::clone_in(it, allocator)),
+            Self::Verbatim(it) => NotaVerbatimPart::Verbatim(CloneIn::clone_in(it, allocator)),
         }
     }
 
@@ -9150,8 +9223,29 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatimPart<'_> {
             Self::Raw(it) => {
                 NotaVerbatimPart::Raw(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
-            Self::Child(it) => {
-                NotaVerbatimPart::Child(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            Self::Element(it) => {
+                NotaVerbatimPart::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Fragment(it) => {
+                NotaVerbatimPart::Fragment(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Interpolation(it) => {
+                NotaVerbatimPart::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::If(it) => {
+                NotaVerbatimPart::If(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::For(it) => {
+                NotaVerbatimPart::For(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Code(it) => {
+                NotaVerbatimPart::Code(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Math(it) => {
+                NotaVerbatimPart::Math(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::Verbatim(it) => {
+                NotaVerbatimPart::Verbatim(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
         }
     }

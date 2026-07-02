@@ -116,21 +116,28 @@ impl<'a> NotaLowering<'a> {
 
     /// Lower a markup form in expression position.
     fn lower_markup(&mut self, markup: NotaMarkup<'a>) -> Expression<'a> {
-        let span = markup.span;
         match markup.kind {
-            NotaMarkupKind::Element(e) => self.lower_element(e.unbox()),
-            NotaMarkupKind::Fragment(f) => self.lower_fragment(f.unbox(), true),
-            NotaMarkupKind::Interpolation(i) => self.lower_interpolation(i.unbox()),
-            NotaMarkupKind::If(n) => self.lower_if(n.unbox()),
-            NotaMarkupKind::For(n) => self.lower_for(n.unbox()),
-            NotaMarkupKind::Code(c) => self.lower_code(c.unbox()),
-            NotaMarkupKind::Math(m) => self.lower_math(m.unbox()),
-            NotaMarkupKind::Verbatim(v) => self.lower_verbatim(v.unbox()),
-            // A document lowers via `lower_document`; one can only reach here as a `Dummy`
-            // placeholder from a parse error (the result is discarded).
+            // A document lowers via `lower_document`; one can only reach here from a parse-error
+            // placeholder (the result is discarded).
             NotaMarkupKind::Document(_) => {
-                self.ast.expression_null_literal(Span::empty(span.start))
+                self.ast.expression_null_literal(Span::empty(markup.span.start))
             }
+            kind => self.lower_form(kind.into_nota_form()),
+        }
+    }
+
+    /// Lower one `@`-form — the single dispatch every form-holding position
+    /// (`NotaMarkupKind`/`NotaChild`/`NotaPropValue`/`NotaVerbatimPart`) funnels into.
+    fn lower_form(&mut self, form: NotaForm<'a>) -> Expression<'a> {
+        match form {
+            NotaForm::Element(e) => self.lower_element(e.unbox()),
+            NotaForm::Fragment(f) => self.lower_fragment(f.unbox(), true),
+            NotaForm::Interpolation(i) => self.lower_interpolation(i.unbox()),
+            NotaForm::If(n) => self.lower_if(n.unbox()),
+            NotaForm::For(n) => self.lower_for(n.unbox()),
+            NotaForm::Code(c) => self.lower_code(c.unbox()),
+            NotaForm::Math(m) => self.lower_math(m.unbox()),
+            NotaForm::Verbatim(v) => self.lower_verbatim(v.unbox()),
         }
     }
 
@@ -138,20 +145,13 @@ impl<'a> NotaLowering<'a> {
     /// whitespace/statement machinery in [`Self::lower_children`]).
     fn lower_child(&mut self, child: NotaChild<'a>) -> Expression<'a> {
         match child {
-            NotaChild::Element(e) => self.lower_element(e.unbox()),
-            NotaChild::Fragment(f) => self.lower_fragment(f.unbox(), true),
-            NotaChild::Interpolation(i) => self.lower_interpolation(i.unbox()),
-            NotaChild::If(n) => self.lower_if(n.unbox()),
-            NotaChild::For(n) => self.lower_for(n.unbox()),
-            NotaChild::Code(c) => self.lower_code(c.unbox()),
-            NotaChild::Math(m) => self.lower_math(m.unbox()),
-            NotaChild::Verbatim(v) => self.lower_verbatim(v.unbox()),
             NotaChild::Emphasis(e) => self.lower_emphasis(e.unbox()),
             NotaChild::Heading(h) => self.lower_heading(h.unbox()),
             NotaChild::ListItem(li) => self.lower_list_item(li.unbox()),
             NotaChild::Text(_) | NotaChild::Statement(_) => {
                 unreachable!("Text/Statement handled by lower_children")
             }
+            form @ (match_nota_form!(NotaChild)) => self.lower_form(form.into_nota_form()),
         }
     }
 
@@ -277,7 +277,8 @@ impl<'a> NotaLowering<'a> {
                             self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
                             expr
                         }
-                        NotaPropValue::Markup(m) => self.lower_markup(m.unbox()),
+                        // A markup-valued prop (`key: @em{..}`) — the inherited form variants.
+                        form => self.lower_form(form.into_nota_form()),
                     };
                     // `obj_prop` picks a bare vs string-literal key (`data-x`) by ident validity.
                     self.obj_prop(span, name.span, name.name.as_str(), value, false)
@@ -410,7 +411,8 @@ impl<'a> NotaLowering<'a> {
                     let t = t.unbox();
                     self.build_string_raw(t.span, t.value.as_str())
                 }
-                NotaVerbatimPart::Child(m) => self.lower_markup(m.unbox()),
+                // A `|@`-re-entered form — the inherited form variants.
+                form => self.lower_form(form.into_nota_form()),
             });
         }
         self.lower_tagged(span, tag, self.ast.vec(), children)

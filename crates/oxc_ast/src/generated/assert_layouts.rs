@@ -1824,6 +1824,9 @@ const _: () = {
     assert!(offset_of!(NotaMarkup, node_id) == 8);
     assert!(offset_of!(NotaMarkup, kind) == 16);
 
+    assert!(size_of::<NotaForm>() == 16);
+    assert!(align_of::<NotaForm>() == 8);
+
     assert!(size_of::<NotaMarkupKind>() == 16);
     assert!(align_of::<NotaMarkupKind>() == 8);
 
@@ -3833,6 +3836,9 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaMarkup, span) == 0);
     assert!(offset_of!(NotaMarkup, node_id) == 8);
     assert!(offset_of!(NotaMarkup, kind) == 12);
+
+    assert!(size_of::<NotaForm>() == 8);
+    assert!(align_of::<NotaForm>() == 4);
 
     assert!(size_of::<NotaMarkupKind>() == 8);
     assert!(align_of::<NotaMarkupKind>() == 4);

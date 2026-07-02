@@ -2195,6 +2195,21 @@ impl GetSpanMut for NotaMarkup<'_> {
     }
 }
 
+impl GetSpanMut for NotaForm<'_> {
+    fn span_mut(&mut self) -> &mut Span {
+        match self {
+            Self::Element(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+            Self::If(it) => GetSpanMut::span_mut(&mut **it),
+            Self::For(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Code(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Math(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
+        }
+    }
+}
+
 impl GetSpanMut for NotaMarkupKind<'_> {
     fn span_mut(&mut self) -> &mut Span {
         match self {
@@ -2223,6 +2238,9 @@ impl GetSpanMut for NotaChild<'_> {
         match self {
             Self::Text(it) => GetSpanMut::span_mut(&mut **it),
             Self::Statement(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Emphasis(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Heading(it) => GetSpanMut::span_mut(&mut **it),
+            Self::ListItem(it) => GetSpanMut::span_mut(&mut **it),
             Self::Element(it) => GetSpanMut::span_mut(&mut **it),
             Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
             Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
@@ -2231,9 +2249,6 @@ impl GetSpanMut for NotaChild<'_> {
             Self::Code(it) => GetSpanMut::span_mut(&mut **it),
             Self::Math(it) => GetSpanMut::span_mut(&mut **it),
             Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
-            Self::Emphasis(it) => GetSpanMut::span_mut(&mut **it),
-            Self::Heading(it) => GetSpanMut::span_mut(&mut **it),
-            Self::ListItem(it) => GetSpanMut::span_mut(&mut **it),
         }
     }
 }
@@ -2311,7 +2326,14 @@ impl GetSpanMut for NotaPropValue<'_> {
     fn span_mut(&mut self) -> &mut Span {
         match self {
             Self::Expression(it) => GetSpanMut::span_mut(&mut **it),
-            Self::Markup(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Element(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+            Self::If(it) => GetSpanMut::span_mut(&mut **it),
+            Self::For(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Code(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Math(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
         }
     }
 }
@@ -2408,7 +2430,14 @@ impl GetSpanMut for NotaVerbatimPart<'_> {
     fn span_mut(&mut self) -> &mut Span {
         match self {
             Self::Raw(it) => GetSpanMut::span_mut(&mut **it),
-            Self::Child(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Element(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
+            Self::If(it) => GetSpanMut::span_mut(&mut **it),
+            Self::For(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Code(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Math(it) => GetSpanMut::span_mut(&mut **it),
+            Self::Verbatim(it) => GetSpanMut::span_mut(&mut **it),
         }
     }
 }

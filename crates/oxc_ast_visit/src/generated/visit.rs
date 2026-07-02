@@ -1205,6 +1205,11 @@ pub trait Visit<'a>: Sized {
     }
 
     #[inline]
+    fn visit_nota_form(&mut self, it: &NotaForm<'a>) {
+        walk_nota_form(self, it);
+    }
+
+    #[inline]
     fn visit_nota_markup_kind(&mut self, it: &NotaMarkupKind<'a>) {
         walk_nota_markup_kind(self, it);
     }
@@ -4415,18 +4420,26 @@ pub mod walk {
         visitor.leave_node(kind);
     }
 
+    pub fn walk_nota_form<'a, V: Visit<'a>>(visitor: &mut V, it: &NotaForm<'a>) {
+        // No `AstKind` for this type
+        match it {
+            NotaForm::Element(it) => visitor.visit_nota_element(it),
+            NotaForm::Fragment(it) => visitor.visit_nota_fragment(it),
+            NotaForm::Interpolation(it) => visitor.visit_nota_interpolation(it),
+            NotaForm::If(it) => visitor.visit_nota_if(it),
+            NotaForm::For(it) => visitor.visit_nota_for(it),
+            NotaForm::Code(it) => visitor.visit_nota_code(it),
+            NotaForm::Math(it) => visitor.visit_nota_math(it),
+            NotaForm::Verbatim(it) => visitor.visit_nota_verbatim(it),
+        }
+    }
+
+    #[inline]
     pub fn walk_nota_markup_kind<'a, V: Visit<'a>>(visitor: &mut V, it: &NotaMarkupKind<'a>) {
         // No `AstKind` for this type
         match it {
             NotaMarkupKind::Document(it) => visitor.visit_nota_document(it),
-            NotaMarkupKind::Element(it) => visitor.visit_nota_element(it),
-            NotaMarkupKind::Fragment(it) => visitor.visit_nota_fragment(it),
-            NotaMarkupKind::Interpolation(it) => visitor.visit_nota_interpolation(it),
-            NotaMarkupKind::If(it) => visitor.visit_nota_if(it),
-            NotaMarkupKind::For(it) => visitor.visit_nota_for(it),
-            NotaMarkupKind::Code(it) => visitor.visit_nota_code(it),
-            NotaMarkupKind::Math(it) => visitor.visit_nota_math(it),
-            NotaMarkupKind::Verbatim(it) => visitor.visit_nota_verbatim(it),
+            match_nota_form!(NotaMarkupKind) => visitor.visit_nota_form(it.to_nota_form()),
         }
     }
 
@@ -4444,17 +4457,10 @@ pub mod walk {
         match it {
             NotaChild::Text(it) => visitor.visit_nota_text(it),
             NotaChild::Statement(it) => visitor.visit_nota_statement(it),
-            NotaChild::Element(it) => visitor.visit_nota_element(it),
-            NotaChild::Fragment(it) => visitor.visit_nota_fragment(it),
-            NotaChild::Interpolation(it) => visitor.visit_nota_interpolation(it),
-            NotaChild::If(it) => visitor.visit_nota_if(it),
-            NotaChild::For(it) => visitor.visit_nota_for(it),
-            NotaChild::Code(it) => visitor.visit_nota_code(it),
-            NotaChild::Math(it) => visitor.visit_nota_math(it),
-            NotaChild::Verbatim(it) => visitor.visit_nota_verbatim(it),
             NotaChild::Emphasis(it) => visitor.visit_nota_emphasis(it),
             NotaChild::Heading(it) => visitor.visit_nota_heading(it),
             NotaChild::ListItem(it) => visitor.visit_nota_list_item(it),
+            match_nota_form!(NotaChild) => visitor.visit_nota_form(it.to_nota_form()),
         }
     }
 
@@ -4546,7 +4552,7 @@ pub mod walk {
         // No `AstKind` for this type
         match it {
             NotaPropValue::Expression(it) => visitor.visit_nota_prop_expr(it),
-            NotaPropValue::Markup(it) => visitor.visit_nota_markup(it),
+            match_nota_form!(NotaPropValue) => visitor.visit_nota_form(it.to_nota_form()),
         }
     }
 
@@ -4669,7 +4675,7 @@ pub mod walk {
         // No `AstKind` for this type
         match it {
             NotaVerbatimPart::Raw(it) => visitor.visit_nota_text(it),
-            NotaVerbatimPart::Child(it) => visitor.visit_nota_markup(it),
+            match_nota_form!(NotaVerbatimPart) => visitor.visit_nota_form(it.to_nota_form()),
         }
     }
 

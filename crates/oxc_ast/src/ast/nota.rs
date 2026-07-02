@@ -12,11 +12,14 @@
 //! ## Shape (faithful surface tree; Scribble whitespace + all Nota→JS lowering run in a later pass)
 //!
 //! [`NotaMarkup`] is the single umbrella that hangs off `Expression::NotaMarkup` (discriminant 40).
-//! Its [`NotaMarkupKind`] covers every expression-position form plus the document root. The forms
-//! ([`NotaElement`], [`NotaFragment`], …) are *shared structs*, reused by the markup-body child list
-//! [`NotaChild`] — exactly as oxc reuses [`JSXElement`](super::JSXElement) in both `Expression` and
-//! `JSXChild`. Embedded JS ([`Expression`]/[`Statement`]/[`IdentifierReference`]/[`BindingPattern`])
-//! sits verbatim at the leaves with real source spans.
+//! The eight `@`-forms live in the [`NotaForm`] sub-enum, whose variants are *inherited* (via
+//! `inherit_variants!` — the `Statement`/`Declaration` pattern) by every position that can hold
+//! any form: [`NotaMarkupKind`] (forms + the document root), the markup-body child list
+//! [`NotaChild`], markup-valued props ([`NotaPropValue`]), and verbatim `|@` re-entries
+//! ([`NotaVerbatimPart`]). Positions other than `NotaMarkupKind` cannot hold a document — by
+//! construction, not by `unreachable!`. Embedded JS
+//! ([`Expression`]/[`Statement`]/[`IdentifierReference`]/[`BindingPattern`]) sits verbatim at the
+//! leaves with real source spans.
 
 use std::cell::Cell;
 
@@ -28,6 +31,7 @@ use oxc_str::Str;
 use oxc_syntax::node::NodeId;
 
 use super::js::{BindingPattern, Expression, IdentifierReference, Statement};
+use super::macros::inherit_variants;
 
 // ===============================================================================================
 // Umbrella
@@ -46,29 +50,64 @@ pub struct NotaMarkup<'a> {
     pub kind: NotaMarkupKind<'a>,
 }
 
+/// One `@`-form — the eight markup forms sharable across every position that can hold a form.
+///
+/// [`NotaMarkupKind`], [`NotaChild`], [`NotaPropValue`], and [`NotaVerbatimPart`] all inherit
+/// these variants via `inherit_variants!`, so a parsed form converts to any of those positions
+/// with the zero-cost `From`/`to_nota_form` conversions (`shared_enum_variants!`).
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
+pub enum NotaForm<'a> {
+    /// `@p[..]{..}` / `@Aside{..}` / `@(expr){..}` — an element.
+    Element(Box<'a, NotaElement<'a>>) = 0,
+    /// `@{..}` — an anonymous fragment.
+    Fragment(Box<'a, NotaFragment<'a>>) = 1,
+    /// `@name` / `@(expr)` — an interpolated JS expression.
+    Interpolation(Box<'a, NotaInterpolation<'a>>) = 2,
+    /// `@if (c) {..} else {..}`.
+    If(Box<'a, NotaIf<'a>>) = 3,
+    /// `@for (x of xs) {..}`.
+    For(Box<'a, NotaFor<'a>>) = 4,
+    /// `` `code` `` / fenced ```` ```lang ```` — inline or block code.
+    Code(Box<'a, NotaCode<'a>>) = 5,
+    /// `$math$` / `$$display$$`.
+    Math(Box<'a, NotaMath<'a>>) = 6,
+    /// `@tag|{ raw }|` — a verbatim body.
+    Verbatim(Box<'a, NotaVerbatim<'a>>) = 7,
+}
+
+/// Macro for matching `NotaForm`'s variants on an enum that inherits them.
+#[macro_export]
+macro_rules! match_nota_form {
+    ($ty:ident) => {
+        $ty::Element(_)
+            | $ty::Fragment(_)
+            | $ty::Interpolation(_)
+            | $ty::If(_)
+            | $ty::For(_)
+            | $ty::Code(_)
+            | $ty::Math(_)
+            | $ty::Verbatim(_)
+    };
+}
+pub use match_nota_form;
+
+inherit_variants! {
 /// The markup forms reachable in expression position, plus the document root.
+///
+/// Inherits variants from [`NotaForm`]. See [`ast` module docs] for explanation of inheritance.
+///
+/// [`ast` module docs]: `super`
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
 pub enum NotaMarkupKind<'a> {
     /// The whole `.nota` document (top-level form; full-document deferral).
-    Document(Box<'a, NotaDocument<'a>>) = 0,
-    /// `@p[..]{..}` / `@Aside{..}` / `@(expr){..}` — an element.
-    Element(Box<'a, NotaElement<'a>>) = 1,
-    /// `@{..}` — an anonymous fragment.
-    Fragment(Box<'a, NotaFragment<'a>>) = 2,
-    /// `@name` / `@(expr)` — an interpolated JS expression.
-    Interpolation(Box<'a, NotaInterpolation<'a>>) = 3,
-    /// `@if (c) {..} else {..}`.
-    If(Box<'a, NotaIf<'a>>) = 4,
-    /// `@for (x of xs) {..}`.
-    For(Box<'a, NotaFor<'a>>) = 5,
-    /// `` `code` `` / fenced ```` ```lang ```` — inline or block code.
-    Code(Box<'a, NotaCode<'a>>) = 6,
-    /// `$math$` / `$$display$$`.
-    Math(Box<'a, NotaMath<'a>>) = 7,
-    /// `@tag|{ raw }|` — a verbatim body.
-    Verbatim(Box<'a, NotaVerbatim<'a>>) = 8,
+    Document(Box<'a, NotaDocument<'a>>) = 8,
+    // `NotaForm` variants added here by `inherit_variants!` macro
+    @inherit NotaForm
+}
 }
 
 // ===============================================================================================
@@ -91,37 +130,29 @@ pub struct NotaDocument<'a> {
 // Children (markup-body items)
 // ===============================================================================================
 
+inherit_variants! {
 /// One item in a markup body: a form, an embedded statement, or line/inline sugar.
+///
+/// Inherits variants from [`NotaForm`]. See [`ast` module docs] for explanation of inheritance.
+///
+/// [`ast` module docs]: `super`
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
 pub enum NotaChild<'a> {
     /// A raw literal text run (whitespace unprocessed; Scribble runs in lowering).
-    Text(Box<'a, NotaText<'a>>) = 0,
+    Text(Box<'a, NotaText<'a>>) = 8,
     /// A `%`/`%%%` embedded JS statement.
-    Statement(Box<'a, NotaStatement<'a>>) = 1,
-    /// A nested element.
-    Element(Box<'a, NotaElement<'a>>) = 2,
-    /// A nested fragment.
-    Fragment(Box<'a, NotaFragment<'a>>) = 3,
-    /// `@name` / `@(expr)` interpolation.
-    Interpolation(Box<'a, NotaInterpolation<'a>>) = 4,
-    /// `@if`.
-    If(Box<'a, NotaIf<'a>>) = 5,
-    /// `@for`.
-    For(Box<'a, NotaFor<'a>>) = 6,
-    /// Inline/fenced code.
-    Code(Box<'a, NotaCode<'a>>) = 7,
-    /// Inline/display math.
-    Math(Box<'a, NotaMath<'a>>) = 8,
-    /// Verbatim body.
-    Verbatim(Box<'a, NotaVerbatim<'a>>) = 9,
+    Statement(Box<'a, NotaStatement<'a>>) = 9,
     /// `*strong*` / `_em_` emphasis.
     Emphasis(Box<'a, NotaEmphasis<'a>>) = 10,
     /// `#`..`######` heading.
     Heading(Box<'a, NotaHeading<'a>>) = 11,
     /// `-`/`+`/`N.` list item (per-line; the runtime coalesces runs).
     ListItem(Box<'a, NotaListItem<'a>>) = 12,
+    // `NotaForm` variants added here by `inherit_variants!` macro
+    @inherit NotaForm
+}
 }
 
 /// A raw literal text run — the source slice, whitespace not yet processed.
@@ -237,15 +268,22 @@ pub struct NotaPropName<'a> {
     pub name: Str<'a>,
 }
 
-/// A prop value: a JS expression, or nested markup (a markup-valued prop).
+inherit_variants! {
+/// A prop value: a JS expression, or nested markup (a markup-valued prop, `key: @em{..}` —
+/// the inherited [`NotaForm`] variants).
+///
+/// Inherits variants from [`NotaForm`]. See [`ast` module docs] for explanation of inheritance.
+///
+/// [`ast` module docs]: `super`
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
 pub enum NotaPropValue<'a> {
     /// `key: expr` (incl. string literals — they parse as `Expression::StringLiteral`).
-    Expression(Box<'a, NotaPropExpr<'a>>) = 0,
-    /// `key: @em{..}` — a markup-valued prop.
-    Markup(Box<'a, NotaMarkup<'a>>) = 1,
+    Expression(Box<'a, NotaPropExpr<'a>>) = 8,
+    // `NotaForm` variants added here by `inherit_variants!` macro
+    @inherit NotaForm
+}
 }
 
 /// A JS-expression prop value.
@@ -391,15 +429,22 @@ pub struct NotaVerbatim<'a> {
     pub parts: Vec<'a, NotaVerbatimPart<'a>>,
 }
 
-/// One piece of a [`NotaVerbatim`] body.
+inherit_variants! {
+/// One piece of a [`NotaVerbatim`] body: a raw text run, or a `|@`-re-entered Nota form (a
+/// sibling child — the inherited [`NotaForm`] variants).
+///
+/// Inherits variants from [`NotaForm`]. See [`ast` module docs] for explanation of inheritance.
+///
+/// [`ast` module docs]: `super`
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
 pub enum NotaVerbatimPart<'a> {
     /// A raw text run.
-    Raw(Box<'a, NotaText<'a>>) = 0,
-    /// A `|@`-re-entered Nota form (a sibling child).
-    Child(Box<'a, NotaMarkup<'a>>) = 1,
+    Raw(Box<'a, NotaText<'a>>) = 8,
+    // `NotaForm` variants added here by `inherit_variants!` macro
+    @inherit NotaForm
+}
 }
 
 // ===============================================================================================

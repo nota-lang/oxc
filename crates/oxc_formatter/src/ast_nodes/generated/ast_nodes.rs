@@ -10706,6 +10706,66 @@ impl<'a> AstNode<'a, NotaMarkup<'a>> {
     }
 }
 
+impl<'a> AstNode<'a, NotaForm<'a>> {
+    #[inline]
+    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
+        let parent = self.parent;
+        let node = match self.inner {
+            NotaForm::Element(s) => AstNodes::NotaElement(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::Fragment(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::Interpolation(s) => {
+                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
+                    inner: s.as_ref(),
+                    parent,
+                    allocator: self.allocator,
+                    following_span_start: self.following_span_start,
+                }))
+            }
+            NotaForm::If(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::For(s) => AstNodes::NotaFor(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::Code(s) => AstNodes::NotaCode(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::Math(s) => AstNodes::NotaMath(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+            NotaForm::Verbatim(s) => AstNodes::NotaVerbatim(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
+        };
+        self.allocator.alloc(node)
+    }
+}
+
 impl<'a> AstNode<'a, NotaMarkupKind<'a>> {
     #[inline]
     pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
@@ -10717,56 +10777,17 @@ impl<'a> AstNode<'a, NotaMarkupKind<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
-            NotaMarkupKind::Element(s) => AstNodes::NotaElement(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::Fragment(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::Interpolation(s) => {
-                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
-                    inner: s.as_ref(),
-                    parent,
-                    allocator: self.allocator,
-                    following_span_start: self.following_span_start,
-                }))
+            it @ match_nota_form!(NotaMarkupKind) => {
+                return self
+                    .allocator
+                    .alloc(AstNode {
+                        inner: it.to_nota_form(),
+                        parent,
+                        allocator: self.allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .as_ast_nodes();
             }
-            NotaMarkupKind::If(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::For(s) => AstNodes::NotaFor(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::Code(s) => AstNodes::NotaCode(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::Math(s) => AstNodes::NotaMath(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMarkupKind::Verbatim(s) => AstNodes::NotaVerbatim(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
         };
         self.allocator.alloc(node)
     }
@@ -10816,56 +10837,6 @@ impl<'a> AstNode<'a, NotaChild<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
-            NotaChild::Element(s) => AstNodes::NotaElement(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::Fragment(s) => AstNodes::NotaFragment(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::Interpolation(s) => {
-                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
-                    inner: s.as_ref(),
-                    parent,
-                    allocator: self.allocator,
-                    following_span_start: self.following_span_start,
-                }))
-            }
-            NotaChild::If(s) => AstNodes::NotaIf(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::For(s) => AstNodes::NotaFor(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::Code(s) => AstNodes::NotaCode(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::Math(s) => AstNodes::NotaMath(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaChild::Verbatim(s) => AstNodes::NotaVerbatim(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
             NotaChild::Emphasis(s) => AstNodes::NotaEmphasis(self.allocator.alloc(AstNode {
                 inner: s.as_ref(),
                 parent,
@@ -10884,6 +10855,17 @@ impl<'a> AstNode<'a, NotaChild<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
+            it @ match_nota_form!(NotaChild) => {
+                return self
+                    .allocator
+                    .alloc(AstNode {
+                        inner: it.to_nota_form(),
+                        parent,
+                        allocator: self.allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .as_ast_nodes();
+            }
         };
         self.allocator.alloc(node)
     }
@@ -11178,12 +11160,17 @@ impl<'a> AstNode<'a, NotaPropValue<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
-            NotaPropValue::Markup(s) => AstNodes::NotaMarkup(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
+            it @ match_nota_form!(NotaPropValue) => {
+                return self
+                    .allocator
+                    .alloc(AstNode {
+                        inner: it.to_nota_form(),
+                        parent,
+                        allocator: self.allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .as_ast_nodes();
+            }
         };
         self.allocator.alloc(node)
     }
@@ -11594,12 +11581,17 @@ impl<'a> AstNode<'a, NotaVerbatimPart<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
-            NotaVerbatimPart::Child(s) => AstNodes::NotaMarkup(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
+            it @ match_nota_form!(NotaVerbatimPart) => {
+                return self
+                    .allocator
+                    .alloc(AstNode {
+                        inner: it.to_nota_form(),
+                        parent,
+                        allocator: self.allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .as_ast_nodes();
+            }
         };
         self.allocator.alloc(node)
     }

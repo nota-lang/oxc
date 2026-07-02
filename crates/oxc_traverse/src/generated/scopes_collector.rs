@@ -2032,6 +2032,22 @@ impl<'a> Visit<'a> for ChildScopeCollector {
         self.visit_nota_markup_kind(&it.kind);
     }
 
+    fn visit_nota_form(&mut self, it: &NotaForm<'a>) {
+        match it {
+            NotaForm::Element(it) => self.visit_nota_element(it),
+            NotaForm::Fragment(it) => self.visit_nota_fragment(it),
+            NotaForm::Interpolation(it) => self.visit_nota_interpolation(it),
+            NotaForm::If(it) => self.visit_nota_if(it),
+            NotaForm::For(it) => self.visit_nota_for(it),
+            NotaForm::Math(it) => self.visit_nota_math(it),
+            NotaForm::Verbatim(it) => self.visit_nota_verbatim(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Code`
+            }
+        }
+    }
+
     fn visit_nota_markup_kind(&mut self, it: &NotaMarkupKind<'a>) {
         match it {
             NotaMarkupKind::Document(it) => self.visit_nota_document(it),
@@ -2057,6 +2073,9 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     fn visit_nota_child(&mut self, it: &NotaChild<'a>) {
         match it {
             NotaChild::Statement(it) => self.visit_nota_statement(it),
+            NotaChild::Emphasis(it) => self.visit_nota_emphasis(it),
+            NotaChild::Heading(it) => self.visit_nota_heading(it),
+            NotaChild::ListItem(it) => self.visit_nota_list_item(it),
             NotaChild::Element(it) => self.visit_nota_element(it),
             NotaChild::Fragment(it) => self.visit_nota_fragment(it),
             NotaChild::Interpolation(it) => self.visit_nota_interpolation(it),
@@ -2064,9 +2083,6 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             NotaChild::For(it) => self.visit_nota_for(it),
             NotaChild::Math(it) => self.visit_nota_math(it),
             NotaChild::Verbatim(it) => self.visit_nota_verbatim(it),
-            NotaChild::Emphasis(it) => self.visit_nota_emphasis(it),
-            NotaChild::Heading(it) => self.visit_nota_heading(it),
-            NotaChild::ListItem(it) => self.visit_nota_list_item(it),
             _ => {
                 // Remaining variants do not contain scopes:
                 // `Text`
@@ -2134,6 +2150,23 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline(always)]
     fn visit_nota_prop_name(&mut self, it: &NotaPropName<'a>) {
         // Struct does not contain a scope. Halt traversal.
+    }
+
+    fn visit_nota_prop_value(&mut self, it: &NotaPropValue<'a>) {
+        match it {
+            NotaPropValue::Expression(it) => self.visit_nota_prop_expr(it),
+            NotaPropValue::Element(it) => self.visit_nota_element(it),
+            NotaPropValue::Fragment(it) => self.visit_nota_fragment(it),
+            NotaPropValue::Interpolation(it) => self.visit_nota_interpolation(it),
+            NotaPropValue::If(it) => self.visit_nota_if(it),
+            NotaPropValue::For(it) => self.visit_nota_for(it),
+            NotaPropValue::Math(it) => self.visit_nota_math(it),
+            NotaPropValue::Verbatim(it) => self.visit_nota_verbatim(it),
+            _ => {
+                // Remaining variants do not contain scopes:
+                // `Code`
+            }
+        }
     }
 
     #[inline]
@@ -2204,13 +2237,19 @@ impl<'a> Visit<'a> for ChildScopeCollector {
         self.visit_nota_verbatim_parts(&it.parts);
     }
 
-    #[inline]
     fn visit_nota_verbatim_part(&mut self, it: &NotaVerbatimPart<'a>) {
         match it {
-            NotaVerbatimPart::Child(it) => self.visit_nota_markup(it),
+            NotaVerbatimPart::Element(it) => self.visit_nota_element(it),
+            NotaVerbatimPart::Fragment(it) => self.visit_nota_fragment(it),
+            NotaVerbatimPart::Interpolation(it) => self.visit_nota_interpolation(it),
+            NotaVerbatimPart::If(it) => self.visit_nota_if(it),
+            NotaVerbatimPart::For(it) => self.visit_nota_for(it),
+            NotaVerbatimPart::Math(it) => self.visit_nota_math(it),
+            NotaVerbatimPart::Verbatim(it) => self.visit_nota_verbatim(it),
             _ => {
                 // Remaining variants do not contain scopes:
                 // `Raw`
+                // `Code`
             }
         }
     }

@@ -4796,6 +4796,24 @@ impl TSModuleReference<'_> {
     }
 }
 
+impl NotaForm<'_> {
+    /// Get [`NodeId`] of [`NotaForm`].
+    // `#[inline(always)]` because this should boil down to a single instruction.
+    #[inline(always)]
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Self::Element(it) => it.node_id(),
+            Self::Fragment(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+            Self::If(it) => it.node_id(),
+            Self::For(it) => it.node_id(),
+            Self::Code(it) => it.node_id(),
+            Self::Math(it) => it.node_id(),
+            Self::Verbatim(it) => it.node_id(),
+        }
+    }
+}
+
 impl NotaMarkupKind<'_> {
     /// Get [`NodeId`] of [`NotaMarkupKind`].
     // `#[inline(always)]` because this should boil down to a single instruction.
@@ -4823,6 +4841,9 @@ impl NotaChild<'_> {
         match self {
             Self::Text(it) => it.node_id(),
             Self::Statement(it) => it.node_id(),
+            Self::Emphasis(it) => it.node_id(),
+            Self::Heading(it) => it.node_id(),
+            Self::ListItem(it) => it.node_id(),
             Self::Element(it) => it.node_id(),
             Self::Fragment(it) => it.node_id(),
             Self::Interpolation(it) => it.node_id(),
@@ -4831,9 +4852,6 @@ impl NotaChild<'_> {
             Self::Code(it) => it.node_id(),
             Self::Math(it) => it.node_id(),
             Self::Verbatim(it) => it.node_id(),
-            Self::Emphasis(it) => it.node_id(),
-            Self::Heading(it) => it.node_id(),
-            Self::ListItem(it) => it.node_id(),
         }
     }
 }
@@ -4871,7 +4889,14 @@ impl NotaPropValue<'_> {
     pub fn node_id(&self) -> NodeId {
         match self {
             Self::Expression(it) => it.node_id(),
-            Self::Markup(it) => it.node_id(),
+            Self::Element(it) => it.node_id(),
+            Self::Fragment(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+            Self::If(it) => it.node_id(),
+            Self::For(it) => it.node_id(),
+            Self::Code(it) => it.node_id(),
+            Self::Math(it) => it.node_id(),
+            Self::Verbatim(it) => it.node_id(),
         }
     }
 }
@@ -4907,7 +4932,14 @@ impl NotaVerbatimPart<'_> {
     pub fn node_id(&self) -> NodeId {
         match self {
             Self::Raw(it) => it.node_id(),
-            Self::Child(it) => it.node_id(),
+            Self::Element(it) => it.node_id(),
+            Self::Fragment(it) => it.node_id(),
+            Self::Interpolation(it) => it.node_id(),
+            Self::If(it) => it.node_id(),
+            Self::For(it) => it.node_id(),
+            Self::Code(it) => it.node_id(),
+            Self::Math(it) => it.node_id(),
+            Self::Verbatim(it) => it.node_id(),
         }
     }
 }

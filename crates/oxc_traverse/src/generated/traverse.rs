@@ -3122,6 +3122,11 @@ pub trait Traverse<'a, State> {
     fn exit_nota_markup(&mut self, node: &mut NotaMarkup<'a>, ctx: &mut TraverseCtx<'a, State>) {}
 
     #[inline]
+    fn enter_nota_form(&mut self, node: &mut NotaForm<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+    #[inline]
+    fn exit_nota_form(&mut self, node: &mut NotaForm<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+
+    #[inline]
     fn enter_nota_markup_kind(
         &mut self,
         node: &mut NotaMarkupKind<'a>,

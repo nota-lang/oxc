@@ -3260,6 +3260,21 @@ impl ESTree for NotaMarkup<'_> {
     }
 }
 
+impl ESTree for NotaForm<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Element(it) => it.serialize(serializer),
+            Self::Fragment(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+            Self::If(it) => it.serialize(serializer),
+            Self::For(it) => it.serialize(serializer),
+            Self::Code(it) => it.serialize(serializer),
+            Self::Math(it) => it.serialize(serializer),
+            Self::Verbatim(it) => it.serialize(serializer),
+        }
+    }
+}
+
 impl ESTree for NotaMarkupKind<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         match self {
@@ -3291,6 +3306,9 @@ impl ESTree for NotaChild<'_> {
         match self {
             Self::Text(it) => it.serialize(serializer),
             Self::Statement(it) => it.serialize(serializer),
+            Self::Emphasis(it) => it.serialize(serializer),
+            Self::Heading(it) => it.serialize(serializer),
+            Self::ListItem(it) => it.serialize(serializer),
             Self::Element(it) => it.serialize(serializer),
             Self::Fragment(it) => it.serialize(serializer),
             Self::Interpolation(it) => it.serialize(serializer),
@@ -3299,9 +3317,6 @@ impl ESTree for NotaChild<'_> {
             Self::Code(it) => it.serialize(serializer),
             Self::Math(it) => it.serialize(serializer),
             Self::Verbatim(it) => it.serialize(serializer),
-            Self::Emphasis(it) => it.serialize(serializer),
-            Self::Heading(it) => it.serialize(serializer),
-            Self::ListItem(it) => it.serialize(serializer),
         }
     }
 }
@@ -3404,7 +3419,14 @@ impl ESTree for NotaPropValue<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         match self {
             Self::Expression(it) => it.serialize(serializer),
-            Self::Markup(it) => it.serialize(serializer),
+            Self::Element(it) => it.serialize(serializer),
+            Self::Fragment(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+            Self::If(it) => it.serialize(serializer),
+            Self::For(it) => it.serialize(serializer),
+            Self::Code(it) => it.serialize(serializer),
+            Self::Math(it) => it.serialize(serializer),
+            Self::Verbatim(it) => it.serialize(serializer),
         }
     }
 }
@@ -3539,7 +3561,14 @@ impl ESTree for NotaVerbatimPart<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         match self {
             Self::Raw(it) => it.serialize(serializer),
-            Self::Child(it) => it.serialize(serializer),
+            Self::Element(it) => it.serialize(serializer),
+            Self::Fragment(it) => it.serialize(serializer),
+            Self::Interpolation(it) => it.serialize(serializer),
+            Self::If(it) => it.serialize(serializer),
+            Self::For(it) => it.serialize(serializer),
+            Self::Code(it) => it.serialize(serializer),
+            Self::Math(it) => it.serialize(serializer),
+            Self::Verbatim(it) => it.serialize(serializer),
         }
     }
 }

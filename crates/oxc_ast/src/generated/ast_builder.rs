@@ -15575,6 +15575,157 @@ impl<'a> AstBuilder<'a> {
         Box::new_in(self.nota_markup(span, kind), self.allocator)
     }
 
+    /// Build a [`NotaForm::Element`].
+    ///
+    /// This node contains a [`NotaElement`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `props`
+    /// * `children`
+    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
+    #[inline]
+    pub fn nota_form_element(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
+        children: Vec<'a, NotaChild<'a>>,
+        is_colon: bool,
+    ) -> NotaForm<'a> {
+        NotaForm::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
+    }
+
+    /// Build a [`NotaForm::Fragment`].
+    ///
+    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `children`
+    #[inline]
+    pub fn nota_form_fragment(self, span: Span, children: Vec<'a, NotaChild<'a>>) -> NotaForm<'a> {
+        NotaForm::Fragment(self.alloc_nota_fragment(span, children))
+    }
+
+    /// Build a [`NotaForm::Interpolation`].
+    ///
+    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `expression`
+    #[inline]
+    pub fn nota_form_interpolation(self, span: Span, expression: Expression<'a>) -> NotaForm<'a> {
+        NotaForm::Interpolation(self.alloc_nota_interpolation(span, expression))
+    }
+
+    /// Build a [`NotaForm::If`].
+    ///
+    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `test`
+    /// * `consequent`
+    /// * `alternate`
+    #[inline]
+    pub fn nota_form_if<T1>(
+        self,
+        span: Span,
+        test: Expression<'a>,
+        consequent: T1,
+        alternate: Option<NotaElse<'a>>,
+    ) -> NotaForm<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaForm::If(self.alloc_nota_if(span, test, consequent, alternate))
+    }
+
+    /// Build a [`NotaForm::For`].
+    ///
+    /// This node contains a [`NotaFor`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `binding`
+    /// * `iterable`
+    /// * `body`
+    #[inline]
+    pub fn nota_form_for<T1>(
+        self,
+        span: Span,
+        binding: BindingPattern<'a>,
+        iterable: Expression<'a>,
+        body: T1,
+    ) -> NotaForm<'a>
+    where
+        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
+    {
+        NotaForm::For(self.alloc_nota_for(span, binding, iterable, body))
+    }
+
+    /// Build a [`NotaForm::Code`].
+    ///
+    /// This node contains a [`NotaCode`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `language`: Fence language tag, if any (block code only).
+    /// * `value`: The raw code text.
+    /// * `block`: `true` for a fenced block, `false` for inline.
+    #[inline]
+    pub fn nota_form_code<A1>(
+        self,
+        span: Span,
+        language: Option<Str<'a>>,
+        value: A1,
+        block: bool,
+    ) -> NotaForm<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaForm::Code(self.alloc_nota_code(span, language, value, block))
+    }
+
+    /// Build a [`NotaForm::Math`].
+    ///
+    /// This node contains a [`NotaMath`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `display`: `true` for `$$display$$`.
+    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    #[inline]
+    pub fn nota_form_math(
+        self,
+        span: Span,
+        display: bool,
+        parts: Vec<'a, NotaMathPart<'a>>,
+    ) -> NotaForm<'a> {
+        NotaForm::Math(self.alloc_nota_math(span, display, parts))
+    }
+
+    /// Build a [`NotaForm::Verbatim`].
+    ///
+    /// This node contains a [`NotaVerbatim`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `tag`
+    /// * `parts`
+    #[inline]
+    pub fn nota_form_verbatim(
+        self,
+        span: Span,
+        tag: NotaTag<'a>,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaForm<'a> {
+        NotaForm::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
+    }
+
     /// Build a [`NotaMarkupKind::Document`].
     ///
     /// This node contains a [`NotaDocument`] that will be stored in the memory arena.
@@ -15589,165 +15740,6 @@ impl<'a> AstBuilder<'a> {
         items: Vec<'a, NotaChild<'a>>,
     ) -> NotaMarkupKind<'a> {
         NotaMarkupKind::Document(self.alloc_nota_document(span, items))
-    }
-
-    /// Build a [`NotaMarkupKind::Element`].
-    ///
-    /// This node contains a [`NotaElement`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `tag`
-    /// * `props`
-    /// * `children`
-    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    #[inline]
-    pub fn nota_markup_kind_element(
-        self,
-        span: Span,
-        tag: NotaTag<'a>,
-        props: Vec<'a, NotaProp<'a>>,
-        children: Vec<'a, NotaChild<'a>>,
-        is_colon: bool,
-    ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
-    }
-
-    /// Build a [`NotaMarkupKind::Fragment`].
-    ///
-    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `children`
-    #[inline]
-    pub fn nota_markup_kind_fragment(
-        self,
-        span: Span,
-        children: Vec<'a, NotaChild<'a>>,
-    ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Fragment(self.alloc_nota_fragment(span, children))
-    }
-
-    /// Build a [`NotaMarkupKind::Interpolation`].
-    ///
-    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `expression`
-    #[inline]
-    pub fn nota_markup_kind_interpolation(
-        self,
-        span: Span,
-        expression: Expression<'a>,
-    ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Interpolation(self.alloc_nota_interpolation(span, expression))
-    }
-
-    /// Build a [`NotaMarkupKind::If`].
-    ///
-    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `test`
-    /// * `consequent`
-    /// * `alternate`
-    #[inline]
-    pub fn nota_markup_kind_if<T1>(
-        self,
-        span: Span,
-        test: Expression<'a>,
-        consequent: T1,
-        alternate: Option<NotaElse<'a>>,
-    ) -> NotaMarkupKind<'a>
-    where
-        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
-    {
-        NotaMarkupKind::If(self.alloc_nota_if(span, test, consequent, alternate))
-    }
-
-    /// Build a [`NotaMarkupKind::For`].
-    ///
-    /// This node contains a [`NotaFor`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `binding`
-    /// * `iterable`
-    /// * `body`
-    #[inline]
-    pub fn nota_markup_kind_for<T1>(
-        self,
-        span: Span,
-        binding: BindingPattern<'a>,
-        iterable: Expression<'a>,
-        body: T1,
-    ) -> NotaMarkupKind<'a>
-    where
-        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
-    {
-        NotaMarkupKind::For(self.alloc_nota_for(span, binding, iterable, body))
-    }
-
-    /// Build a [`NotaMarkupKind::Code`].
-    ///
-    /// This node contains a [`NotaCode`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `language`: Fence language tag, if any (block code only).
-    /// * `value`: The raw code text.
-    /// * `block`: `true` for a fenced block, `false` for inline.
-    #[inline]
-    pub fn nota_markup_kind_code<A1>(
-        self,
-        span: Span,
-        language: Option<Str<'a>>,
-        value: A1,
-        block: bool,
-    ) -> NotaMarkupKind<'a>
-    where
-        A1: Into<Str<'a>>,
-    {
-        NotaMarkupKind::Code(self.alloc_nota_code(span, language, value, block))
-    }
-
-    /// Build a [`NotaMarkupKind::Math`].
-    ///
-    /// This node contains a [`NotaMath`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `display`: `true` for `$$display$$`.
-    /// * `parts`: Alternating raw runs and `@`-interpolations.
-    #[inline]
-    pub fn nota_markup_kind_math(
-        self,
-        span: Span,
-        display: bool,
-        parts: Vec<'a, NotaMathPart<'a>>,
-    ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Math(self.alloc_nota_math(span, display, parts))
-    }
-
-    /// Build a [`NotaMarkupKind::Verbatim`].
-    ///
-    /// This node contains a [`NotaVerbatim`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `tag`
-    /// * `parts`
-    #[inline]
-    pub fn nota_markup_kind_verbatim(
-        self,
-        span: Span,
-        tag: NotaTag<'a>,
-        parts: Vec<'a, NotaVerbatimPart<'a>>,
-    ) -> NotaMarkupKind<'a> {
-        NotaMarkupKind::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
     }
 
     /// Build a [`NotaDocument`].
@@ -15805,161 +15797,6 @@ impl<'a> AstBuilder<'a> {
     #[inline]
     pub fn nota_child_statement(self, span: Span, statement: Statement<'a>) -> NotaChild<'a> {
         NotaChild::Statement(self.alloc_nota_statement(span, statement))
-    }
-
-    /// Build a [`NotaChild::Element`].
-    ///
-    /// This node contains a [`NotaElement`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `tag`
-    /// * `props`
-    /// * `children`
-    /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    #[inline]
-    pub fn nota_child_element(
-        self,
-        span: Span,
-        tag: NotaTag<'a>,
-        props: Vec<'a, NotaProp<'a>>,
-        children: Vec<'a, NotaChild<'a>>,
-        is_colon: bool,
-    ) -> NotaChild<'a> {
-        NotaChild::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
-    }
-
-    /// Build a [`NotaChild::Fragment`].
-    ///
-    /// This node contains a [`NotaFragment`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `children`
-    #[inline]
-    pub fn nota_child_fragment(
-        self,
-        span: Span,
-        children: Vec<'a, NotaChild<'a>>,
-    ) -> NotaChild<'a> {
-        NotaChild::Fragment(self.alloc_nota_fragment(span, children))
-    }
-
-    /// Build a [`NotaChild::Interpolation`].
-    ///
-    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `expression`
-    #[inline]
-    pub fn nota_child_interpolation(self, span: Span, expression: Expression<'a>) -> NotaChild<'a> {
-        NotaChild::Interpolation(self.alloc_nota_interpolation(span, expression))
-    }
-
-    /// Build a [`NotaChild::If`].
-    ///
-    /// This node contains a [`NotaIf`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `test`
-    /// * `consequent`
-    /// * `alternate`
-    #[inline]
-    pub fn nota_child_if<T1>(
-        self,
-        span: Span,
-        test: Expression<'a>,
-        consequent: T1,
-        alternate: Option<NotaElse<'a>>,
-    ) -> NotaChild<'a>
-    where
-        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
-    {
-        NotaChild::If(self.alloc_nota_if(span, test, consequent, alternate))
-    }
-
-    /// Build a [`NotaChild::For`].
-    ///
-    /// This node contains a [`NotaFor`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `binding`
-    /// * `iterable`
-    /// * `body`
-    #[inline]
-    pub fn nota_child_for<T1>(
-        self,
-        span: Span,
-        binding: BindingPattern<'a>,
-        iterable: Expression<'a>,
-        body: T1,
-    ) -> NotaChild<'a>
-    where
-        T1: IntoIn<'a, Box<'a, NotaFragment<'a>>>,
-    {
-        NotaChild::For(self.alloc_nota_for(span, binding, iterable, body))
-    }
-
-    /// Build a [`NotaChild::Code`].
-    ///
-    /// This node contains a [`NotaCode`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `language`: Fence language tag, if any (block code only).
-    /// * `value`: The raw code text.
-    /// * `block`: `true` for a fenced block, `false` for inline.
-    #[inline]
-    pub fn nota_child_code<A1>(
-        self,
-        span: Span,
-        language: Option<Str<'a>>,
-        value: A1,
-        block: bool,
-    ) -> NotaChild<'a>
-    where
-        A1: Into<Str<'a>>,
-    {
-        NotaChild::Code(self.alloc_nota_code(span, language, value, block))
-    }
-
-    /// Build a [`NotaChild::Math`].
-    ///
-    /// This node contains a [`NotaMath`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `display`: `true` for `$$display$$`.
-    /// * `parts`: Alternating raw runs and `@`-interpolations.
-    #[inline]
-    pub fn nota_child_math(
-        self,
-        span: Span,
-        display: bool,
-        parts: Vec<'a, NotaMathPart<'a>>,
-    ) -> NotaChild<'a> {
-        NotaChild::Math(self.alloc_nota_math(span, display, parts))
-    }
-
-    /// Build a [`NotaChild::Verbatim`].
-    ///
-    /// This node contains a [`NotaVerbatim`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `tag`
-    /// * `parts`
-    #[inline]
-    pub fn nota_child_verbatim(
-        self,
-        span: Span,
-        tag: NotaTag<'a>,
-        parts: Vec<'a, NotaVerbatimPart<'a>>,
-    ) -> NotaChild<'a> {
-        NotaChild::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
     }
 
     /// Build a [`NotaChild::Emphasis`].
@@ -16360,18 +16197,6 @@ impl<'a> AstBuilder<'a> {
         expression: Expression<'a>,
     ) -> NotaPropValue<'a> {
         NotaPropValue::Expression(self.alloc_nota_prop_expr(span, expression))
-    }
-
-    /// Build a [`NotaPropValue::Markup`].
-    ///
-    /// This node contains a [`NotaMarkup`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: Node location in source code.
-    /// * `kind`: Which markup form this is.
-    #[inline]
-    pub fn nota_prop_value_markup(self, span: Span, kind: NotaMarkupKind<'a>) -> NotaPropValue<'a> {
-        NotaPropValue::Markup(self.alloc_nota_markup(span, kind))
     }
 
     /// Build a [`NotaPropExpr`].
@@ -16843,22 +16668,6 @@ impl<'a> AstBuilder<'a> {
         A1: Into<Str<'a>>,
     {
         NotaVerbatimPart::Raw(self.alloc_nota_text(span, value))
-    }
-
-    /// Build a [`NotaVerbatimPart::Child`].
-    ///
-    /// This node contains a [`NotaMarkup`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: Node location in source code.
-    /// * `kind`: Which markup form this is.
-    #[inline]
-    pub fn nota_verbatim_part_child(
-        self,
-        span: Span,
-        kind: NotaMarkupKind<'a>,
-    ) -> NotaVerbatimPart<'a> {
-        NotaVerbatimPart::Child(self.alloc_nota_markup(span, kind))
     }
 
     /// Build a [`NotaEmphasis`].
