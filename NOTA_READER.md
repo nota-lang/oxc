@@ -133,12 +133,27 @@ emitted; the join keeps innermost leaves, then **byte-exact-filters** (source sl
 slice) — the load-bearing safety net that drops reformatted composites and host-tag
 reinterpretations. Every surviving segment round-trips byte-for-byte.
 
+## Highlighting (`oxc_parser/src/nota/highlight.rs`)
+
+`oxc::nota::highlight(src)` (entry `Parser::parse_nota_highlights`) is the **reader-faithful
+syntax highlighter**: parse in document mode, walk the Nota AST (`oxc_ast_visit::Visit`) emitting
+structural spans (sigils, tag names, prop names, markers, raw runs, escapes), and re-lex the
+embedded-JS extents with the crate's own lexer for token classes — holes punched where
+`Expression::NotaMarkup` re-enters the JS. Output: `NotaHighlightSpan` (`start`/`end`/
+`NotaHighlightKind`) sorted start-asc/end-desc (outer under-layers before contained overlays;
+clients paint in list order). The wasm crate ships it as `highlight()` (flat `[start, end, kind]`
+`Uint32Array` triples) + `highlightKindNames()`; the playground's CM6 editor paints these
+(`packages/playground/src/nota-mode.ts`), replacing the TextMate-grammar path, which structurally
+cannot track markup⇄JS mutual nesting. Kind discriminants are a stable wire format — append,
+never renumber (`NotaHighlightKind::ALL` is test-guarded). Known approximation: regex literals in
+embedded JS re-lex as `/` operators (no parser context in the pump).
+
 ## Testing
 
 | What | Where | Run |
 |---|---|---|
 | E2E fixtures (exact emit + validity invariant) | `oxc_codegen/tests/integration/nota.rs` | `cargo test -p oxc_codegen --test integration nota` |
-| Lexer scan units (boundaries, classifiers, string-aware skips) | `oxc_parser` lib (`lexer/nota.rs`) | `cargo test -p oxc_parser --lib nota` |
+| Lexer scan units (boundaries, classifiers, string-aware skips) + highlight spans | `oxc_parser` lib (`lexer/nota.rs`, `nota/highlight.rs`) | `cargo test -p oxc_parser --lib nota` |
 | Scribble whitespace + mapping marks | `oxc_transformer` lib | `cargo test -p oxc_transformer --lib nota` |
 | Compile entries + H1/H2 mappings | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
 | AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |
