@@ -273,6 +273,40 @@ pub fn compile_virtual(source: &str) -> Result<JsValue, JsError> {
     }
 }
 
+/// Reader-faithful syntax highlighting: classified spans for the whole `.nota` source, flattened
+/// to `[start, end, kind]` triples (byte offsets; `kind` indexes [`highlight_kind_names`]).
+///
+/// JS: `highlight(source: string): Uint32Array` — throws on a Nota parse error (the editor keeps
+/// its last-good spans while a document is mid-edit).
+///
+/// # Errors
+/// Returns a `JsError` (thrown in JS) carrying the rendered diagnostics if `source` is not
+/// well-formed Nota.
+#[wasm_bindgen]
+pub fn highlight(source: &str) -> Result<Vec<u32>, JsError> {
+    match nota::highlight(source) {
+        Ok(spans) => {
+            let mut flat = Vec::with_capacity(spans.len() * 3);
+            for span in spans {
+                flat.push(span.start);
+                flat.push(span.end);
+                flat.push(u32::from(span.kind as u8));
+            }
+            Ok(flat)
+        }
+        Err(errors) => Err(diagnostics_to_error(&errors)),
+    }
+}
+
+/// The stable kebab-case name of every highlight kind, in discriminant order — index a triple's
+/// `kind` into this to get its CSS-class-ready name (e.g. `0` → `"sigil"`, `1` → `"tag-host"`).
+///
+/// JS: `highlightKindNames(): string[]`.
+#[wasm_bindgen(js_name = highlightKindNames)]
+pub fn highlight_kind_names() -> Vec<String> {
+    nota::NotaHighlightKind::ALL.iter().map(|kind| kind.name().to_string()).collect()
+}
+
 /// Wire the panic hook on module load so a Rust panic surfaces as a readable `console.error` in the
 /// browser (wasm-bindgen calls `start` automatically after instantiation).
 #[wasm_bindgen(start)]

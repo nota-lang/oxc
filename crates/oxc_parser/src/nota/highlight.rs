@@ -100,6 +100,34 @@ pub enum NotaHighlightKind {
 }
 
 impl NotaHighlightKind {
+    /// Every kind, in discriminant order (index = discriminant). Clients build kind→style tables
+    /// from this (e.g. the wasm `highlightKindNames()` entry).
+    pub const ALL: [Self; 23] = [
+        Self::Sigil,
+        Self::TagHost,
+        Self::TagComponent,
+        Self::PropName,
+        Self::Interpolation,
+        Self::ControlKeyword,
+        Self::HeadingMarker,
+        Self::Heading,
+        Self::ListMarker,
+        Self::EmphasisStrong,
+        Self::EmphasisEm,
+        Self::MathDelim,
+        Self::Math,
+        Self::CodeDelim,
+        Self::CodeLang,
+        Self::Code,
+        Self::Verbatim,
+        Self::Escape,
+        Self::JsKeyword,
+        Self::JsString,
+        Self::JsNumber,
+        Self::JsComment,
+        Self::JsOperator,
+    ];
+
     /// Stable kebab-case name (CSS-class-ready; also the wasm `.d.ts` documentation order).
     pub fn name(self) -> &'static str {
         match self {
@@ -878,6 +906,13 @@ mod tests {
         assert!(has(&spans, K::JsString, "`x${"));
         assert!(has(&spans, K::JsString, "}z`"));
         assert!(!has(&spans, K::JsString, "y"));
+    }
+
+    #[test]
+    fn kind_all_is_in_discriminant_order() {
+        for (i, kind) in super::NotaHighlightKind::ALL.iter().enumerate() {
+            assert_eq!(*kind as usize, i, "ALL[{i}] = {kind:?} out of discriminant order");
+        }
     }
 
     #[test]
