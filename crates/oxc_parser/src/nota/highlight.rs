@@ -20,7 +20,13 @@
 //!
 //! Known lexical approximation: regex literals in embedded JS re-lex as `/` operators (the pump
 //! has no parser context to disambiguate division; the reader itself parses them correctly).
-//! Entry: [`crate::Parser::parse_nota_highlights`]; wrapped by `oxc::nota::highlight`.
+//!
+//! Entry: [`crate::Parser::parse_nota_highlights`] — an editor-tooling view of the parse, consumed
+//! directly by the wasm bindings (`napi/nota_wasm`, which own the kind→name table and the flat
+//! triple encoding); an LSP semantic-tokens provider can consume the same entry later. The pass
+//! lives *here*, not with its consumers, because both halves need crate-private machinery: the
+//! pump drives `ParserImpl`/lexer internals (`UniquePromise` is unmintable outside the parser),
+//! and the walker reuses the `lexer::nota` scans.
 
 // Source offsets fit u32 (oxc's `Span` model) — same policy as the reader in `super`.
 #![expect(
@@ -100,8 +106,9 @@ pub enum NotaHighlightKind {
 }
 
 impl NotaHighlightKind {
-    /// Every kind, in discriminant order (index = discriminant). Clients build kind→style tables
-    /// from this (e.g. the wasm `highlightKindNames()` entry).
+    /// Every kind, in discriminant order (index = discriminant, test-guarded). Clients build
+    /// kind→name/style tables from this — the *names* are client-side (the wasm bindings own the
+    /// kebab-case table their `highlightKindNames()` serves; this crate only owns the wire enum).
     pub const ALL: [Self; 23] = [
         Self::Sigil,
         Self::TagHost,
@@ -127,35 +134,6 @@ impl NotaHighlightKind {
         Self::JsComment,
         Self::JsOperator,
     ];
-
-    /// Stable kebab-case name (CSS-class-ready; also the wasm `.d.ts` documentation order).
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Sigil => "sigil",
-            Self::TagHost => "tag-host",
-            Self::TagComponent => "tag-component",
-            Self::PropName => "prop-name",
-            Self::Interpolation => "interpolation",
-            Self::ControlKeyword => "control-keyword",
-            Self::HeadingMarker => "heading-marker",
-            Self::Heading => "heading",
-            Self::ListMarker => "list-marker",
-            Self::EmphasisStrong => "emphasis-strong",
-            Self::EmphasisEm => "emphasis-em",
-            Self::MathDelim => "math-delim",
-            Self::Math => "math",
-            Self::CodeDelim => "code-delim",
-            Self::CodeLang => "code-lang",
-            Self::Code => "code",
-            Self::Verbatim => "verbatim",
-            Self::Escape => "escape",
-            Self::JsKeyword => "js-keyword",
-            Self::JsString => "js-string",
-            Self::JsNumber => "js-number",
-            Self::JsComment => "js-comment",
-            Self::JsOperator => "js-operator",
-        }
-    }
 }
 
 /// One classified source span (`[start, end)` byte offsets into the `.nota` source).

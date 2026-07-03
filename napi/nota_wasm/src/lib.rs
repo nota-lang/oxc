@@ -35,7 +35,7 @@ use oxc::diagnostics::OxcDiagnostic;
 use oxc::nota::{
     self, CodeMapping as OxcCodeMapping, MappingCapabilities as OxcMappingCapabilities,
 };
-use oxc::parser::Parser;
+use oxc::parser::{NotaHighlightKind, Parser};
 use oxc::span::SourceType;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -281,6 +281,10 @@ pub fn compile_virtual(source: &str) -> Result<JsValue, JsError> {
 /// Reader-faithful syntax highlighting: classified spans for the whole `.nota` source, flattened
 /// to `[start, end, kind]` triples (byte offsets; `kind` indexes [`highlight_kind_names`]).
 ///
+/// The editor-tooling view of the parse (`Parser::parse_nota_highlights`, a parser-stage entry
+/// like `parseAst`'s — it never reaches the lowering, so it is not part of `oxc::nota`'s compile
+/// seam). This crate owns the editor-facing encoding: the flat triples and the kind→name table.
+///
 /// JS: `highlight(source: string): Uint32Array` — throws on a Nota parse error (the editor keeps
 /// its last-good spans while a document is mid-edit).
 ///
@@ -289,7 +293,9 @@ pub fn compile_virtual(source: &str) -> Result<JsValue, JsError> {
 /// well-formed Nota.
 #[wasm_bindgen]
 pub fn highlight(source: &str) -> Result<Vec<u32>, JsError> {
-    match nota::highlight(source) {
+    let allocator = Allocator::default();
+    // `tsx` is the canonical Nota parse mode, matching the compile entries and `parseAst`.
+    match Parser::new(&allocator, source, SourceType::tsx()).parse_nota_highlights() {
         Ok(spans) => {
             let mut flat = Vec::with_capacity(spans.len() * 3);
             for span in spans {
@@ -303,13 +309,44 @@ pub fn highlight(source: &str) -> Result<Vec<u32>, JsError> {
     }
 }
 
-/// The stable kebab-case name of every highlight kind, in discriminant order — index a triple's
-/// `kind` into this to get its CSS-class-ready name (e.g. `0` → `"sigil"`, `1` → `"tag-host"`).
+/// The stable kebab-case, CSS-class-ready name of a highlight kind. Lives here (not in the
+/// reader) because naming is an editor-surface concern; the match is exhaustive, so a new reader
+/// kind fails this crate's build until it is named.
+fn highlight_kind_name(kind: NotaHighlightKind) -> &'static str {
+    match kind {
+        NotaHighlightKind::Sigil => "sigil",
+        NotaHighlightKind::TagHost => "tag-host",
+        NotaHighlightKind::TagComponent => "tag-component",
+        NotaHighlightKind::PropName => "prop-name",
+        NotaHighlightKind::Interpolation => "interpolation",
+        NotaHighlightKind::ControlKeyword => "control-keyword",
+        NotaHighlightKind::HeadingMarker => "heading-marker",
+        NotaHighlightKind::Heading => "heading",
+        NotaHighlightKind::ListMarker => "list-marker",
+        NotaHighlightKind::EmphasisStrong => "emphasis-strong",
+        NotaHighlightKind::EmphasisEm => "emphasis-em",
+        NotaHighlightKind::MathDelim => "math-delim",
+        NotaHighlightKind::Math => "math",
+        NotaHighlightKind::CodeDelim => "code-delim",
+        NotaHighlightKind::CodeLang => "code-lang",
+        NotaHighlightKind::Code => "code",
+        NotaHighlightKind::Verbatim => "verbatim",
+        NotaHighlightKind::Escape => "escape",
+        NotaHighlightKind::JsKeyword => "js-keyword",
+        NotaHighlightKind::JsString => "js-string",
+        NotaHighlightKind::JsNumber => "js-number",
+        NotaHighlightKind::JsComment => "js-comment",
+        NotaHighlightKind::JsOperator => "js-operator",
+    }
+}
+
+/// The name of every highlight kind, in discriminant order — index a triple's `kind` into this
+/// to get its CSS-class-ready name (e.g. `0` → `"sigil"`, `1` → `"tag-host"`).
 ///
 /// JS: `highlightKindNames(): string[]`.
 #[wasm_bindgen(js_name = highlightKindNames)]
 pub fn highlight_kind_names() -> Vec<String> {
-    nota::NotaHighlightKind::ALL.iter().map(|kind| kind.name().to_string()).collect()
+    NotaHighlightKind::ALL.iter().map(|kind| highlight_kind_name(*kind).to_string()).collect()
 }
 
 /// Wire the panic hook on module load so a Rust panic surfaces as a readable `console.error` in the

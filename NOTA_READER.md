@@ -11,8 +11,10 @@ entries. The cross-team spec is `design/contract.md` (authoritative), with surfa
   → oxc_parser         document/expression entry → faithful Nota AST
   → oxc_transformer    NotaLowering: Nota AST → hyperscript (h/Fragment/decode) Program
   → oxc_codegen        JS text (+ sourcemap, + opt-in offset log)
-  → crates/oxc/src/nota.rs   the compile entries + highlight + Volar CodeMapping join
+  → crates/oxc/src/nota.rs   the compile entries + Volar CodeMapping join
 ```
+(The parse-stage views — `parseAst`'s document parse and the highlight spans — branch off after
+`oxc_parser`; the wasm bindings consume them directly as `Parser` entries.)
 
 | Piece | File |
 |---|---|
@@ -140,8 +142,10 @@ reinterpretations. Every surviving segment round-trips byte-for-byte.
 
 ## Highlighting (`oxc_parser/src/nota/highlight.rs`)
 
-`oxc::nota::highlight(src)` (entry `Parser::parse_nota_highlights`) is the **reader-faithful
-syntax highlighter**: parse in document mode, walk the Nota AST (`oxc_ast_visit::Visit`) emitting
+`Parser::parse_nota_highlights(src)` is the **reader-faithful syntax highlighter** — a
+parser-stage view (like the document parse behind `parseAst`), consumed directly by the wasm
+bindings rather than through `oxc::nota` (it never reaches the lowering, so it is not part of the
+compile seam): parse in document mode, walk the Nota AST (`oxc_ast_visit::Visit`) emitting
 structural spans (sigils, tag names, prop names, markers, raw runs, escapes), and re-lex the
 embedded-JS extents with the crate's own lexer for token classes — holes punched where
 `Expression::NotaMarkup` re-enters the JS. Output: `NotaHighlightSpan` (`start`/`end`/

@@ -31,7 +31,8 @@ parseAst(source: string): { ast: string };
 
 highlight(source: string): Uint32Array;
 //   reader-faithful highlight spans, flat [start, end, kind] u32 triples sorted outer-first
-//   (oxc::nota::highlight — the playground editor paints these as CM6 decorations).
+//   (Parser::parse_nota_highlights — the playground editor paints these as CM6 decorations;
+//   this crate owns the editor-facing encoding: the flat triples and the kind-name table).
 
 highlightKindNames(): string[];
 //   kind discriminant → stable kebab-case name (CSS-class-ready), indexing highlight()'s kinds.
