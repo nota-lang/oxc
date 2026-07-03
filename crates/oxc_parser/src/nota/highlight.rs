@@ -839,6 +839,15 @@ mod tests {
     }
 
     #[test]
+    fn heading_after_colon_block() {
+        // TODO.md bug 7: sugar directly after a colon-sugar body (mega.nota's
+        // `## Nested statements`) must classify as a heading, not literal text.
+        let spans = hl("@section:\n  body\n\n## After\n");
+        assert!(has(&spans, K::Heading, "## After"));
+        assert!(has(&spans, K::HeadingMarker, "##"));
+    }
+
+    #[test]
     fn verbatim_with_rearm() {
         let spans = hl("@pre|{\nraw |@em{x} tail\n}|\n");
         assert!(has(&spans, K::TagHost, "pre"));

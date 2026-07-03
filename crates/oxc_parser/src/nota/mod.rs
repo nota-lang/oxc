@@ -481,6 +481,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let brace_significant = matches!(mode, BodyMode::Body);
                     let form = self.parse_nota_form(true, brace_significant);
                     items.push(NotaChild::from(form));
+                    // A colon-sugar body consumes through its final line's `\n` (and any trailing
+                    // blank lines), so the form can resume AT a line start — a position the `\n`
+                    // arm's line-start hook never sees. Run the same hook here: a heading, list,
+                    // or `%` statement directly after a colon block is sugar, not literal text.
+                    let at = self.cur_token().start();
+                    if !self.has_fatal_error()
+                        && at > 0
+                        && byte_at(self.source_text, at - 1) == Some(b'\n')
+                    {
+                        let resume = self.consume_line_start_constructs(at, depth, mode, items);
+                        self.nota_seek_markup(resume);
+                    }
                 }
                 Kind::Star | Kind::NotaUnderscore => {
                     // The lexer emits these only for a valid opener (the Typst word-boundary

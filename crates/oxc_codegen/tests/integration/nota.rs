@@ -779,6 +779,40 @@ fn line_start_sugar_chains_after_a_construct() {
     );
 }
 
+#[test]
+fn line_start_sugar_after_a_colon_block() {
+    // TODO.md bug 7 regression: a colon-sugar body consumes through its final line's `\n` (and
+    // any trailing blank lines), so the parse resumes AT a line start — a position the `\n` arm's
+    // line-start hook never saw. Sugar directly after a colon element must still fire (the
+    // `Kind::At` arm now runs `consume_line_start_constructs` when it resumes at a line start).
+    // The mega-test's `## Nested statements` (after the `@section:` block) was the field failure.
+    assert!(
+        nota_doc("@section:\n  body\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        "heading right after a block colon body (dedent ends the body)"
+    );
+    assert!(
+        nota_doc("@summary: inline\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        "heading right after an inline colon body"
+    );
+    assert!(
+        nota_doc("@section:\n  body\n\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        "heading after a colon body with an intervening blank line"
+    );
+    assert!(
+        nota_doc("@section:\n  body\n\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        "list after a colon body"
+    );
+    assert!(
+        nota_doc("@section:\n  body\n% const n = 1\n@p{@n}\n").contains("const n = 1"),
+        "% statement after a colon body"
+    );
+    // Blank lines *inside* the indented body still belong to it.
+    let js = nota_doc("@section:\n  a\n\n  b\n\n# After\n");
+    assert!(js.contains(r#"h("h1", {}, ["After"])"#), "heading after internal blanks: {js}");
+    assert_eq!(js.matches(r#"h("section""#).count(), 1, "one section only: {js}");
+    assert!(js.contains("\"a\"") && js.contains("\"b\""), "both body lines kept: {js}");
+}
+
 // ===============================================================================================
 // THE canonical golden: stage-1 `.nota` → must equal stage-3 (modulo formatting).
 // ===============================================================================================
