@@ -15,6 +15,7 @@ use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions, CodegenReturn};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_parser::Parser;
+pub use oxc_parser::{NotaHighlightKind, NotaHighlightSpan};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{
@@ -230,6 +231,23 @@ fn strip_typescript<'a>(
     let ret = Transformer::new(allocator, Path::new("doc.nota"), &options)
         .build_with_scoping(scoping, program);
     if ret.errors.is_empty() { Ok(()) } else { Err(ret.errors) }
+}
+
+/// Reader-faithful syntax highlighting for a `.nota` source.
+///
+/// Parses in Nota document mode and returns classified `[start, end)` spans — Nota structure from
+/// an AST walk, embedded-JS tokens from the parser's own lexer. Spans are sorted start-ascending /
+/// end-descending (outer spans before the spans they contain — paint in list order; a heading's
+/// line under-layer precedes its children). The single source of truth for editor highlighting
+/// (the playground's CM6 decorations; later the LSP semantic-tokens layer) — unlike the TextMate
+/// grammar, it cannot drift from the reader.
+///
+/// # Errors
+/// If the source is not well-formed Nota (mid-edit documents often aren't — clients keep their
+/// last-good spans).
+pub fn highlight(source_text: &str) -> Result<Vec<NotaHighlightSpan>, Vec<OxcDiagnostic>> {
+    let allocator = Allocator::default();
+    Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_highlights()
 }
 
 /// Compile a `.nota` source string to a JS module (+ optional source map).

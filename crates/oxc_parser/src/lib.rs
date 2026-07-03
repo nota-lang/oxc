@@ -98,6 +98,7 @@ use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
 pub use crate::lexer::{Kind, Token};
+pub use crate::nota::highlight::{NotaHighlightKind, NotaHighlightSpan};
 use crate::{
     config::{
         LexerConfig, NoTokensParserConfig, ParserConfig, RuntimeParserConfig, TokensParserConfig,
@@ -484,6 +485,46 @@ mod parser_parse {
                 UniquePromise::new(),
             )
             .parse_nota_document()
+        }
+
+        /// Reader-faithful syntax highlighting for a whole `.nota` file: parse in document mode,
+        /// walk the Nota AST for structural spans, and re-lex the embedded-JS extents for token
+        /// classes. Returns classified `[start, end)` spans sorted start-ascending /
+        /// end-descending (outer spans before the spans they contain — paint in list order).
+        /// See [`crate::nota::highlight`] for the classification model.
+        ///
+        /// # Errors
+        /// If the file is not well-formed Nota (clients keep their last-good highlights).
+        pub fn parse_nota_highlights(self) -> Result<Vec<NotaHighlightSpan>, Vec<OxcDiagnostic>> {
+            let program = ParserImpl::<C>::new(
+                self.allocator,
+                self.source_text,
+                self.source_type,
+                self.options,
+                self.config,
+                UniquePromise::new(),
+            )
+            .parse_nota_document()?;
+
+            let (mut spans, mut js_ranges) =
+                crate::nota::highlight::collect_structural(self.source_text, &program);
+            // The walker pops nested JS frames before their parents; the pump wants source order
+            // (ranges are disjoint, so sorting by start suffices).
+            js_ranges.sort_unstable_by_key(|range| range.start);
+            // A second, throwaway `ParserImpl` drives the lexer over the JS ranges (the first was
+            // consumed by the parse). `ParserConfig: Default`, so a fresh config is equivalent.
+            let mut pump = ParserImpl::<C>::new(
+                self.allocator,
+                self.source_text,
+                self.source_type,
+                self.options,
+                C::default(),
+                UniquePromise::new(),
+            );
+            pump.nota_lex_highlight_ranges(&js_ranges, &mut spans);
+
+            spans.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+            Ok(spans)
         }
     }
 

@@ -21,6 +21,8 @@
     reason = "source offsets/lengths fit in u32 (oxc's Span model)"
 )]
 
+pub mod highlight;
+
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::ast::*;
 use oxc_diagnostics::OxcDiagnostic;
