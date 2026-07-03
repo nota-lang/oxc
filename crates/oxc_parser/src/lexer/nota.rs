@@ -759,6 +759,11 @@ impl Scan<'_> {
                             self.i = entry + 1;
                             return;
                         }
+                        // Inline math is clamped to its line: no close here → opener literal.
+                        Some(b'\n') if !display => {
+                            self.i = entry + 1;
+                            return;
+                        }
                         Some(b'\\') => self.advance(2),
                         Some(b'$') if !display => {
                             self.bump();
@@ -792,24 +797,20 @@ impl Scan<'_> {
 }
 
 /// Find the matching close marker for an emphasis opened at `open`, or `None` (then the opener is
-/// literal). Scans forward for the next valid close, bounded by the emphasis *scope*: a blank line
-/// (paragraph break), the `}` closing the enclosing body, or EOF. Balanced `{…}`, raw spans, and
-/// `@`-forms are skipped so their inner `*`/`_` cannot close.
+/// literal). Scans forward for the next valid close, bounded by the emphasis *scope*: the end of
+/// the opening line (an inline span never crosses a newline — the CommonMark-style clamp), the `}`
+/// closing the enclosing body, or EOF. Balanced `{…}`, raw spans, and `@`-forms are skipped so
+/// their inner `*`/`_` cannot close; a skip that crosses the line end kills the span too.
 pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
+    let bound = line_content_end(source, open);
     let mut s = Scan::new(source, open + 1);
     let mut depth = 0i32;
     while let Some(b) = s.peek() {
+        if s.pos() >= bound {
+            return None; // line end (or a skip crossed it): the opener is literal
+        }
         match b {
             b'\\' => s.advance(2), // skip the escaped char (so `\*` cannot close)
-            b'\n' => {
-                let mut rest = s;
-                rest.bump();
-                rest.skip_while(|b| matches!(b, b' ' | b'\t' | b'\r'));
-                if rest.peek().is_none_or(|b| b == b'\n') {
-                    return None; // blank line ends the scope
-                }
-                s.bump();
-            }
             b'{' => {
                 depth += 1;
                 s.bump();
@@ -851,8 +852,8 @@ pub enum CodeScan<'a> {
 
 /// Scan a code span whose opening backtick run starts at `tick_off`. A `≥3` run that is the last
 /// non-whitespace on its line (modulo a language tag) opens a *fenced block*; otherwise inline
-/// code closed by the next run of `≥ fence_len` backticks (shorter runs are literal). With no
-/// close the run is literal.
+/// code closed by the next run of `≥ fence_len` backticks on the same line (shorter runs are
+/// literal). With no same-line close the run is literal.
 pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
     let mut s = Scan::new(source, tick_off);
     let fence_len = s.eat_run(b'`');
@@ -877,12 +878,17 @@ pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
     CodeScan::Literal { resume: content_start }
 }
 
-/// Find the next run of at least `fence_len` backticks at/after `from` (the offset of its first
-/// backtick), or `None`. Shorter runs are literal content.
+/// Find the next run of at least `fence_len` backticks at/after `from` **on the same line** (the
+/// offset of its first backtick), or `None`. Inline code never crosses a newline (the
+/// CommonMark-style clamp); shorter runs are literal content.
 fn find_backtick_close(source: &str, from: u32, fence_len: usize) -> Option<u32> {
+    let bound = line_content_end(source, from);
     let mut s = Scan::new(source, from);
     while s.find(b'`') {
         let run_start = s.pos();
+        if run_start >= bound {
+            return None;
+        }
         if s.eat_run(b'`') >= fence_len {
             return Some(run_start);
         }
@@ -954,21 +960,27 @@ pub enum MathBoundary {
     InterpParen,
     /// `@` with no interpolation head — spliced as a literal `"@"`.
     LiteralAt,
-    /// No closing delimiter before end of source (the opening `$` run is then literal).
-    Eof,
+    /// No closing delimiter in scope — the opening line's end (inline `$` never crosses a
+    /// newline) or end of source. The opening `$` run is then literal.
+    Unterminated,
 }
 
 /// Scan a math span's raw LaTeX from `from` to the next boundary: the closing delimiter, an
-/// `@`-interpolation, or EOF. Returns `(run_end, boundary)` where `[from, run_end)` is raw
-/// content: `\<c>` keeps its backslash (LaTeX's own escape, so `\$`/`\@` stay literal), and a
-/// single `$` inside display math is literal. The `@name` scan is ASCII and excludes `$` so the
-/// math delimiter wins (`@i$`).
+/// `@`-interpolation, or the scope's end (inline `$` is clamped to its line; display `$$` is
+/// multi-line by design, bounded only by EOF). Returns `(run_end, boundary)` where
+/// `[from, run_end)` is raw content: `\<c>` keeps its backslash (LaTeX's own escape, so
+/// `\$`/`\@` stay literal), and a single `$` inside display math is literal. The `@name` scan is
+/// ASCII and excludes `$` so the math delimiter wins (`@i$`).
 pub fn math_boundary(source: &str, from: u32, display: bool) -> (u32, MathBoundary) {
+    let bound = if display { source.len() as u32 } else { line_content_end(source, from) };
     let delim: u32 = if display { 2 } else { 1 };
     let mut s = Scan::new(source, from);
     loop {
+        if s.pos() >= bound {
+            return (bound, MathBoundary::Unterminated);
+        }
         match s.peek() {
-            None => return (s.pos(), MathBoundary::Eof),
+            None => return (s.pos(), MathBoundary::Unterminated),
             Some(b'\\') => s.advance(2),
             Some(b'$') if !display || s.peek_at(1) == Some(b'$') => {
                 return (s.pos(), MathBoundary::Close { after: s.pos() + delim });
@@ -1109,8 +1121,38 @@ mod tests {
         assert_eq!(&src[2..e as usize], "a$b");
         assert!(matches!(b, MathBoundary::Close { after } if after == e + 2));
 
-        // Unterminated → Eof.
-        assert!(matches!(math_boundary("$abc", 1, false), (4, MathBoundary::Eof)));
+        // Unterminated at EOF.
+        assert!(matches!(math_boundary("$abc", 1, false), (4, MathBoundary::Unterminated)));
+    }
+
+    /// The CommonMark-style line clamp: `*`/`_`/`` ` ``/inline `$` never cross a newline — an
+    /// opener with no same-line close is literal. Display `$$` and fenced ``` stay multi-line.
+    #[test]
+    fn inline_spans_terminate_at_newline() {
+        // Emphasis: a close on a later line is out of scope…
+        assert_eq!(find_emphasis_close("*a\nb*", 0, b'*'), None);
+        // …but a same-line close still matches, right up to the line end.
+        assert_eq!(find_emphasis_close("*a*\nb", 0, b'*'), Some(2));
+        // A raw-span skip that crosses the line end kills the span too.
+        assert_eq!(find_emphasis_close("*a `x\ny` b*", 0, b'*'), None);
+        // An escaped newline cannot extend the scope.
+        assert_eq!(find_emphasis_close("*a\\\nb*", 0, b'*'), None);
+
+        // Inline code: the close backtick must sit on the opening line (the motivating case:
+        // `- `foo⏎- bar` is two bullets, not one code span).
+        assert!(matches!(lex_code_span("`foo\n- bar`", 0), CodeScan::Literal { resume: 1 }));
+        let CodeScan::Code { content, .. } = lex_code_span("`a` b\n`c`", 0) else {
+            panic!("same-line close still scans")
+        };
+        assert_eq!(content, "a");
+
+        // Inline math: the line end is a boundary → unterminated → opener literal.
+        assert!(matches!(math_boundary("$a\nb$", 1, false), (2, MathBoundary::Unterminated)));
+        assert!(matches!(math_boundary("$a\\\nb$", 1, false), (_, MathBoundary::Unterminated)));
+        // Display math still crosses newlines.
+        let (e, b) = math_boundary("$$a\nb$$", 2, true);
+        assert_eq!(e, 5);
+        assert!(matches!(b, MathBoundary::Close { after: 7 }));
     }
 
     #[test]

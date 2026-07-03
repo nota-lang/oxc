@@ -646,6 +646,16 @@ fn emphasis_at_document_level() {
     assert!(js.contains(r#"h("em", {}, ["italic"])"#), "{js}");
 }
 
+#[test]
+fn emphasis_clamps_at_newline() {
+    // The CommonMark-style line clamp: an inline span never crosses a newline, so a soft-wrapped
+    // `*foo⏎bar*` keeps both markers literal.
+    let js = nota_doc("*foo\nbar*\n");
+    assert!(!js.contains(r#"h("strong""#), "no cross-line emphasis: {js}");
+    assert!(js.contains("*foo"), "opener literal: {js}");
+    assert!(js.contains("bar*"), "closer literal: {js}");
+}
+
 // ----- Headings -----
 
 #[test]
@@ -1109,6 +1119,16 @@ fn code_inline_unterminated_is_literal() {
 }
 
 #[test]
+fn code_inline_clamps_at_newline() {
+    // The line clamp's motivating case: a stray backtick cannot swallow the next list item —
+    // `- `foo⏎- bar` is two bullets with literal backticks, not one bullet with a code span.
+    let js = nota_doc("- `foo\n- bar`\n");
+    assert!(!js.contains("CodeInline"), "no code span across lines: {js}");
+    assert!(js.contains(r#"h("nota-ul-li", {}, ["`foo"])"#), "{js}");
+    assert!(js.contains(r#"h("nota-ul-li", {}, ["bar`"])"#), "{js}");
+}
+
+#[test]
 fn code_fenced_with_lang() {
     // ```` ```python⏎f(x)⏎``` ```` → `h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])`.
     let src = "@d{```python\nf(x)\n```}";
@@ -1183,6 +1203,15 @@ fn math_interp_with_template_breaker_falls_back_to_cooked_template() {
 #[test]
 fn dollar_unterminated_is_literal() {
     nota_expr(r"@p{costs $5 today}", r#"h("p", {}, ["costs $5 today"])"#);
+}
+
+#[test]
+fn math_inline_clamps_at_newline() {
+    // Inline `$` never crosses a newline; both dollars stay literal. (Display `$$` is multi-line
+    // by design — see math_display_interp.)
+    let js = nota_doc("$a\nb$\n");
+    assert!(!js.contains("h(Math"), "no cross-line inline math: {js}");
+    assert!(js.contains("$a"), "opener literal: {js}");
 }
 
 #[test]

@@ -1161,7 +1161,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.push_math_raw(&mut parts, run_start, run_end);
             run_start = match boundary {
                 MathBoundary::Close { after } => break after,
-                MathBoundary::Eof => return None,
+                MathBoundary::Unterminated => return None,
                 MathBoundary::InterpName { name_end } => {
                     let span = Span::new(run_end + 1, name_end);
                     let name: &'a str = &self.source_text[span.start as usize..span.end as usize];
