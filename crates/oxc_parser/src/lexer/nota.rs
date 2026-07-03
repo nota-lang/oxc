@@ -463,13 +463,19 @@ pub fn percent_line_is_empty(source: &str, content: u32) -> bool {
     EMPTY_STATEMENT.is_match(line_at(source, content))
 }
 
-/// The start of the next line after `content`'s whose first non-whitespace is `%` (the delimiter
-/// bounding the current `%` statement's JS parse), or the source length if none.
-pub fn next_percent_line_or_end(source: &str, content: u32) -> u32 {
+/// The exclusive bound of the `%` statement region whose JS begins at `content`: the start of the
+/// next line-leading `%` line (a statement delimiter the JS lexer would otherwise read as
+/// modulo), the start of the first **blank** line (a blank line always ends a `%` statement —
+/// with the lexer clamped there, ASI applies exactly as at end of input), or the source length.
+///
+/// Line-level scan by design: a blank line inside a multi-line template literal also bounds the
+/// region (the scan cannot see string interiors) — blank-line-bearing code belongs in a `%%%`
+/// fence, same as a line-leading `%` inside a template.
+pub fn statement_bound(source: &str, content: u32) -> u32 {
     let len = source.len() as u32;
     let mut line = next_line_start(source, content);
     while line < len {
-        if is_statement_line(source, line) {
+        if is_statement_line(source, line) || line_probe(source, line).1 {
             return line;
         }
         line = next_line_start(source, line);
@@ -1093,6 +1099,21 @@ mod tests {
 
         // Unterminated → Eof.
         assert!(matches!(math_boundary("$abc", 1, false), (4, MathBoundary::Eof)));
+    }
+
+    #[test]
+    fn statement_bound_stops_at_percent_or_blank_line() {
+        // The next line-leading `%` bounds (bug 5).
+        let src = "% a = 1\n% b = 2\nprose\n";
+        assert_eq!(statement_bound(src, 1), 8);
+        // A blank line bounds (bug 6) — including a whitespace-only line.
+        let src = "% a = 1\n\nprose\n";
+        assert_eq!(statement_bound(src, 1), 8);
+        let src = "% a = 1\n \t\nprose\n";
+        assert_eq!(statement_bound(src, 1), 8);
+        // Neither → source end (multi-line statements keep flowing under JS grammar).
+        let src = "% a = f(\n  1)\nprose\n";
+        assert_eq!(statement_bound(src, 1), src.len() as u32);
     }
 
     #[test]

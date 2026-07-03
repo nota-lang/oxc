@@ -839,6 +839,14 @@ mod tests {
     }
 
     #[test]
+    fn multi_statement_percent_line() {
+        // `% a(); b();` — the rest of the line is JS: one `%` marker, both statements classified.
+        let spans = hl("% let a = 1; let b = 2;\nprose\n");
+        assert_eq!(spans.iter().filter(|(k, t)| *k == K::Sigil && t == "%").count(), 1);
+        assert_eq!(spans.iter().filter(|(k, t)| *k == K::JsKeyword && t == "let").count(), 2);
+    }
+
+    #[test]
     fn heading_after_colon_block() {
         // TODO.md bug 7: sugar directly after a colon-sugar body (mega.nota's
         // `## Nested statements`) must classify as a heading, not literal text.

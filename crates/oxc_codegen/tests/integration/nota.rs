@@ -813,6 +813,57 @@ fn line_start_sugar_after_a_colon_block() {
     assert!(js.contains("\"a\"") && js.contains("\"b\""), "both body lines kept: {js}");
 }
 
+#[test]
+fn percent_statement_region_rules() {
+    // TODO.md bug 6 regression — the `%` statement-region contract: the rest of the line is JS
+    // (arbitrary statements, JS's own `;`/ASI rules, continuing across single newlines exactly
+    // where JS grammar allows), transitioning back to markup at end-of-line once a statement
+    // completes there, at a blank line (ASI as at end of input), or at the next `%` line.
+
+    // `;`-delimited, single newline: the next line is markup — list AND heading (the heading used
+    // to die on a stale lexer-lookahead artifact: `#·` is not lexable JS).
+    assert!(
+        nota_doc("% const x = 1;\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        "list after a `;`-delimited statement"
+    );
+    assert!(
+        nota_doc("% const x = 1;\n# Head\n").contains(r#"h("h1", {}, ["Head"])"#),
+        "heading after a `;`-delimited statement"
+    );
+
+    // A blank line always ends the statement (these used to hard-error / silently emit
+    // `const x = 1 - item`).
+    let js = nota_doc("% const x = 1\n\n- item\n");
+    assert!(js.contains("const x = 1;"), "statement ends at the blank line: {js}");
+    assert!(js.contains(r#"h("nota-ul-li", {}, ["item"])"#), "list after the blank line: {js}");
+    assert!(
+        nota_doc("% const x = 1\n\n# Head\n").contains(r#"h("h1", {}, ["Head"])"#),
+        "heading after a blank line"
+    );
+
+    // The rest of the line is JS: several statements share one `%` (both used to be silently
+    // dropped after the first).
+    let js = nota_doc("% a(); b();\nprose\n");
+    assert!(js.contains("a();") && js.contains("b();"), "both same-line statements kept: {js}");
+
+    // Single newline with no delimiter follows JS rules: ASI ends a complete statement before
+    // `prose`; a grammatical continuation still continues (that is the JS-rules price — `;` or a
+    // blank line is the escape).
+    assert!(
+        nota_doc("% const x = 1\nprose\n").contains("\"prose\""),
+        "ASI ends the statement at the line break"
+    );
+    assert!(
+        nota_doc("% const x = 1\n- item\n").contains("const x = 1 - item;"),
+        "a grammatical continuation continues across a single newline (JS rules)"
+    );
+
+    // A statement that straddles a blank line is a diagnostic, not a parse-through.
+    nota_doc_err("% const x = foo(\n\n)\nprose\n");
+    // Non-JS trailing content on the statement line is a diagnostic, not silent loss.
+    nota_doc_err("% const x = 1; trailing text\nprose\n");
+}
+
 // ===============================================================================================
 // THE canonical golden: stage-1 `.nota` → must equal stage-3 (modulo formatting).
 // ===============================================================================================

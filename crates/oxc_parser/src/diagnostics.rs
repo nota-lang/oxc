@@ -1379,3 +1379,12 @@ pub fn nota_unterminated_verbatim(span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error("unterminated verbatim body (expected a closing `}|`)")
         .with_label(span.label("this `|{` is never closed"))
 }
+
+/// A `%` statement's JS failed to parse and its region was clipped at a blank line — the likely
+/// cause of the failure (a blank line always ends a `%` statement).
+#[cold]
+pub fn nota_statement_ends_at_blank_line(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("a blank line ends a `%` statement")
+        .with_label(span.label("the statement is cut off by this blank line"))
+        .with_help("remove the blank line, or move the code into a `%%% … %%%` fence")
+}

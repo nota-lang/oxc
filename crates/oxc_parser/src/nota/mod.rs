@@ -37,8 +37,8 @@ use crate::{
         colon_block_extent, colon_prop_line_at, else_peek, escape_span, find_emphasis_close,
         find_fence_close, heading_at, is_ident_start_at, is_statement_line, lex_code_span,
         line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
-        math_boundary, next_line_start, next_percent_line_or_end, percent_line_is_empty,
-        scan_hyphen_tail, sigil_run_end, statement_kind, verbatim_boundary,
+        math_boundary, next_line_start, percent_line_is_empty, scan_hyphen_tail, sigil_run_end,
+        statement_bound, statement_kind, verbatim_boundary,
     },
 };
 
@@ -611,19 +611,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 // markup as a statement.
                 content
             } else {
-                // Bound the JS parse to this statement's extent: the next line-leading `%` (a Nota
-                // statement delimiter the JS lexer would otherwise read as modulo — `1⏎% …`), or
-                // source end. A multi-line statement has no intervening line-leading `%`, so the
-                // parser still stops naturally at the next markup.
-                let bound = next_percent_line_or_end(self.source_text, content);
-                debug_assert!(self.source_text.is_char_boundary(bound as usize));
-                let stmt = self.with_source_end_bound(bound, |p| {
-                    p.nota_seek_to(content);
-                    p.parse_statement_list_item(crate::context::StatementContext::StatementList)
-                });
-                let e = self.prev_token_end;
-                self.push_statement(items, stmt);
-                e
+                self.collect_percent_statements(content, items)
             };
             // A fence resumes at the line after its closing `%%%`; a `%` statement's `end` is
             // mid-line, so advance to the next line.
@@ -633,6 +621,84 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             }
         }
         at
+    }
+
+    /// Parse one `%` statement region whose JS begins at `content`: **the rest of the line is
+    /// JS** — arbitrary statements under JS's own rules (`;` and ASI; a statement continues across
+    /// single newlines exactly where JS grammar allows), transitioning back to markup at a clear
+    /// boundary: end of line once a statement completes there, a blank line (the lexer is clamped
+    /// at [`statement_bound`], so ASI applies as at end of input), or the next line-leading `%`.
+    /// Returns the offset just past the last statement.
+    fn collect_percent_statements(
+        &mut self,
+        content: u32,
+        items: &mut ArenaVec<'a, NotaChild<'a>>,
+    ) -> u32 {
+        let bound = statement_bound(self.source_text, content);
+        debug_assert!(self.source_text.is_char_boundary(bound as usize));
+        let lexer_errors_before = self.lexer.errors.len();
+        let parser_errors_before = self.errors.len();
+        self.with_source_end_bound(bound, |p| {
+            p.nota_seek_to(content);
+            loop {
+                let stmt =
+                    p.parse_statement_list_item(crate::context::StatementContext::StatementList);
+                p.push_statement(items, stmt);
+                if p.has_fatal_error() || p.errors.len() > parser_errors_before || p.at(Kind::Eof) {
+                    break;
+                }
+                // End-of-line transition: another statement follows only on the SAME line as the
+                // previous one's end (`% a(); b();`); the next line is markup again.
+                let gap = &p.source_text[p.prev_token_end as usize..p.cur_token().start() as usize];
+                if gap.contains('\n') {
+                    break;
+                }
+            }
+        });
+        let end = self.prev_token_end;
+        // The trailing one-token lookahead may have JS-lexed bytes that belong to the following
+        // markup (a heading's `#·` is not lexable JS). When the statement run itself is clean,
+        // bytes from the NEXT line onward are about to be re-lexed as markup, so a lexer
+        // diagnostic wholly in that region is a stale artifact — drop it. Same-line diagnostics
+        // stay: the rest of the statement's line is JS, so garbage there is a real error.
+        // (`self.fatal_error`, not `has_fatal_error()` — the latter also fires on a benign
+        // clamped `Eof` / markup-lookahead `Undetermined` current token.)
+        let markup_resume = next_line_start(self.source_text, end);
+        if self.fatal_error.is_none() && self.errors.len() == parser_errors_before {
+            let mut i = lexer_errors_before;
+            while i < self.lexer.errors.len() {
+                let in_markup = self.lexer.errors[i].labels.as_ref().is_some_and(|labels| {
+                    labels.iter().all(|l| l.offset() as u32 >= markup_resume)
+                });
+                if in_markup {
+                    let _stale = self.lexer.errors.remove(i);
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        // If the parse failed and the region was clipped at a blank line, that clip is the likely
+        // cause — attach the pointer (onto the fatal error itself when there is one; `finish_nota`
+        // surfaces only the fatal).
+        let failed = self.fatal_error.is_some()
+            || self.errors.len() > parser_errors_before
+            || self.lexer.errors.len() > lexer_errors_before;
+        if failed
+            && bound < self.source_text.len() as u32
+            && !is_statement_line(self.source_text, bound)
+        {
+            if let Some(fatal) = self.fatal_error.as_mut() {
+                fatal.error = fatal.error.clone().with_note(
+                    "a blank line ends a `%` statement — remove the blank line, or move the code into a `%%% … %%%` fence",
+                );
+            } else {
+                self.error(diagnostics::nota_statement_ends_at_blank_line(Span::new(
+                    bound,
+                    bound + 1,
+                )));
+            }
+        }
+        end
     }
 
     /// Parse the inner statements of a `%%%`…`%%%` fence (from `inner_start`). Returns the offset
