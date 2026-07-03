@@ -1,10 +1,12 @@
 //! Nota compiler entry — the `nota source → { code, map }` seam.
 //!
-//! This is the single callable that `@nota-lang/compiler` (the wasm/napi wrapper) builds on. It
-//! lives in the `oxc` umbrella crate because that is the only place with *all three* stages on the
-//! Nota path available together: the reader (`oxc_parser`, document mode → a faithful Nota AST), the
-//! lowering ([`oxc_transformer::NotaLowering`], Nota AST → hyperscript), and `oxc_codegen`. The
-//! lowering is the deferred-pass analog of how `oxc_transformer` lowers JSX.
+//! This is the surface that `@nota-lang/compiler` (the wasm/napi wrapper) builds on: the three
+//! compile entries plus the parse-stage views ([`highlight`] — reader-faithful editor spans — and
+//! the document parse behind the playground's `parseAst`). It lives in the `oxc` umbrella crate
+//! because that is the only place with *all three* stages on the Nota path available together: the
+//! reader (`oxc_parser`, document mode → a faithful Nota AST), the lowering
+//! ([`oxc_transformer::NotaLowering`], Nota AST → hyperscript), and `oxc_codegen`. The lowering is
+//! the deferred-pass analog of how `oxc_transformer` lowers JSX.
 //!
 //! The runtime import (`import { h, decode, Fragment, inlineComponent, blockComponent } from
 //! "@nota-lang/runtime"`) is *not* emitted here; the wrapper prepends it.

@@ -1,13 +1,17 @@
-//! Nota wasm compiler backend — `wasm-bindgen` over the three `oxc::nota` entries.
+//! Nota wasm compiler backend — `wasm-bindgen` over the `oxc::nota` entries.
 //!
 //! The Part-4 playground imports the `pkg/` `wasm-pack` produces from this crate and calls:
 //!
 //! ```ts
-//! import init, { compile, compileWithMappings, compileVirtual } from "@nota-lang/nota-wasm";
+//! import init, { compile, compileWithMappings, compileVirtual, parseAst,
+//!                highlight, highlightKindNames } from "@nota-lang/nota-wasm";
 //! await init();                                  // load + instantiate the .wasm
 //! const { code } = compile(src);                 // build path (JS)            → { code }
 //! const { code, mappings } = compileWithMappings(src); // build + H1 mappings → { code, mappings }
 //! const { code, mappings } = compileVirtual(src);      // H2 .tsx + H1        → { code, mappings }
+//! const { ast } = parseAst(src);                 // post-parse Nota AST (ESTree JSON string)
+//! const spans = highlight(src);                  // [start, end, kind] u32 triples (editor spans)
+//! const names = highlightKindNames();            // kind discriminant → kebab-case name
 //! ```
 //!
 //! Each binding wraps the corresponding `oxc::nota` function. On a Nota parse error the entry returns
@@ -193,7 +197,8 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 }
 
 // ===================================================================================================
-// The three exported entries (the playground's JS API).
+// The exported entries (the playground's JS API): three compile paths, the AST view, and the
+// highlight spans.
 // ===================================================================================================
 
 /// Compile a `.nota` source string to a JS module. Returns `{ code }`.

@@ -11,13 +11,14 @@ entries. The cross-team spec is `design/contract.md` (authoritative), with surfa
   → oxc_parser         document/expression entry → faithful Nota AST
   → oxc_transformer    NotaLowering: Nota AST → hyperscript (h/Fragment/decode) Program
   → oxc_codegen        JS text (+ sourcemap, + opt-in offset log)
-  → crates/oxc/src/nota.rs   the three compile entries + Volar CodeMapping join
+  → crates/oxc/src/nota.rs   the compile entries + highlight + Volar CodeMapping join
 ```
 
 | Piece | File |
 |---|---|
 | Markup lexing (typed child tokens + pure scans) | `crates/oxc_parser/src/lexer/nota.rs` |
 | Parser (markup → Nota AST) | `crates/oxc_parser/src/nota/mod.rs` |
+| Highlight pass (AST walk + embedded-JS re-lex → spans) | `crates/oxc_parser/src/nota/highlight.rs` |
 | Nota AST nodes (`Expression::NotaMarkup` umbrella) | `crates/oxc_ast/src/ast/nota.rs` |
 | Lowering pass (AST → hyperscript, `%` routing, F1) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
 | Scribble whitespace algorithm (pure + unit tests) | `crates/oxc_transformer/src/nota/scribble.rs` |
@@ -85,9 +86,13 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   `(…)`/`[…]` groups opaque — a bracket or `*` inside `"…"` cannot unbalance them.
 - **Embedded JS is parsed by oxc itself** (`parse_expr` / `parse_statement_list_item` /
   `parse_binding_pattern`) with `nota_markup` left on, so `@`-forms nest inside embedded JS. A
-  `%`/`%%%` statement's parse is **bounded** by temporarily clamping the lexer's source end
-  (`with_source_end_bound`) to the next line-leading `%` / the closing fence — otherwise the JS
-  lexer reads the delimiter as `%` (modulo) or `%%%` as three operators.
+  `%`/`%%%` statement region's parse is **bounded** by temporarily clamping the lexer's source end
+  (`with_source_end_bound`) to `statement_bound` — the next line-leading `%` or the first **blank
+  line** (contract R8: ASI applies as at end of input) — / the closing fence; otherwise the JS
+  lexer reads the delimiter as `%` (modulo) or `%%%` as three operators. Within the bound a `%`
+  line is a JS statement *list* (`% a(); b();`), transitioning to markup at end-of-line; stale
+  lexer diagnostics from the trailing one-token lookahead (markup bytes JS can't lex) are dropped
+  when the region parses clean.
 - **Every text child is a real source slice** — including single-byte sigils that turned out
   literal — so `NotaText` spans are always true source positions (sourcemaps / Volar / ESTree).
 - **`@`-head commit protocol**: the head's boundary token (bare ident or the `)` of `@(expr)`) is

@@ -1,10 +1,10 @@
 # `nota_wasm` — the Nota wasm compiler backend
 
 The Nota reader (`oxc::nota`) compiled to WebAssembly via [`wasm-bindgen`], so it runs **in-browser**
-for the Part-4 playground (contract §9: *"A **wasm** backend (wasm-bindgen over the same three
-entries) serves the browser playground (Part 4)"*).
+for the Part-4 playground (contract §9: *"A **wasm** backend (wasm-bindgen over the same entries,
+plus `parseAst` and `highlight`/`highlightKindNames`) serves the browser playground (Part 4)"*).
 
-It wraps the three `oxc::nota` entries and returns plain JS objects (via [`serde-wasm-bindgen`]).
+It wraps the `oxc::nota` entries and returns plain JS objects (via [`serde-wasm-bindgen`]).
 This crate lives under `napi/` only because the workspace `members = [… "napi/*" …]` glob auto-includes
 it; it does **not** use the `napi`/`napi-derive` stack the sibling `napi/*` crates use — it is a
 `wasm-pack` crate.
@@ -12,7 +12,8 @@ it; it does **not** use the `napi`/`napi-derive` stack the sibling `napi/*` crat
 ## JS API (what the playground calls)
 
 ```ts
-import init, { compile, compileWithMappings, compileVirtual } from "@nota-lang/nota-wasm";
+import init, { compile, compileWithMappings, compileVirtual, parseAst,
+              highlight, highlightKindNames } from "@nota-lang/nota-wasm";
 
 await init();                          // load + instantiate the .wasm (default export; `target web`)
 
@@ -25,13 +26,23 @@ compileWithMappings(source: string): { code: string; mappings: CodeMapping[] };
 compileVirtual(source: string): { code: string; mappings: CodeMapping[] };
 //   H2 type-preserving virtual `.tsx` emit + H1 CodeMappings (oxc::nota::compile_virtual).
 
+parseAst(source: string): { ast: string };
+//   the post-parse Nota AST as ESTree JSON (parser stage only — the playground's AST pane).
+
+highlight(source: string): Uint32Array;
+//   reader-faithful highlight spans, flat [start, end, kind] u32 triples sorted outer-first
+//   (oxc::nota::highlight — the playground editor paints these as CM6 decorations).
+
+highlightKindNames(): string[];
+//   kind discriminant → stable kebab-case name (CSS-class-ready), indexing highlight()'s kinds.
+
 // CodeMapping (contract §9 shape, camelCase):
 //   { sourceOffsets: number[]; generatedOffsets: number[]; lengths: number[];
 //     generatedLengths: number[] | null;
 //     data: { completion, format, navigation, semantic, structure, verification: boolean } }
 ```
 
-All three **throw** a `JsError` (a normal JS `Error`) on a Nota parse error; its `.message` is the
+The compile entries, `parseAst`, and `highlight` all **throw** a `JsError` (a normal JS `Error`) on a Nota parse error; its `.message` is the
 rendered diagnostics (one per line). Wrap calls in `try/catch` in the playground.
 
 `init` is the default export (`__wbg_init`): in a browser/bundler it fetches `nota_wasm_bg.wasm` next
