@@ -75,9 +75,13 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   body, do `%` statement lines fire, is collection clipped to a range. Balanced `{…}` inside a
   body is literal text (Scribble `@foo{f{o}o}`); brace depth is a parser counter over the typed
   `LCurly`/`RCurly` tokens.
-- **Line-start constructs chain**: the `\n` arm (and the document opener) consumes a *run* of
-  `%`/`%%%` statements, list runs, then a heading — each resumes at a line start that may open the
-  next.
+- **Line-start constructs chain**: the `\n` arm consumes a *run* of `%`/`%%%` statements, list
+  runs, then a heading — each resumes at a line start that may open the next. **A body/range start
+  is a line start too** (contract R9): `collect_markup`'s entry runs the same hook, so the
+  document opener, `@{- item}`, `@foo: - item`, and `*- item*` all arm — with first-line extents
+  clipped at the enclosing body's depth-0 `}` (`brace_clip_on_line`, string/`@`-form-aware) or the
+  bounded range's end. Literal braces in prose never re-enter `collect_markup`, so `a {- b} c`
+  stays text.
 - **Multi-byte extents are measured over the raw source** by the pure scans in `lexer/nota.rs`
   (emphasis close, raw spans, math/verbatim boundaries, list/colon block extents, `else`
   continuation): the closers are multi-byte and context-dependent — a poor fit for token lexing —

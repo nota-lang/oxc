@@ -33,12 +33,12 @@ use crate::{
     error_handler::FatalError,
     lexer::Kind,
     lexer::nota::{
-        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, byte_at,
-        colon_block_extent, colon_prop_line_at, else_peek, escape_span, find_emphasis_close,
-        find_fence_close, heading_at, is_ident_start_at, is_statement_line, lex_code_span,
-        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
-        math_boundary, next_line_start, percent_line_is_empty, scan_hyphen_tail, sigil_run_end,
-        statement_bound, statement_kind, verbatim_boundary,
+        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, brace_clip_on_line,
+        byte_at, colon_block_extent, colon_prop_line_at, else_peek, escape_span,
+        find_emphasis_close, find_fence_close, heading_at, is_ident_start_at, is_statement_line,
+        lex_code_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
+        markup_trigger, math_boundary, next_line_start, percent_line_is_empty, scan_hyphen_tail,
+        sigil_run_end, statement_bound, statement_kind, verbatim_boundary,
     },
 };
 
@@ -420,6 +420,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         mode: BodyMode,
     ) -> MarkupClose {
         let mut depth = 0u32; // balanced-brace depth inside the body
+        // R9: the start of a body/range is a line start. A body opening directly with a marker —
+        // `@{- item}`, `@foo: - item`, `*- item*`, the document's first line — opens the construct
+        // exactly as it would after a `\n`. (Literal braces in prose never re-enter here, so a
+        // `{- x}` inside a paragraph stays text.)
+        if !self.has_fatal_error() {
+            let at = self.cur_token().start();
+            let resume = self.consume_line_start_constructs(at, 0, mode, items);
+            if resume != at {
+                self.nota_seek_markup(resume);
+            }
+        }
         loop {
             if self.has_fatal_error() {
                 return MarkupClose::Eof;
@@ -551,19 +562,35 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 && mode.bound().is_none_or(|end| at < end)
                 && list_marker_at(self.source_text, at).is_some()
             {
-                at = self.parse_list(at, items);
+                at = self.parse_list(at, mode, items);
                 continue;
             }
             break;
         }
         if depth == 0
             && mode.bound().is_none_or(|end| at < end)
-            && let Some((heading, h_end)) = self.try_heading(at)
+            && let Some((heading, h_end)) = self.try_heading(at, mode)
         {
             items.push(NotaChild::Heading(self.ast.alloc(heading)));
             return h_end;
         }
         at
+    }
+
+    /// The first-line extent limit for line-start sugar at `at` (a list marker or heading line):
+    /// the line's content end, clipped to the enclosing braced body's depth-0 `}` (the construct
+    /// must not eat the closer — `@{- item}`) and to a bounded range's end (`*- item*`).
+    fn sugar_line_end(&self, at: u32, mode: BodyMode) -> u32 {
+        let mut end = line_content_end(self.source_text, at);
+        if matches!(mode, BodyMode::Body)
+            && let Some(clip) = brace_clip_on_line(self.source_text, at)
+        {
+            end = end.min(clip);
+        }
+        if let Some(bound) = mode.bound() {
+            end = end.min(bound);
+        }
+        end
     }
 
     /// Collect markup over a bounded raw source range `[start, end)` — emphasis, colon-sugar,
@@ -958,9 +985,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// If the line at `line_start` opens with a heading marker, parse it and return
-    /// `(heading, end)` where `end` is the line's terminating `\n` (or EOF); else `None`.
-    fn try_heading(&mut self, line_start: u32) -> Option<(NotaHeading<'a>, u32)> {
+    /// `(heading, end)` where `end` is the line's terminating `\n` (or the sugar clip: a body's
+    /// depth-0 `}` / a bounded range's end); else `None`.
+    fn try_heading(&mut self, line_start: u32, mode: BodyMode) -> Option<(NotaHeading<'a>, u32)> {
         let (level, body_start, line_end) = heading_at(self.source_text, line_start)?;
+        let line_end = line_end.min(self.sugar_line_end(line_start, mode));
+        let body_start = body_start.min(line_end);
         let mut children = self.ast.vec();
         self.collect_markup_range(body_start, line_end, &mut children);
         let span = Span::new(line_start, line_end);
@@ -971,7 +1001,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// each as a child. Markers at the run's indent are siblings; a deeper marker line falls
     /// inside the preceding item's body extent and nests via the recursive body collection; a
     /// shallower one ends the run (it belongs to an enclosing list). Returns the resume offset.
-    fn parse_list(&mut self, line_start: u32, items: &mut ArenaVec<'a, NotaChild<'a>>) -> u32 {
+    fn parse_list(
+        &mut self,
+        line_start: u32,
+        mode: BodyMode,
+        items: &mut ArenaVec<'a, NotaChild<'a>>,
+    ) -> u32 {
         let base_indent = list_marker_at(self.source_text, line_start)
             .expect("parse_list: not a marker line")
             .indent;
@@ -982,9 +1017,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             }
             // Body extent: rest of the marker line + lines indented strictly past the marker.
-            let line_end = line_content_end(self.source_text, at);
+            // A sugar clip (the enclosing body's `}` / a bounded end) ends the item ON this line —
+            // the body is closing, so there are no continuation lines to collect.
+            let full_line_end = line_content_end(self.source_text, at);
+            let line_end = full_line_end.min(self.sugar_line_end(at, mode));
             let body_start = marker.body_col.min(line_end);
-            let item_end = list_item_extent(self.source_text, line_end, marker.indent);
+            let item_end = if line_end < full_line_end {
+                line_end
+            } else {
+                let extent = list_item_extent(self.source_text, line_end, marker.indent);
+                match mode {
+                    BodyMode::Bounded { end } => extent.min(end),
+                    BodyMode::Body | BodyMode::Document => extent,
+                }
+            };
 
             let mut children = self.ast.vec();
             self.collect_markup_range(body_start, item_end, &mut children);
@@ -1178,11 +1224,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // Skip a leading UTF-8 BOM so it is not collected as text (offsets after it are unchanged).
         let start = if self.source_text.starts_with('\u{feff}') { 3u32 } else { 0 };
 
-        // The file may *open* with line-start constructs — none preceded by a `\n` that would
-        // trigger `collect_markup`'s line-start hook — so consume that run here first.
-        let resume = self.consume_line_start_constructs(start, 0, BodyMode::Document, &mut items);
-        self.nota_seek_markup(resume);
-
+        // A file opening with line-start constructs is handled by `collect_markup`'s entry arming
+        // (R9: a body/range start is a line start — the document body included).
+        self.nota_seek_markup(start);
         let _ = self.collect_markup(&mut items, BodyMode::Document);
 
         let span = Span::new(0, self.source_text.len() as u32);

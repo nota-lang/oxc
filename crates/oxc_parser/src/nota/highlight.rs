@@ -518,10 +518,10 @@ impl<'a> Visit<'a> for Highlighter<'a> {
     }
 
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
-        // The item span starts at its marker; `list_marker_at` re-derives the marker's extent
-        // (`body_col` is one separating space past it).
-        let line = line_start_of(self.source, it.span.start);
-        if let Some(marker) = list_marker_at(self.source, line) {
+        // The item span starts at its marker; `list_marker_at` treats the given offset as a line
+        // start, which also covers R9's body-start items (`@{- x}` — the marker is mid-line, so
+        // deriving from the real line start would miss it).
+        if let Some(marker) = list_marker_at(self.source, it.span.start) {
             self.emit(marker.offset, marker.body_col - 1, NotaHighlightKind::ListMarker);
         }
         self.visit_nota_children(&it.children);
@@ -814,6 +814,14 @@ mod tests {
         assert!(has(&spans, K::PropName, "class"));
         assert!(has(&spans, K::JsString, "\"tip\""));
         assert!(has(&spans, K::EmphasisStrong, "*b*"));
+    }
+
+    #[test]
+    fn body_start_list_marker() {
+        // R9: a body opening with a marker (`@{- x}`) — the marker is mid-line and must still
+        // classify.
+        let spans = hl("@{- item} and @div{- other}\n");
+        assert_eq!(spans.iter().filter(|(k, t)| *k == K::ListMarker && t == "-").count(), 2);
     }
 
     #[test]

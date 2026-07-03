@@ -537,11 +537,38 @@ pub fn colon_prop_line_at(source: &str, line_start: u32) -> Option<u32> {
     Some(line_start + m.end() as u32)
 }
 
+/// Scan the line from `from` for a **depth-0 `}`**: `\`-escaped bytes are skipped, an `@`-form's
+/// head + `(…)`/`[…]` groups are opaque ([`Scan::skip_at_form`]) — a `}` inside embedded-JS props
+/// cannot match — and balanced `{…}` on the line is tracked. Returns the `}`'s offset, or `None`
+/// when the line has no depth-0 `}`. This is the brace clip shared by colon sugar's first line
+/// and by line-start sugar armed inside a braced body (`@{- item}` — the item's extent must not
+/// eat the body's closer).
+pub fn brace_clip_on_line(source: &str, from: u32) -> Option<u32> {
+    let mut s = Scan::new(source, from);
+    let mut depth = 0i32;
+    loop {
+        match s.peek() {
+            None | Some(b'\n') => return None,
+            Some(b'\\') => s.advance(2), // skip the escaped byte
+            Some(b'@') => s.skip_at_form(),
+            Some(b'{') => {
+                depth += 1;
+                s.bump();
+            }
+            Some(b'}') if depth == 0 => return Some(s.pos()),
+            Some(b'}') => {
+                depth = (depth - 1).max(0);
+                s.bump();
+            }
+            _ => s.bump(),
+        }
+    }
+}
+
 /// Compute the source extent `[start, end)` of a `@head:` colon-sugar body: the rest of the
 /// `@head:` line (after inline whitespace) plus following lines indented strictly past
 /// `head_indent`. When `clip_at_brace`, a depth-0 `}` (closing an enclosing `{…}` body) ends the
-/// body on the first line; `\`-escaped bytes are skipped, and an `@`-form's head + `(…)`/`[…]`
-/// groups are opaque ([`skip_at_form`]) — a `}` inside embedded-JS props cannot clip the body.
+/// body on the first line ([`brace_clip_on_line`]).
 pub fn colon_block_extent(
     source: &str,
     colon_end: u32,
@@ -551,25 +578,10 @@ pub fn colon_block_extent(
     let mut s = Scan::new(source, colon_end);
     s.skip_inline_ws();
     let start = s.pos();
-    let mut depth = 0i32;
-    s.goto(colon_end);
-    let first_line_end = loop {
-        match s.peek() {
-            None | Some(b'\n') => break next_line_start(source, colon_end),
-            Some(b'\\') => s.advance(2), // skip the escaped byte
-            Some(b'@') => s.skip_at_form(),
-            Some(b'{') => {
-                depth += 1;
-                s.bump();
-            }
-            Some(b'}') if depth == 0 && clip_at_brace => return (start, s.pos()),
-            Some(b'}') => {
-                depth = (depth - 1).max(0);
-                s.bump();
-            }
-            _ => s.bump(),
-        }
-    };
+    if clip_at_brace && let Some(clip) = brace_clip_on_line(source, colon_end) {
+        return (start, clip);
+    }
+    let first_line_end = next_line_start(source, colon_end);
     (start, indented_block_end(source, first_line_end, head_indent as u32))
 }
 

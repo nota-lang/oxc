@@ -814,6 +814,49 @@ fn line_start_sugar_after_a_colon_block() {
 }
 
 #[test]
+fn body_start_is_a_line_start() {
+    // Contract R9: the start of a markup body counts as a line start (Typst's content-block
+    // rule), so a body opening directly with a marker opens the construct — with the extent
+    // clipped at the body's own closer.
+
+    // The motivating case: a single-line fragment body in JS position.
+    let js = nota_doc("% let Foo = () => @{- You're beautiful.}\n\n- You don't know\n@Foo{}\n");
+    assert!(
+        js.contains(r#"let Foo = () => Fragment(h("nota-ul-li", {}, ["You're beautiful."]))"#),
+        "fragment body opening with a list marker: {js}"
+    );
+
+    // Element bodies — single-line, and multi-line with the closer on the item's line (the
+    // latter used to be a hard error: the item's line extent ate the `}`).
+    assert!(
+        nota_doc("@div{- a}\n").contains(r#"h("div", {}, [h("nota-ul-li", {}, ["a"])])"#),
+        "single-line body opening with a marker"
+    );
+    assert!(
+        nota_doc("@div{\n- a\n- b}\n").contains(r#"h("nota-ul-li", {}, ["b"])"#),
+        "closer on the last item's line"
+    );
+    // Headings, colon bodies, emphasis bodies.
+    assert!(nota_doc("@div{# T}\n").contains(r#"h("h1", {}, ["T"])"#), "heading at body start");
+    assert!(
+        nota_doc("@foo: - a\n").contains(r#"h("nota-ul-li", {}, ["a"])"#),
+        "list at a colon body's start"
+    );
+    assert!(
+        nota_doc("x *- y* z\n").contains(r#"h("strong", {}, [h("nota-ul-li", {}, ["y"])])"#),
+        "list at an emphasis body's start (clipped at the close marker)"
+    );
+    // Literal braces in prose do NOT open a body — `{- x}` mid-paragraph stays text.
+    let js = nota_doc("a {- b} c\n");
+    assert!(!js.contains("nota-ul-li"), "literal braces stay prose: {js}");
+    // Balanced literal braces inside an armed item stay literal.
+    assert!(
+        nota_doc("@div{- a {b} c}\n").contains(r#"["a {b} c"]"#),
+        "balanced braces inside the item"
+    );
+}
+
+#[test]
 fn percent_statement_region_rules() {
     // TODO.md bug 6 regression — the `%` statement-region contract: the rest of the line is JS
     // (arbitrary statements, JS's own `;`/ASI rules, continuing across single newlines exactly
