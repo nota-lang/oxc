@@ -40,7 +40,9 @@ const BLOCK_COMPONENT: &str = "blockComponent";
 /// Ambient-prelude tags for code/math spans (referenced as identifiers — no import emitted).
 const CODE_INLINE: &str = "CodeInline";
 const CODE_BLOCK: &str = "CodeBlock";
-const MATH: &str = "Math";
+/// `Tex`, not `Math` (contract R14): the ambient identifier must not capture the JS `Math` global —
+/// the integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
+const MATH: &str = "Tex";
 
 /// A tag name is a *component* (identifier) iff it starts with an uppercase ASCII letter; otherwise
 /// it is a *host* element (string tag).

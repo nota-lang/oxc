@@ -161,7 +161,7 @@ Semantic pins (deliberate, tested):
   backtick or `${`) falls back to a **cooked string literal** — a `\`-escape inside `String.raw`
   would leak into the runtime value.
 - The reader does **not** emit the `@nota-lang/runtime` import (the shim/integrator prepends it);
-  `CodeInline`/`CodeBlock`/`Math` are ambient prelude identifiers.
+  `CodeInline`/`CodeBlock`/`Tex` are ambient prelude identifiers (`Tex`, not `Math` — contract R14).
 
 ## Compiler entries (`crates/oxc/src/nota.rs`)
 

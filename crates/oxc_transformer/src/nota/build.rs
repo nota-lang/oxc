@@ -353,7 +353,7 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// Build the ambient-prelude element `h(<Name>, { <props> }, [<raw-children>])` for a code/math
-    /// span (`CodeInline`/`CodeBlock`/`Math` — referenced as identifiers, no import emitted).
+    /// span (`CodeInline`/`CodeBlock`/`Tex` — referenced as identifiers, no import emitted).
     pub(super) fn build_raw_element(
         &self,
         span: Span,
