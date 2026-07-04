@@ -6294,36 +6294,6 @@ impl<'a> Format<'a> for AstNode<'a, NotaMath<'a>> {
     }
 }
 
-impl<'a> Format<'a> for AstNode<'a, NotaMathPart<'a>> {
-    #[inline]
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
-        let allocator = self.allocator;
-        let parent = self.parent;
-        match self.inner {
-            NotaMathPart::Raw(inner) => {
-                allocator
-                    .alloc(AstNode::<NotaText> {
-                        inner,
-                        parent,
-                        allocator,
-                        following_span_start: self.following_span_start,
-                    })
-                    .fmt(f);
-            }
-            NotaMathPart::Interpolation(inner) => {
-                allocator
-                    .alloc(AstNode::<NotaInterpolation> {
-                        inner,
-                        parent,
-                        allocator,
-                        following_span_start: self.following_span_start,
-                    })
-                    .fmt(f);
-            }
-        }
-    }
-}
-
 impl<'a> Format<'a> for AstNode<'a, NotaVerbatim<'a>> {
     fn fmt(&self, f: &mut Formatter<'_, 'a>) {
         let is_suppressed = f.comments().is_suppressed(self.span().start);

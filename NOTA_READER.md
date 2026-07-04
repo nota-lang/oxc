@@ -78,7 +78,7 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
 - **A parser-owned `NotaRegion` stack is *Axis 2*** — the host an inner `@`-form's *tail* resumes
   into, orthogonal to `BodyMode`: `Markup(BodyMode)` (resume by markup-lex — the only region markup
   children may push into), `Js` (an expression-position form or a `k: @form` prop value — resume by
-  JS-lex), or `Raw` (the tail after a verbatim `|@` armed form — *parked*). `resume_at` is the one
+  JS-lex), or `Raw` (the tail after a `|@` armed form in any raw span — *parked*). `resume_at` is the one
   exit primitive every construct returns through, a three-way dispatch on the top region;
   `nota_park` sets a zero-width `Undetermined` token and reads no source (the enclosing raw scan
   owns the following bytes and re-seeks itself from `prev_token_end`), and `Undetermined` makes an
@@ -91,8 +91,20 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   clipped at the enclosing body's depth-0 `}` (`brace_clip_on_line`, string/`@`-form-aware) or the
   bounded range's end. Literal braces in prose never re-enter `collect_markup`, so `a {- b} c`
   stays text.
+- **Raw spans share ONE content model (contract R13)** — verbatim `|{…}|`, inline/block code, and
+  inline/fence math are all *raw runs interleaved with `|@`-armed `@`-forms*. Extents are **pure
+  pre-scans** first (`lex_code_span` / `lex_math_span` / `verbatim_boundary`); then a **second
+  bounded scan** (`armed_boundary`) walks the fixed extent for `|@`, each of which re-enters Nota via
+  `parse_nota_form_in(Raw)` — its tail parks, and the scan resumes from `prev_token_end`. A bare `@`
+  is literal (no direct interpolation). Dollar spans mirror backtick spans (the `≥N`-run close, the
+  fence with a whitespace-only opener tail), diverging only in the TeX escape (the dollar close scan
+  skips `\<c>`). Because the extent is fixed first, an armed form's parse is clamped to it: the head
+  lexer stops at the close (else `$`, an identifier byte, would be eaten — `|@energy$`), and the pure
+  scans see a source view clamped to the extent (`nota_scan_source`), so a nested close past the
+  extent is unreachable — a form that swallows the close overruns and is a fatal diagnostic
+  (`nota_armed_form_overruns_span`), never a panic. There is no escape for a literal `|@`.
 - **Multi-byte extents are measured over the raw source** by the pure scans in `lexer/nota.rs`
-  (emphasis close, raw spans, math/verbatim boundaries, list/colon block extents, `else`
+  (emphasis close, raw-span extents, list/colon block extents, `else`
   continuation): the closers are multi-byte and context-dependent — a poor fit for token lexing —
   and raw-source matching is robust to lexer mode and to escapes (`\else`, `\*`) that are not
   clean JS tokens. Line-start classifiers (`%`/fence/heading/list/`|`-prop lines) are `lazy-regex`
@@ -103,8 +115,8 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   `parse_binding_pattern`) with `SourceType::is_nota()` set, so `@`-forms nest inside embedded JS.
   **The JS lexer's one-token lookahead never reads bytes past a region boundary it does not own**: a
   `[props]` group's `]` is validated *without advancing* and the continuation chosen by a raw byte
-  peek at its end, a math `@(…)`'s `)` is parked, and a verbatim body's raw runs stay the raw
-  scan's — each once mis-lexed a trailing `\`-run as a JS escape. The lone exception is a `%`/`%%%`
+  peek at its end, a `|@`-armed form's exit inside a raw span is parked, and a raw span's runs stay
+  the raw scan's — each once mis-lexed a trailing `\`-run as a JS escape. The lone exception is a `%`/`%%%`
   statement region, whose boundary is discoverable only *after* the JS parse: it is **bounded** by
   temporarily clamping the lexer's source end (`with_source_end_bound`) to `statement_bound` — the
   next line-leading `%` or the first **blank line** (contract R8: ASI applies as at end of input) —

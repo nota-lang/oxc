@@ -3373,21 +3373,6 @@ pub trait Traverse<'a, State> {
     fn exit_nota_math(&mut self, node: &mut NotaMath<'a>, ctx: &mut TraverseCtx<'a, State>) {}
 
     #[inline]
-    fn enter_nota_math_part(
-        &mut self,
-        node: &mut NotaMathPart<'a>,
-        ctx: &mut TraverseCtx<'a, State>,
-    ) {
-    }
-    #[inline]
-    fn exit_nota_math_part(
-        &mut self,
-        node: &mut NotaMathPart<'a>,
-        ctx: &mut TraverseCtx<'a, State>,
-    ) {
-    }
-
-    #[inline]
     fn enter_nota_verbatim(
         &mut self,
         node: &mut NotaVerbatim<'a>,

@@ -3518,8 +3518,8 @@ impl<'a> Dummy<'a> for NotaCode<'a> {
             node_id: Dummy::dummy(allocator),
             span: Dummy::dummy(allocator),
             language: Dummy::dummy(allocator),
-            value: Dummy::dummy(allocator),
             block: Dummy::dummy(allocator),
+            parts: Dummy::dummy(allocator),
         }
     }
 }
@@ -3532,18 +3532,9 @@ impl<'a> Dummy<'a> for NotaMath<'a> {
         Self {
             node_id: Dummy::dummy(allocator),
             span: Dummy::dummy(allocator),
-            display: Dummy::dummy(allocator),
+            block: Dummy::dummy(allocator),
             parts: Dummy::dummy(allocator),
         }
-    }
-}
-
-impl<'a> Dummy<'a> for NotaMathPart<'a> {
-    /// Create a dummy [`NotaMathPart`].
-    ///
-    /// Has cost of making 1 allocation (32 bytes).
-    fn dummy(allocator: &'a Allocator) -> Self {
-        Self::Raw(Dummy::dummy(allocator))
     }
 }
 

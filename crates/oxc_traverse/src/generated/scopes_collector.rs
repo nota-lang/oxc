@@ -2032,39 +2032,6 @@ impl<'a> Visit<'a> for ChildScopeCollector {
         self.visit_nota_markup_kind(&it.kind);
     }
 
-    fn visit_nota_form(&mut self, it: &NotaForm<'a>) {
-        match it {
-            NotaForm::Element(it) => self.visit_nota_element(it),
-            NotaForm::Fragment(it) => self.visit_nota_fragment(it),
-            NotaForm::Interpolation(it) => self.visit_nota_interpolation(it),
-            NotaForm::If(it) => self.visit_nota_if(it),
-            NotaForm::For(it) => self.visit_nota_for(it),
-            NotaForm::Math(it) => self.visit_nota_math(it),
-            NotaForm::Verbatim(it) => self.visit_nota_verbatim(it),
-            _ => {
-                // Remaining variants do not contain scopes:
-                // `Code`
-            }
-        }
-    }
-
-    fn visit_nota_markup_kind(&mut self, it: &NotaMarkupKind<'a>) {
-        match it {
-            NotaMarkupKind::Document(it) => self.visit_nota_document(it),
-            NotaMarkupKind::Element(it) => self.visit_nota_element(it),
-            NotaMarkupKind::Fragment(it) => self.visit_nota_fragment(it),
-            NotaMarkupKind::Interpolation(it) => self.visit_nota_interpolation(it),
-            NotaMarkupKind::If(it) => self.visit_nota_if(it),
-            NotaMarkupKind::For(it) => self.visit_nota_for(it),
-            NotaMarkupKind::Math(it) => self.visit_nota_math(it),
-            NotaMarkupKind::Verbatim(it) => self.visit_nota_verbatim(it),
-            _ => {
-                // Remaining variants do not contain scopes:
-                // `Code`
-            }
-        }
-    }
-
     #[inline]
     fn visit_nota_document(&mut self, it: &NotaDocument<'a>) {
         self.visit_nota_children(&it.items);
@@ -2081,12 +2048,12 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             NotaChild::Interpolation(it) => self.visit_nota_interpolation(it),
             NotaChild::If(it) => self.visit_nota_if(it),
             NotaChild::For(it) => self.visit_nota_for(it),
+            NotaChild::Code(it) => self.visit_nota_code(it),
             NotaChild::Math(it) => self.visit_nota_math(it),
             NotaChild::Verbatim(it) => self.visit_nota_verbatim(it),
             _ => {
                 // Remaining variants do not contain scopes:
                 // `Text`
-                // `Code`
             }
         }
     }
@@ -2152,23 +2119,6 @@ impl<'a> Visit<'a> for ChildScopeCollector {
         // Struct does not contain a scope. Halt traversal.
     }
 
-    fn visit_nota_prop_value(&mut self, it: &NotaPropValue<'a>) {
-        match it {
-            NotaPropValue::Expression(it) => self.visit_nota_prop_expr(it),
-            NotaPropValue::Element(it) => self.visit_nota_element(it),
-            NotaPropValue::Fragment(it) => self.visit_nota_fragment(it),
-            NotaPropValue::Interpolation(it) => self.visit_nota_interpolation(it),
-            NotaPropValue::If(it) => self.visit_nota_if(it),
-            NotaPropValue::For(it) => self.visit_nota_for(it),
-            NotaPropValue::Math(it) => self.visit_nota_math(it),
-            NotaPropValue::Verbatim(it) => self.visit_nota_verbatim(it),
-            _ => {
-                // Remaining variants do not contain scopes:
-                // `Code`
-            }
-        }
-    }
-
     #[inline]
     fn visit_nota_prop_expr(&mut self, it: &NotaPropExpr<'a>) {
         self.visit_expression(&it.expression);
@@ -2210,25 +2160,14 @@ impl<'a> Visit<'a> for ChildScopeCollector {
         self.visit_nota_fragment(&it.body);
     }
 
-    #[inline(always)]
+    #[inline]
     fn visit_nota_code(&mut self, it: &NotaCode<'a>) {
-        // Struct does not contain a scope. Halt traversal.
+        self.visit_nota_verbatim_parts(&it.parts);
     }
 
     #[inline]
     fn visit_nota_math(&mut self, it: &NotaMath<'a>) {
-        self.visit_nota_math_parts(&it.parts);
-    }
-
-    #[inline]
-    fn visit_nota_math_part(&mut self, it: &NotaMathPart<'a>) {
-        match it {
-            NotaMathPart::Interpolation(it) => self.visit_nota_interpolation(it),
-            _ => {
-                // Remaining variants do not contain scopes:
-                // `Raw`
-            }
-        }
+        self.visit_nota_verbatim_parts(&it.parts);
     }
 
     #[inline]
@@ -2244,12 +2183,12 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             NotaVerbatimPart::Interpolation(it) => self.visit_nota_interpolation(it),
             NotaVerbatimPart::If(it) => self.visit_nota_if(it),
             NotaVerbatimPart::For(it) => self.visit_nota_for(it),
+            NotaVerbatimPart::Code(it) => self.visit_nota_code(it),
             NotaVerbatimPart::Math(it) => self.visit_nota_math(it),
             NotaVerbatimPart::Verbatim(it) => self.visit_nota_verbatim(it),
             _ => {
                 // Remaining variants do not contain scopes:
                 // `Raw`
-                // `Code`
             }
         }
     }

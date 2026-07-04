@@ -6181,6 +6181,14 @@ unsafe fn walk_nota_code<'a, Tr: Traverse<'a>>(
     ctx: &mut TraverseCtx<'a>,
 ) {
     traverser.enter_nota_code(&mut *node, ctx);
+    let pop_token =
+        ctx.push_stack(Ancestor::NotaCodeParts(ancestor::NotaCodeWithoutParts(node, PhantomData)));
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_CODE_PARTS)
+        as *mut Vec<NotaVerbatimPart>)
+    {
+        walk_nota_verbatim_part(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
     traverser.exit_nota_code(&mut *node, ctx);
 }
 
@@ -6192,28 +6200,13 @@ unsafe fn walk_nota_math<'a, Tr: Traverse<'a>>(
     traverser.enter_nota_math(&mut *node, ctx);
     let pop_token =
         ctx.push_stack(Ancestor::NotaMathParts(ancestor::NotaMathWithoutParts(node, PhantomData)));
-    for item in
-        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_MATH_PARTS) as *mut Vec<NotaMathPart>)
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_MATH_PARTS)
+        as *mut Vec<NotaVerbatimPart>)
     {
-        walk_nota_math_part(traverser, item as *mut _, ctx);
+        walk_nota_verbatim_part(traverser, item as *mut _, ctx);
     }
     ctx.pop_stack(pop_token);
     traverser.exit_nota_math(&mut *node, ctx);
-}
-
-unsafe fn walk_nota_math_part<'a, Tr: Traverse<'a>>(
-    traverser: &mut Tr,
-    node: *mut NotaMathPart<'a>,
-    ctx: &mut TraverseCtx<'a>,
-) {
-    traverser.enter_nota_math_part(&mut *node, ctx);
-    match &mut *node {
-        NotaMathPart::Raw(node) => walk_nota_text(traverser, (&mut **node) as *mut _, ctx),
-        NotaMathPart::Interpolation(node) => {
-            walk_nota_interpolation(traverser, (&mut **node) as *mut _, ctx)
-        }
-    }
-    traverser.exit_nota_math_part(&mut *node, ctx);
 }
 
 unsafe fn walk_nota_verbatim<'a, Tr: Traverse<'a>>(

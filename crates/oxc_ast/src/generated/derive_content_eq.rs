@@ -2749,25 +2749,15 @@ impl ContentEq for NotaFor<'_> {
 impl ContentEq for NotaCode<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.language, &other.language)
-            && ContentEq::content_eq(&self.value, &other.value)
             && ContentEq::content_eq(&self.block, &other.block)
+            && ContentEq::content_eq(&self.parts, &other.parts)
     }
 }
 
 impl ContentEq for NotaMath<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.display, &other.display)
+        ContentEq::content_eq(&self.block, &other.block)
             && ContentEq::content_eq(&self.parts, &other.parts)
-    }
-}
-
-impl ContentEq for NotaMathPart<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Raw(a), Self::Raw(b)) => a.content_eq(b),
-            (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
-            _ => false,
-        }
     }
 }
 

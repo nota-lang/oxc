@@ -379,7 +379,10 @@ pub struct NotaFor<'a> {
 // Verbatim / code / math
 // ===============================================================================================
 
-/// `` `inline` `` or fenced ```` ```lang⏎…⏎``` ```` code — raw, no interpolation.
+/// `` `inline` `` / fenced ```` ```lang⏎…⏎``` ```` code.
+///
+/// Raw text runs interleaved with `|@`-armed `@`-forms (the unified raw-span content model; only
+/// `|@` re-enters Nota, a bare `@` is literal). Shares [`NotaVerbatimPart`] with verbatim and math.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
@@ -388,34 +391,27 @@ pub struct NotaCode<'a> {
     pub span: Span,
     /// Fence language tag, if any (block code only).
     pub language: Option<Str<'a>>,
-    /// The raw code text.
-    pub value: Str<'a>,
     /// `true` for a fenced block, `false` for inline.
     pub block: bool,
+    /// Raw runs interleaved with `|@`-armed `@`-forms.
+    pub parts: Vec<'a, NotaVerbatimPart<'a>>,
 }
 
-/// `$math$` / `$$display$$` — raw LaTeX with `@`-interpolated substitutions.
+/// `$inline$` / `$$⏎display⏎$$` math.
+///
+/// Raw text runs interleaved with `|@`-armed `@`-forms (the unified raw-span content model; only
+/// `|@` re-enters Nota, a bare `@` is literal). Shares [`NotaVerbatimPart`] with verbatim and code.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
 pub struct NotaMath<'a> {
     pub node_id: Cell<NodeId>,
     pub span: Span,
-    /// `true` for `$$display$$`.
-    pub display: bool,
-    /// Alternating raw runs and `@`-interpolations.
-    pub parts: Vec<'a, NotaMathPart<'a>>,
-}
-
-/// One piece of a [`NotaMath`] body.
-#[ast(visit)]
-#[derive(Debug)]
-#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, GetAddress, ContentEq, ESTree)]
-pub enum NotaMathPart<'a> {
-    /// A raw LaTeX run.
-    Raw(Box<'a, NotaText<'a>>) = 0,
-    /// `@name` / `@(expr)` substituted into the template.
-    Interpolation(Box<'a, NotaInterpolation<'a>>) = 1,
+    /// `true` for the `$$…$$` fenced (display) form; `false` for an inline `$…$` span. Mirrors
+    /// [`NotaCode::block`] (the runtime prop stays named `display`).
+    pub block: bool,
+    /// Raw runs interleaved with `|@`-armed `@`-forms.
+    pub parts: Vec<'a, NotaVerbatimPart<'a>>,
 }
 
 /// `@tag|{ raw … |@form… }|` — a verbatim body (raw runs interleaved with re-entered `@`-forms).

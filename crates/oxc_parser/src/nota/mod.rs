@@ -33,12 +33,13 @@ use crate::{
     error_handler::FatalError,
     lexer::Kind,
     lexer::nota::{
-        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, at_line_start_in_frame,
-        brace_clip_on_line, byte_at, colon_block_extent, colon_prop_line_at, else_peek,
-        escape_span, find_emphasis_close, find_fence_close, heading_at, is_ident_start_at,
-        is_statement_line, lex_code_span, line_content_end, line_indent_of, list_item_extent,
-        list_marker_at, markup_trigger, math_boundary, next_line_start, percent_line_is_empty,
-        scan_hyphen_tail, sigil_run_end, statement_bound, statement_kind, verbatim_boundary,
+        ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
+        armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
+        colon_prop_line_at, else_peek, escape_span, find_emphasis_close, find_fence_close,
+        heading_at, is_ident_start_at, is_statement_line, lex_code_span, lex_math_span,
+        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
+        next_line_start, percent_line_is_empty, scan_hyphen_tail, statement_bound, statement_kind,
+        verbatim_boundary,
     },
 };
 
@@ -514,8 +515,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.parse_emphasis(m, self.cur_token().start());
                 }
                 Kind::NotaBackslash => {
-                    // General escape: `\<c>` → literal `<c>`, the `\` dropped.
-                    let span = escape_span(self.source_text, self.cur_token().start());
+                    // General escape: `\<c>` → literal `<c>`, the `\` dropped. The clamped scan view
+                    // keeps `<c>` within a bounded raw span's extent (an escape can't reach past it).
+                    let span = escape_span(self.nota_scan_source(), self.cur_token().start());
                     self.push_text(span.start, span.end);
                     self.nota_seek_markup(span.end);
                 }
@@ -953,7 +955,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse an emphasis span opened by `marker` (`*`→strong, `_`→em) at raw offset `open`. With
     /// no matching close in scope the marker is literal (Typst behavior).
     fn parse_emphasis(&mut self, marker: u8, open: u32) {
-        if let Some(close) = find_emphasis_close(self.source_text, open, marker) {
+        if let Some(close) = find_emphasis_close(self.nota_scan_source(), open, marker) {
             let children = self.collect_markup_range(open + 1, close);
             let marker =
                 if marker == b'*' { NotaEmphasisMarker::Strong } else { NotaEmphasisMarker::Em };
@@ -1022,10 +1024,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 }
 
 // ===============================================================================================
-// Raw spans: verbatim `|{ … }|`, code `` `…` ``/fenced, math `$…$`/`$$…$$`. Extents are scanned
-// over the raw source; the lexer is re-seeked only on resume. Content lowers to `String.raw`
-// templates. Math `@`-interpolation becomes a `${…}` substitution; verbatim `|@` re-enters Nota
-// as a *sibling* child.
+// Raw spans: verbatim `|{ … }|`, code `` `…` ``/fenced, math `$…$` inline / `$$⏎…⏎$$` fence. All
+// share ONE content model — raw text runs interleaved with `|@`-armed `@`-forms. Each extent is a
+// pure pre-scan over the raw source (`lex_code_span` / `lex_math_span` / `verbatim_boundary`); a
+// SECOND bounded scan (`armed_boundary`) then walks the fixed content extent for `|@`, each of
+// which re-enters Nota as a *sibling* child parsed under a `Raw` region (its tail parks; the scan
+// resumes from `prev_token_end`). A bare `@` is literal. Content lowers to `String.raw` templates.
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
@@ -1046,24 +1050,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// a diagnostic).
     fn collect_verbatim_body(&mut self, start: u32) -> (ArenaVec<'a, NotaVerbatimPart<'a>>, u32) {
         let mut children = self.ast.vec();
+        // The clamped scan view (real length, or a bounded raw span's extent when this verbatim is
+        // itself a `|@`-armed form) caps the `}|` scan — a close past the clamp is unreachable, so
+        // the body reports `Eof` (overruns) rather than parking past the clamp.
+        let source = self.nota_scan_source();
         // Drop a single leading newline right after `|{` (the Scribble `{`-newline rule);
         // otherwise the body is fully raw — no indent strip, no trimming.
-        let start = if byte_at(self.source_text, start) == Some(b'\n') { start + 1 } else { start };
+        let start = if byte_at(source, start) == Some(b'\n') { start + 1 } else { start };
         let mut run_start = start;
         loop {
-            let (run_end, boundary) = verbatim_boundary(self.source_text, run_start);
+            let (run_end, boundary) = verbatim_boundary(source, run_start);
             self.push_raw_run(&mut children, run_start, run_end);
             match boundary {
                 VerbatimBoundary::Close { after } => return (children, after),
                 VerbatimBoundary::ArmedAt { at } => {
-                    // Armed escape: parse one `@`-form under a `Raw` region, so its every exit
-                    // parks (no lex) — the following bytes are the raw scan's, not JS. The scan
-                    // resumes from `prev_token_end` (the park's offset).
-                    self.nota_seek_to(at);
-                    debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
-                    let form = self.parse_nota_form_in(NotaRegion::Raw);
-                    children.push(NotaVerbatimPart::from(form));
-                    run_start = self.prev_token_end;
+                    run_start = self.push_armed_form(&mut children, at);
                 }
                 VerbatimBoundary::Eof => {
                     let span = Span::new(start, run_end);
@@ -1074,7 +1075,73 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Push the raw slice `[from, to)` as a verbatim raw part (skipped if empty).
+    /// Collect the raw content `[content_start, content_end)` of a *bounded* raw span (inline/block
+    /// code or math) into interleaved parts: raw runs plus each `|@`-armed `@`-form. The extent is
+    /// fixed by the caller's pure pre-scan, so an armed form whose parse overruns it
+    /// (`prev_token_end > content_end` — it ate the span's close) is a fatal diagnostic. Shares the
+    /// armed-form machinery with verbatim ([`Self::push_armed_form`]).
+    fn collect_bounded_armed(
+        &mut self,
+        content_start: u32,
+        content_end: u32,
+    ) -> ArenaVec<'a, NotaVerbatimPart<'a>> {
+        let mut parts = self.ast.vec();
+        let mut run_start = content_start;
+        loop {
+            let (run_end, boundary) = armed_boundary(self.source_text, run_start, content_end);
+            self.push_raw_run(&mut parts, run_start, run_end);
+            match boundary {
+                ArmedBoundary::Bound => return parts,
+                ArmedBoundary::ArmedAt { at } => {
+                    // Clamp the armed form's parse to the span's fixed extent. Unlike verbatim
+                    // (`}|`-closed, and `}`/`|` are not identifier bytes), a code/math close can be
+                    // an identifier-continue byte — `$` is, so `|@energy$` would otherwise lex the
+                    // head as `energy$`, eating the close. The clamp makes `content_end` an `Eof`
+                    // for the inner parse (the same device `%` statements use).
+                    run_start = self
+                        .with_source_end_bound(content_end, |p| p.push_armed_form(&mut parts, at));
+                    // `fatal_error`, not `has_fatal_error()`: the armed form's exit parks (an
+                    // `Undetermined` current token), which `has_fatal_error()` also reports — only a
+                    // real diagnostic from the inner parse should abort the run.
+                    if self.fatal_error.is_some() {
+                        return parts;
+                    }
+                    // The clamp bounds the *lexer*, but an armed form whose own extent comes from a
+                    // pure source scan — a nested verbatim `}|`, another raw span — can still run
+                    // past `content_end` (the scan ignores the clamp). That is malformed: the inner
+                    // form swallowed this span's close.
+                    if run_start > content_end {
+                        let span = Span::new(at - 1, run_start);
+                        self.set_fatal_error(diagnostics::nota_armed_form_overruns_span(span));
+                        return parts;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Parse one `|@`-armed `@`-form at `at` (the `@`) under a [`NotaRegion::Raw`] region, pushing
+    /// it as a sibling part, and return the offset the raw scan resumes from (the park's
+    /// `prev_token_end`). Under `Raw` every exit parks — no lex — so the following bytes stay the
+    /// raw scan's, not JS. The single re-entry point shared by verbatim bodies and bounded spans.
+    fn push_armed_form(&mut self, parts: &mut ArenaVec<'a, NotaVerbatimPart<'a>>, at: u32) -> u32 {
+        self.nota_seek_to(at);
+        debug_assert!(self.at(Kind::At), "armed `|@` not at `@`");
+        let form = self.parse_nota_form_in(NotaRegion::Raw);
+        parts.push(NotaVerbatimPart::from(form));
+        self.prev_token_end
+    }
+
+    /// The source view the pure raw-scans (code / math / emphasis / verbatim closes) see: the whole
+    /// source, clamped to the lexer's current source end. Normally the full source; inside a bounded
+    /// raw span's `|@`-armed parse it is a prefix bounded to the span's extent, so a nested close
+    /// past that extent is unreachable — the span overruns / errors — rather than seeking the lexer
+    /// past the clamp (which would be a fatal invariant break). A prefix preserves absolute offsets.
+    fn nota_scan_source(&self) -> &'a str {
+        &self.source_text[..self.lexer.nota_source_end() as usize]
+    }
+
+    /// Push the raw slice `[from, to)` as a raw part (skipped if empty).
     fn push_raw_run(&self, children: &mut ArenaVec<'a, NotaVerbatimPart<'a>>, from: u32, to: u32) {
         if to <= from {
             return;
@@ -1085,14 +1152,19 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Parse a code span at `tick_off`, or — with no valid close — emit the opening backtick run
-    /// as literal text. Re-seeks markup at the resume offset either way.
+    /// as literal text. The content extent is collected as raw runs + `|@`-armed forms.
     fn parse_code_or_literal(&mut self, tick_off: u32) {
-        match lex_code_span(self.source_text, tick_off) {
+        match lex_code_span(self.nota_scan_source(), tick_off) {
             CodeScan::Code { span, is_block, lang, content, resume } => {
                 let language = lang.map(|l| self.ast.str(self.ast.allocator.alloc_str(l)));
-                let element = self.ast.nota_code(span, language, content, is_block);
+                let parts = self.collect_bounded_armed(content.start, content.end);
+                let element = self.ast.nota_code(span, language, is_block, parts);
                 self.push_nota_item(NotaChild::Code(self.ast.alloc(element)));
-                self.nota_seek_markup(resume);
+                // A park (armed form) leaves an `Undetermined` token that `has_fatal_error()` would
+                // report; only a real overrun/inner diagnostic (`fatal_error`) suppresses the resume.
+                if self.fatal_error.is_none() {
+                    self.nota_seek_markup(resume);
+                }
             }
             CodeScan::Literal { resume } => {
                 self.push_text(tick_off, resume);
@@ -1101,86 +1173,26 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Parse a math span at `dollar_off`, or — if unterminated — emit the opening `$`-run as
-    /// literal text. Re-seeks markup at the resume offset either way.
+    /// Parse a math span at `dollar_off`, or — with no valid close — emit the opening `$`-run as
+    /// literal text. Mirrors [`Self::parse_code_or_literal`]: the content extent is collected as
+    /// raw runs + `|@`-armed forms; `is_block` is the display fence.
     fn parse_math_or_literal(&mut self, dollar_off: u32) {
-        if let Some(resume) = self.parse_math_span(dollar_off) {
-            self.nota_seek_markup(resume);
-        } else {
-            let run_end = sigil_run_end(self.source_text, dollar_off, b'$');
-            self.push_text(dollar_off, run_end);
-            self.nota_seek_markup(run_end);
+        match lex_math_span(self.nota_scan_source(), dollar_off) {
+            MathScan::Math { span, is_block, content, resume } => {
+                let parts = self.collect_bounded_armed(content.start, content.end);
+                let element = self.ast.nota_math(span, is_block, parts);
+                self.push_nota_item(NotaChild::Math(self.ast.alloc(element)));
+                // See `parse_code_or_literal`: guard on `fatal_error`, not the park-sensitive
+                // `has_fatal_error()`.
+                if self.fatal_error.is_none() {
+                    self.nota_seek_markup(resume);
+                }
+            }
+            MathScan::Literal { resume } => {
+                self.push_text(dollar_off, resume);
+                self.nota_seek_markup(resume);
+            }
         }
-    }
-
-    /// Parse a math span whose opening `$`-run starts at `dollar_off` (`$` inline, `$$` display).
-    /// Raw-content extents come from [`math_boundary`]; only an `@(expr)` interpolation delegates
-    /// to the JS parser here (the parens bound it — an `@name` is scanned lexically because the JS
-    /// lexer would swallow the closing math delimiter: `$` is an identifier-continue byte, so
-    /// `@i$` would lex as `i$`). Returns the resume offset, or `None` if unterminated (the `$` run
-    /// is then literal).
-    fn parse_math_span(&mut self, dollar_off: u32) -> Option<u32> {
-        let display = byte_at(self.source_text, dollar_off + 1) == Some(b'$');
-        let delim_len: u32 = if display { 2 } else { 1 };
-
-        let mut parts = self.ast.vec();
-        let mut run_start = dollar_off + delim_len;
-        let after = loop {
-            let (run_end, boundary) = math_boundary(self.source_text, run_start, display);
-            self.push_math_raw(&mut parts, run_start, run_end);
-            run_start = match boundary {
-                MathBoundary::Close { after } => break after,
-                MathBoundary::Unterminated => return None,
-                MathBoundary::InterpName { name_end } => {
-                    let span = Span::new(run_end + 1, name_end);
-                    let name: &'a str = &self.source_text[span.start as usize..span.end as usize];
-                    self.push_math_interp(&mut parts, self.ast.expression_identifier(span, name));
-                    name_end
-                }
-                MathBoundary::InterpParen => {
-                    self.nota_seek_to(run_end);
-                    self.bump_any(); // `@`
-                    self.bump_any(); // `(`
-                    let expr = self.parse_expr();
-                    // Validate `)` WITHOUT advancing, then park: the bytes after it are raw TeX the
-                    // JS lexer must not read. The scan resumes from `prev_token_end` (the park's).
-                    self.expect_without_advance(Kind::RParen);
-                    let close_end = self.cur_token().end();
-                    self.push_math_interp(&mut parts, expr);
-                    self.nota_park(close_end);
-                    self.prev_token_end
-                }
-                MathBoundary::LiteralAt => {
-                    // `@` with no head: splice a literal `"@"` so the template stays well-formed.
-                    let span = Span::new(run_end, run_end + 1);
-                    self.push_math_interp(
-                        &mut parts,
-                        self.ast.expression_string_literal(span, "@", None),
-                    );
-                    run_end + 1
-                }
-            };
-        };
-
-        let element = self.ast.nota_math(Span::new(dollar_off, after), display, parts);
-        self.push_nota_item(NotaChild::Math(self.ast.alloc(element)));
-        Some(after)
-    }
-
-    /// Push the raw LaTeX slice `[start, end)` as a math part (skipped if empty).
-    fn push_math_raw(&self, parts: &mut ArenaVec<'a, NotaMathPart<'a>>, start: u32, end: u32) {
-        if end <= start {
-            return;
-        }
-        let slice = &self.source_text[start as usize..end as usize];
-        let text = self.ast.nota_text(Span::new(start, end), slice);
-        parts.push(NotaMathPart::Raw(self.ast.alloc(text)));
-    }
-
-    /// Push `expr` as a math interpolation part.
-    fn push_math_interp(&self, parts: &mut ArenaVec<'a, NotaMathPart<'a>>, expr: Expression<'a>) {
-        let interp = self.ast.nota_interpolation(expr.span(), expr);
-        parts.push(NotaMathPart::Interpolation(self.ast.alloc(interp)));
     }
 }
 

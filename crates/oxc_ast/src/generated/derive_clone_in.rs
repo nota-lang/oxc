@@ -9117,8 +9117,8 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaCode<'_> {
             node_id: Default::default(),
             span: CloneIn::clone_in(&self.span, allocator),
             language: CloneIn::clone_in(&self.language, allocator),
-            value: CloneIn::clone_in(&self.value, allocator),
             block: CloneIn::clone_in(&self.block, allocator),
+            parts: CloneIn::clone_in(&self.parts, allocator),
         }
     }
 
@@ -9127,8 +9127,8 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaCode<'_> {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
             language: CloneIn::clone_in_with_semantic_ids(&self.language, allocator),
-            value: CloneIn::clone_in_with_semantic_ids(&self.value, allocator),
             block: CloneIn::clone_in_with_semantic_ids(&self.block, allocator),
+            parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
         }
     }
 }
@@ -9140,7 +9140,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaMath<'_> {
         NotaMath {
             node_id: Default::default(),
             span: CloneIn::clone_in(&self.span, allocator),
-            display: CloneIn::clone_in(&self.display, allocator),
+            block: CloneIn::clone_in(&self.block, allocator),
             parts: CloneIn::clone_in(&self.parts, allocator),
         }
     }
@@ -9149,30 +9149,8 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaMath<'_> {
         NotaMath {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
-            display: CloneIn::clone_in_with_semantic_ids(&self.display, allocator),
+            block: CloneIn::clone_in_with_semantic_ids(&self.block, allocator),
             parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
-        }
-    }
-}
-
-impl<'new_alloc> CloneIn<'new_alloc> for NotaMathPart<'_> {
-    type Cloned = NotaMathPart<'new_alloc>;
-
-    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        match self {
-            Self::Raw(it) => NotaMathPart::Raw(CloneIn::clone_in(it, allocator)),
-            Self::Interpolation(it) => {
-                NotaMathPart::Interpolation(CloneIn::clone_in(it, allocator))
-            }
-        }
-    }
-
-    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        match self {
-            Self::Raw(it) => NotaMathPart::Raw(CloneIn::clone_in_with_semantic_ids(it, allocator)),
-            Self::Interpolation(it) => {
-                NotaMathPart::Interpolation(CloneIn::clone_in_with_semantic_ids(it, allocator))
-            }
         }
     }
 }

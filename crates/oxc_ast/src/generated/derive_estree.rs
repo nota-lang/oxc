@@ -3519,8 +3519,8 @@ impl ESTree for NotaCode<'_> {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaCode"));
         state.serialize_field("language", &self.language);
-        state.serialize_field("value", &self.value);
         state.serialize_field("block", &self.block);
+        state.serialize_field("parts", &self.parts);
         state.serialize_span(self.span);
         state.end();
     }
@@ -3530,19 +3530,10 @@ impl ESTree for NotaMath<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaMath"));
-        state.serialize_field("display", &self.display);
+        state.serialize_field("block", &self.block);
         state.serialize_field("parts", &self.parts);
         state.serialize_span(self.span);
         state.end();
-    }
-}
-
-impl ESTree for NotaMathPart<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        match self {
-            Self::Raw(it) => it.serialize(serializer),
-            Self::Interpolation(it) => it.serialize(serializer),
-        }
     }
 }
 

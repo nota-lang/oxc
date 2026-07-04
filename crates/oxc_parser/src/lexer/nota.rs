@@ -766,33 +766,14 @@ impl Scan<'_> {
                     None => self.i = entry + 1,
                 }
             }
-            Some(b'$') => {
-                let display = self.peek_at(1) == Some(b'$');
-                self.advance(if display { 2 } else { 1 });
-                loop {
-                    match self.peek() {
-                        None => {
-                            self.i = entry + 1;
-                            return;
-                        }
-                        // Inline math is clamped to its line: no close here → opener literal.
-                        Some(b'\n') if !display => {
-                            self.i = entry + 1;
-                            return;
-                        }
-                        Some(b'\\') => self.advance(2),
-                        Some(b'$') if !display => {
-                            self.bump();
-                            return;
-                        }
-                        Some(b'$') if self.peek_at(1) == Some(b'$') => {
-                            self.advance(2);
-                            return;
-                        }
-                        _ => self.bump(),
-                    }
-                }
-            }
+            // Math shares the code extent shape (inline `≥N`-close / display fence); delegate to the
+            // one dollar scan so emphasis steps over exactly the span the reader would build. A
+            // multi-line display fence carries the cursor past the emphasis line, killing the span
+            // (the caller's post-skip line-bound check) — an inline span never crosses a newline.
+            Some(b'$') => match lex_math_span(self.source, self.pos()) {
+                MathScan::Math { resume, .. } => self.i = resume as usize,
+                MathScan::Literal { .. } => self.i = entry + 1,
+            },
             Some(b'|') => {
                 self.advance(2); // past `|{`
                 loop {
@@ -860,8 +841,9 @@ pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
 /// The result of scanning a `` ` ``-opened code span ([`lex_code_span`]).
 pub enum CodeScan<'a> {
     /// A code span: `span` covers the whole `` `…` ``; `lang` is the block info-string's first
-    /// token (inline → `None`); `content` is the raw inner text.
-    Code { span: Span, is_block: bool, lang: Option<&'a str>, content: &'a str, resume: u32 },
+    /// token (inline → `None`); `content` is the raw inner extent `[start, end)` (raw runs
+    /// interleaved with `|@`-armed forms — the parser re-scans it with [`armed_boundary`]).
+    Code { span: Span, is_block: bool, lang: Option<&'a str>, content: Span, resume: u32 },
     /// Not a valid opener — the backtick run is literal text ending at `resume`.
     Literal { resume: u32 },
 }
@@ -887,7 +869,7 @@ pub fn lex_code_span(source: &str, tick_off: u32) -> CodeScan<'_> {
             span: Span::new(tick_off, resume),
             is_block: false,
             lang: None,
-            content: &source[content_start as usize..close as usize],
+            content: Span::new(content_start, close),
             resume,
         };
     }
@@ -946,7 +928,7 @@ fn scan_fenced_code(
                 span: Span::new(tick_off, s.pos()),
                 is_block: true,
                 lang,
-                content: &source[body_start as usize..code_end as usize],
+                content: Span::new(body_start, code_end),
                 resume: s.pos(),
             });
         }
@@ -957,74 +939,148 @@ fn scan_fenced_code(
         span: Span::new(tick_off, source.len() as u32),
         is_block: true,
         lang,
-        content: &source[body_start as usize..],
+        content: Span::new(body_start, source.len() as u32),
         resume: source.len() as u32,
     })
 }
 
 // ================================================================================================
-// Math spans (`$…$` / `$$…$$`) — the raw-content boundary scan
+// Math spans (`$…$` inline / `$$⏎…⏎$$` display fence) — structurally mirror code spans
 // ================================================================================================
 
-/// A boundary reached while scanning a math span's raw content ([`math_boundary`]).
-pub enum MathBoundary {
-    /// The closing `$`/`$$` run: the span ends; markup resumes at `after`.
-    Close { after: u32 },
-    /// `@name` — a lexical interpolation; the identifier spans `[run_end + 1, name_end)`.
-    InterpName { name_end: u32 },
-    /// `@(` — the parser parses the parenthesized expression (positioned at the `@`).
-    InterpParen,
-    /// `@` with no interpolation head — spliced as a literal `"@"`.
-    LiteralAt,
-    /// No closing delimiter in scope — the opening line's end (inline `$` never crosses a
-    /// newline) or end of source. The opening `$` run is then literal.
-    Unterminated,
+/// The result of scanning a `$`-opened math span ([`lex_math_span`]).
+pub enum MathScan {
+    /// A math span: `span` covers the whole `$…$` / `$$…$$`; `content` is the raw inner extent
+    /// `[start, end)` (raw runs interleaved with `|@`-armed forms). `is_block` is the display fence.
+    Math { span: Span, is_block: bool, content: Span, resume: u32 },
+    /// Not a valid opener — the `$`-run is literal text ending at `resume`.
+    Literal { resume: u32 },
 }
 
-/// Scan a math span's raw LaTeX from `from` to the next boundary: the closing delimiter, an
-/// `@`-interpolation, or the scope's end (inline `$` is clamped to its line; display `$$` is
-/// multi-line by design, bounded only by EOF). Returns `(run_end, boundary)` where
-/// `[from, run_end)` is raw content: `\<c>` keeps its backslash (LaTeX's own escape, so
-/// `\$`/`\@` stay literal), and a single `$` inside display math is literal. The `@name` scan is
-/// ASCII and excludes `$` so the math delimiter wins (`@i$`).
-pub fn math_boundary(source: &str, from: u32, display: bool) -> (u32, MathBoundary) {
-    let bound = if display { source.len() as u32 } else { line_content_end(source, from) };
-    let delim: u32 = if display { 2 } else { 1 };
+/// Scan a math span whose opening `$`-run starts at `dollar_off`. Structurally mirrors
+/// [`lex_code_span`]: a `≥2`-dollar run whose opener-line tail is whitespace-only opens a display
+/// *fence*; otherwise an inline span closed by the next same-line run of `≥ open_len` dollars
+/// (shorter runs are content). With no same-line close the run is literal. Backtick and dollar
+/// diverge in exactly one place — the dollar close scan honors TeX's `\<c>` escape (see
+/// [`find_dollar_close`]); a nonempty opener tail (dollars or not) forbids the fence (math has no
+/// info string), so `$$x$$` is inline run-2, and display math is the standalone-line fence.
+pub fn lex_math_span(source: &str, dollar_off: u32) -> MathScan {
+    let mut s = Scan::new(source, dollar_off);
+    let open_len = s.eat_run(b'$');
+    let content_start = s.pos();
+
+    if open_len >= 2
+        && let Some(fence) = scan_dollar_fence(source, dollar_off, open_len, content_start)
+    {
+        return fence;
+    }
+
+    if let Some(close) = find_dollar_close(source, content_start, open_len) {
+        let resume = close + open_len as u32;
+        return MathScan::Math {
+            span: Span::new(dollar_off, resume),
+            is_block: false,
+            content: Span::new(content_start, close),
+            resume,
+        };
+    }
+    MathScan::Literal { resume: content_start }
+}
+
+/// Find the next run of at least `open_len` dollars at/after `from` **on the same line** (the
+/// offset of its first `$`), or `None`. Mirrors [`find_backtick_close`]'s `≥`-rule and line clamp,
+/// with the TeX exception: a `\<c>` pair is skipped, so `\$` stays content (LaTeX's own escape) and
+/// the backslash is kept in the raw run — backtick scans stay escape-blind.
+fn find_dollar_close(source: &str, from: u32, open_len: usize) -> Option<u32> {
+    let bound = line_content_end(source, from);
     let mut s = Scan::new(source, from);
-    loop {
-        if s.pos() >= bound {
-            return (bound, MathBoundary::Unterminated);
-        }
+    while s.pos() < bound {
         match s.peek() {
-            None => return (s.pos(), MathBoundary::Unterminated),
             Some(b'\\') => s.advance(2),
-            Some(b'$') if !display || s.peek_at(1) == Some(b'$') => {
-                return (s.pos(), MathBoundary::Close { after: s.pos() + delim });
+            Some(b'$') => {
+                let run_start = s.pos();
+                if s.eat_run(b'$') >= open_len {
+                    return Some(run_start);
+                }
             }
-            Some(b'@') => {
-                let at = s.pos();
-                let boundary = if s.peek_at(1) == Some(b'(') {
-                    MathBoundary::InterpParen
-                } else {
-                    s.bump(); // the `@`
-                    let name_start = s.pos();
-                    s.skip_while(|b| b.is_ascii_alphanumeric() || b == b'_');
-                    if s.pos() == name_start {
-                        MathBoundary::LiteralAt
-                    } else {
-                        MathBoundary::InterpName { name_end: s.pos() }
-                    }
-                };
-                return (at, boundary);
-            }
-            Some(_) => s.bump(),
+            _ => s.bump(),
         }
     }
+    None
+}
+
+/// Scan a display-math fence opened by an `open_len`-dollar run at `dollar_off` (`content_start`
+/// just past it). Mirrors [`scan_fenced_code`]'s shape and its unterminated/EOF behaviour, with two
+/// dollar-specific rules: the opener-line tail must be **whitespace-only** (math has no info string
+/// — any nonempty tail, dollars or not, means try-inline), and the fence needs a trailing newline
+/// (a body follows). The block ends at the first line whose first non-whitespace is a run of
+/// `≥ open_len` dollars (or EOF).
+fn scan_dollar_fence(
+    source: &str,
+    dollar_off: u32,
+    open_len: usize,
+    content_start: u32,
+) -> Option<MathScan> {
+    let opener_end = line_content_end(source, content_start);
+    let tail = &source[content_start as usize..opener_end as usize];
+    if !tail.trim().is_empty() || (opener_end as usize) >= source.len() {
+        return None;
+    }
+    let body_start = opener_end + 1;
+
+    let mut line_start = body_start;
+    while (line_start as usize) < source.len() {
+        let mut s = Scan::new(source, line_start);
+        s.skip_inline_ws();
+        if s.eat_run(b'$') >= open_len {
+            // Close fence: body ends before the fence line's `\n` (a non-first line follows one).
+            let code_end = if line_start > body_start { line_start - 1 } else { line_start };
+            return Some(MathScan::Math {
+                span: Span::new(dollar_off, s.pos()),
+                is_block: true,
+                content: Span::new(body_start, code_end),
+                resume: s.pos(),
+            });
+        }
+        line_start = next_line_start(source, line_start);
+    }
+    // Unterminated fence: math runs to EOF.
+    Some(MathScan::Math {
+        span: Span::new(dollar_off, source.len() as u32),
+        is_block: true,
+        content: Span::new(body_start, source.len() as u32),
+        resume: source.len() as u32,
+    })
 }
 
 // ================================================================================================
-// Verbatim bodies (`|{ … }|`) — the raw-run boundary scan
+// Bounded raw-span content (`|@` arming) + verbatim bodies (`|{ … }|`)
 // ================================================================================================
+
+/// A boundary reached while scanning the raw content of a *bounded* raw span (inline/block code or
+/// math) for `|@` arming ([`armed_boundary`]).
+pub enum ArmedBoundary {
+    /// Reached `bound` (the content extent's end) — the raw run ends here.
+    Bound,
+    /// `|@` — an armed escape: the parser parses one `@`-form at `at` (the `@`).
+    ArmedAt { at: u32 },
+}
+
+/// Scan the raw content `[from, bound)` of a bounded raw span to the next boundary: an armed `|@`
+/// escape, or `bound`. Returns `(run_end, boundary)` where `[from, run_end)` is a raw slice.
+/// Generalizes [`verbatim_boundary`] with an explicit end bound — a bounded span's close is its
+/// pre-scanned extent end, not a `}|`. There is deliberately no escape for a literal `|@` (as in
+/// verbatim); the extent is fixed first, so a `|@` inside it always arms.
+pub fn armed_boundary(source: &str, from: u32, bound: u32) -> (u32, ArmedBoundary) {
+    let mut s = Scan::new(source, from);
+    while s.pos() < bound {
+        if s.at2(b'|', b'@') {
+            return (s.pos(), ArmedBoundary::ArmedAt { at: s.pos() + 1 });
+        }
+        s.bump();
+    }
+    (bound, ArmedBoundary::Bound)
+}
 
 /// A boundary reached while scanning a verbatim body's raw run ([`verbatim_boundary`]).
 pub enum VerbatimBoundary {
@@ -1037,8 +1093,12 @@ pub enum VerbatimBoundary {
 }
 
 /// Scan a verbatim body's raw run from `from` to the next boundary: the closing `}|`, an armed
-/// `|@` escape, or EOF. Returns `(run_end, boundary)` where `[from, run_end)` is the raw slice —
-/// for a close, a single trailing newline right before `}|` is dropped (the `}`-newline rule).
+/// `|@` escape, or EOF. `source` is the reader's clamped scan view (normally the whole source; a
+/// prefix bounded to the extent when this verbatim is itself a `|@`-armed form inside a bounded raw
+/// span — a `}|` past that extent is then unreachable, so the body reports `Eof` / overruns instead
+/// of resuming past the clamp). Returns `(run_end, boundary)` where `[from, run_end)` is the raw
+/// slice — for a close, a single trailing newline right before `}|` is dropped (the `}`-newline
+/// rule).
 pub fn verbatim_boundary(source: &str, from: u32) -> (u32, VerbatimBoundary) {
     let mut s = Scan::new(source, from);
     while !s.is_eof() {
@@ -1101,48 +1161,94 @@ mod tests {
         assert_eq!(&src[start as usize..end as usize], "@f[x: \"}\"] y");
     }
 
+    /// Dollar spans mirror backtick spans: an inline `≥N`-close (with the TeX `\<c>` escape) or a
+    /// whitespace-tail display fence.
     #[test]
-    fn math_boundary_walks_interps_and_close() {
-        let src = "$a_@i + @(f(x)) @@ b$ tail";
-        let (e, b) = math_boundary(src, 1, false);
-        assert_eq!(&src[1..e as usize], "a_");
-        let MathBoundary::InterpName { name_end } = b else { panic!("expected @i interp") };
-        assert_eq!(&src[e as usize + 1..name_end as usize], "i");
+    fn lex_math_span_inline_and_fence() {
+        let content_str = |src: &str, c: Span| src[c.start as usize..c.end as usize].to_string();
 
-        let (e, b) = math_boundary(src, name_end, false);
-        assert_eq!(&src[name_end as usize..e as usize], " + ");
-        assert!(matches!(b, MathBoundary::InterpParen));
+        // Inline `$…$`: content is the raw run; resume past the closing `$`.
+        let MathScan::Math { content, is_block, resume, .. } = lex_math_span("$x^2$ t", 0) else {
+            panic!("inline math scans")
+        };
+        assert!(!is_block);
+        assert_eq!(content_str("$x^2$ t", content), "x^2");
+        assert_eq!(resume, 5);
 
-        // `@(f(x))` is the parser's; resume after it (offset 15). `@@` yields two literal `@`s
-        // (each `@` has no interpolation head), then ` b` and the closing `$`.
-        let (e, b) = math_boundary(src, 15, false);
-        assert_eq!(&src[15..e as usize], " ");
-        assert!(matches!(b, MathBoundary::LiteralAt));
-        let (e, b) = math_boundary(src, e + 1, false);
-        assert_eq!(e, 17);
-        assert!(matches!(b, MathBoundary::LiteralAt));
-        let (e, b) = math_boundary(src, e + 1, false);
-        assert_eq!(&src[18..e as usize], " b");
-        assert!(matches!(b, MathBoundary::Close { after: 21 }));
+        // The `≥`-rule mirrors backticks: an open of 1 closes at the FIRST `$` of the next `≥1`
+        // run, resuming past exactly ONE closing `$` (`$a$$b$` → content `a`, resume 3).
+        let MathScan::Math { content, resume, .. } = lex_math_span("$a$$b$", 0) else {
+            panic!("scans")
+        };
+        assert_eq!(content_str("$a$$b$", content), "a");
+        assert_eq!(resume, 3);
 
-        // A `\$` stays raw; the unescaped `$` closes.
-        let src = r"$a\$b$ t";
-        let (e, b) = math_boundary(src, 1, false);
-        assert_eq!(&src[1..e as usize], r"a\$b");
-        assert!(matches!(b, MathBoundary::Close { after } if after == e + 1));
+        // Run-2 inline: a nonempty tail forbids the fence, so `$$a$b$$` is inline run-2 — a single
+        // `$` is content, `$$` closes.
+        let MathScan::Math { content, is_block, resume, .. } = lex_math_span("$$a$b$$", 0) else {
+            panic!("scans")
+        };
+        assert!(!is_block);
+        assert_eq!(content_str("$$a$b$$", content), "a$b");
+        assert_eq!(resume, 7);
 
-        // Display math: a single `$` is literal; `$$` closes.
-        let src = "$$a$b$$";
-        let (e, b) = math_boundary(src, 2, true);
-        assert_eq!(&src[2..e as usize], "a$b");
-        assert!(matches!(b, MathBoundary::Close { after } if after == e + 2));
+        // TeX escape: `\$` stays content; the span closes at the real terminator.
+        let MathScan::Math { content, .. } = lex_math_span(r"$a \$ b$ t", 0) else {
+            panic!("scans")
+        };
+        assert_eq!(content_str(r"$a \$ b$ t", content), r"a \$ b");
 
-        // Unterminated at EOF.
-        assert!(matches!(math_boundary("$abc", 1, false), (4, MathBoundary::Unterminated)));
+        // No same-line close → literal (the `$`-run is text; resume just past the opener run).
+        assert!(matches!(lex_math_span("costs $5 today", 6), MathScan::Literal { resume: 7 }));
+        // Inline never crosses a newline.
+        assert!(matches!(lex_math_span("$a\nb$", 0), MathScan::Literal { resume: 1 }));
+
+        // Display fence: whitespace-only opener tail, body between the fence lines, resume past the
+        // closing `$$`.
+        let src = "$$\n\\sum x\n$$\n";
+        let MathScan::Math { content, is_block, resume, .. } = lex_math_span(src, 0) else {
+            panic!("fence scans")
+        };
+        assert!(is_block);
+        assert_eq!(content_str(src, content), "\\sum x");
+        assert_eq!(resume, 12);
+
+        // A nonempty opener tail forbids the fence (math has no info string): `$$x⏎$$` is inline
+        // run-2, and with no same-line `≥2` close it is literal.
+        assert!(matches!(lex_math_span("$$x\n$$", 0), MathScan::Literal { resume: 2 }));
+
+        // A `<open_len` run inside the fence body does not close it; a `≥ open_len` run does.
+        let src = "$$\na $ b\n$$\n";
+        let MathScan::Math { content, is_block, .. } = lex_math_span(src, 0) else {
+            panic!("scans")
+        };
+        assert!(is_block);
+        assert_eq!(content_str(src, content), "a $ b");
+    }
+
+    /// [`armed_boundary`]: a `|@` arms; otherwise the run reaches `bound`.
+    #[test]
+    fn armed_boundary_arms_and_bounds() {
+        // `|@` in range → armed at the `@`, the run ends before the `|`.
+        let src = "a b |@x c";
+        let (run_end, b) = armed_boundary(src, 0, src.len() as u32);
+        assert_eq!(&src[0..run_end as usize], "a b ");
+        assert!(matches!(b, ArmedBoundary::ArmedAt { at: 5 }));
+
+        // No `|@` before the bound → Bound, the whole slice is the run.
+        let (run_end, b) = armed_boundary("a $ b", 0, 5);
+        assert_eq!(run_end, 5);
+        assert!(matches!(b, ArmedBoundary::Bound));
+
+        // A `|@` past the bound is not seen (the extent was fixed first).
+        let (run_end, b) = armed_boundary("ab|@x", 0, 2);
+        assert_eq!(run_end, 2);
+        assert!(matches!(b, ArmedBoundary::Bound));
     }
 
     /// The CommonMark-style line clamp: `*`/`_`/`` ` ``/inline `$` never cross a newline — an
-    /// opener with no same-line close is literal. Display `$$` and fenced ``` stay multi-line.
+    /// opener with no same-line close is literal. A display `$$` fence and a fenced ``` stay
+    /// multi-line.
     #[test]
     fn inline_spans_terminate_at_newline() {
         // Emphasis: a close on a later line is out of scope…
@@ -1157,18 +1263,20 @@ mod tests {
         // Inline code: the close backtick must sit on the opening line (the motivating case:
         // `- `foo⏎- bar` is two bullets, not one code span).
         assert!(matches!(lex_code_span("`foo\n- bar`", 0), CodeScan::Literal { resume: 1 }));
-        let CodeScan::Code { content, .. } = lex_code_span("`a` b\n`c`", 0) else {
+        let src = "`a` b\n`c`";
+        let CodeScan::Code { content, .. } = lex_code_span(src, 0) else {
             panic!("same-line close still scans")
         };
-        assert_eq!(content, "a");
+        assert_eq!(&src[content.start as usize..content.end as usize], "a");
 
-        // Inline math: the line end is a boundary → unterminated → opener literal.
-        assert!(matches!(math_boundary("$a\nb$", 1, false), (2, MathBoundary::Unterminated)));
-        assert!(matches!(math_boundary("$a\\\nb$", 1, false), (_, MathBoundary::Unterminated)));
-        // Display math still crosses newlines.
-        let (e, b) = math_boundary("$$a\nb$$", 2, true);
-        assert_eq!(e, 5);
-        assert!(matches!(b, MathBoundary::Close { after: 7 }));
+        // Inline math: the line end is a boundary → no same-line close → opener literal.
+        assert!(matches!(lex_math_span("$a\nb$", 0), MathScan::Literal { resume: 1 }));
+        assert!(matches!(lex_math_span("$a\\\nb$", 0), MathScan::Literal { resume: 1 }));
+        // A display fence still crosses newlines (a standalone `$$` line opens it).
+        let MathScan::Math { is_block, .. } = lex_math_span("$$\na\nb\n$$", 0) else {
+            panic!("display fence scans across newlines")
+        };
+        assert!(is_block);
     }
 
     #[test]
@@ -1203,6 +1311,13 @@ mod tests {
         // Unterminated → Eof with the full tail as the run.
         let (run_end, b) = verbatim_boundary("abc", 0);
         assert_eq!(run_end, 3);
+        assert!(matches!(b, VerbatimBoundary::Eof));
+
+        // A clamped source view (a prefix that ends before the `}|`) caps the scan → Eof: a
+        // verbatim armed inside a bounded raw span can't resume past the span's extent.
+        let src = "ab}| t";
+        let (run_end, b) = verbatim_boundary(&src[..2], 0);
+        assert_eq!(run_end, 2);
         assert!(matches!(b, VerbatimBoundary::Eof));
     }
 

@@ -527,8 +527,6 @@ impl<'a> TakeIn<'a> for NotaCode<'a> {}
 
 impl<'a> TakeIn<'a> for NotaMath<'a> {}
 
-impl<'a> TakeIn<'a> for NotaMathPart<'a> {}
-
 impl<'a> TakeIn<'a> for NotaVerbatim<'a> {}
 
 impl<'a> TakeIn<'a> for NotaVerbatimPart<'a> {}

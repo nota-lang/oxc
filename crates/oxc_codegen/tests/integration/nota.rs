@@ -244,14 +244,20 @@ fn self_closing_props_group_then_raw_markup() {
 }
 
 #[test]
-fn math_paren_interp_then_raw_tex() {
-    // `@(x)`'s `)` is validated without advancing, then parked: the trailing `\frac{…}` is raw TeX
-    // in the math span, never JS-lexed.
+fn math_armed_paren_then_raw_tex() {
+    // The wave-1 park behavior, now armed: `|@(x)`'s `)` is validated without advancing, then
+    // parked, so the trailing `\frac{…}` stays raw TeX, never JS-lexed. `|@(x)` is a SIBLING part
+    // (not a `${…}` substitution), so it lowers beside the raw run.
     assert_js_eq(
-        &nota_doc(r#"$@(x) \frac{a}{b}$"#),
-        r#"export default function Doc() {
-  return decode(Fragment(h(Math, {}, [String.raw`${x} \frac{a}{b}`])));
-}"#,
+        &nota_doc(r"$|@(x) \frac{a}{b}$"),
+        r"export default function Doc() {
+  return decode(Fragment(h(Math, {}, [x, String.raw` \frac{a}{b}`])));
+}",
+    );
+    // The un-armed input is now fully literal content (the `@` no longer interpolates).
+    assert!(
+        nota_doc(r"$@(x) \frac{a}{b}$").contains(r"@(x) \frac{a}{b}"),
+        "bare @(x) in math is literal now",
     );
 }
 
@@ -1276,6 +1282,26 @@ fn code_fenced_multiline_body() {
     nota_expr(src, "h(\"d\", {}, [h(CodeBlock, {}, [String.raw`line 1\nline 2`])])");
 }
 
+#[test]
+fn code_inline_armed_form() {
+    // Code shares the unified content model: `|@` arms a sibling form, the raw runs stay
+    // `String.raw` (a bare `@` is literal — see `code_inline`).
+    nota_expr(
+        "@p{`a |@em{x} b`}",
+        r#"h("p", {}, [h(CodeInline, {}, [String.raw`a `, h("em", {}, ["x"]), String.raw` b`])])"#,
+    );
+}
+
+#[test]
+fn code_fenced_armed_on_body_line() {
+    // A `|@` on a fenced-code body line arms a sibling form; the language tag stays.
+    let src = "@d{```python\ndef |@f{g}\n```}";
+    nota_expr(
+        src,
+        r#"h("d", {}, [h(CodeBlock, { lang: "python" }, [String.raw`def `, h("f", {}, ["g"])])])"#,
+    );
+}
+
 // --- Math --------------------------------------------------------------------------------------
 
 #[test]
@@ -1284,49 +1310,81 @@ fn math_inline_plain() {
 }
 
 #[test]
-fn math_inline_interp() {
-    // `$a_@i$` → `h(Math, {}, [String.raw`a_${i}`])`. `@i` interpolates a string value.
-    nota_expr(r"@p{$a_@i$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_${i}`])])"#);
+fn math_inline_at_is_literal() {
+    // A bare `@` in math is raw text now (no direct interpolation); `$E = @energy$` is fully
+    // literal content.
+    nota_expr(r"@p{$a_@i$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_@i`])])"#);
+    nota_expr(r"@p{$E = @energy$}", r#"h("p", {}, [h(Math, {}, [String.raw`E = @energy`])])"#);
+}
+
+#[test]
+fn math_inline_armed_interp() {
+    // Only `|@` arms an interpolation, spliced as a sibling part (the raw runs stay `String.raw`).
+    nota_expr(r"@p{$a_|@i$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_`, i])])"#);
+    nota_expr(r"@p{$E = |@energy$}", r#"h("p", {}, [h(Math, {}, [String.raw`E = `, energy])])"#);
 }
 
 #[test]
 fn math_keeps_latex_backslash() {
-    // `\$`/`\@` keep the backslash (LaTeX's own escape); `\sum` survives.
+    // `\sum` survives; `\@` keeps its backslash (the `@` is literal raw text regardless).
     nota_expr(r"@p{$\sum x$}", r#"h("p", {}, [h(Math, {}, [String.raw`\sum x`])])"#);
-    nota_expr(r"@p{$a \$ b$}", r#"h("p", {}, [h(Math, {}, [String.raw`a \$ b`])])"#);
     nota_expr(r"@p{$a \@ b$}", r#"h("p", {}, [h(Math, {}, [String.raw`a \@ b`])])"#);
+    // The TeX exception: the dollar close scan skips `\<c>` pairs, so `\$` stays content and the
+    // span closes at the real (unescaped) terminator — the one place dollar and backtick diverge.
+    nota_expr(r"@p{$a \$ b$}", r#"h("p", {}, [h(Math, {}, [String.raw`a \$ b`])])"#);
+    // A `\$` right before the real close: the escaped `$` is content, the next `$` closes.
+    nota_expr(r"@p{$x\$$}", r#"h("p", {}, [h(Math, {}, [String.raw`x\$`])])"#);
 }
 
 #[test]
-fn math_display_interp() {
-    // `$$⏎\sum_@n x⏎$$` → `h(Math, { display: true }, [String.raw`\sum_${n} x`])`.
-    let src = "@p{$$\n\\sum_@n x\n$$}";
-    nota_expr(src, "h(\"p\", {}, [h(Math, { display: true }, [String.raw`\n\\sum_${n} x\n`])])");
+fn math_display_fence() {
+    // Display math is the fence form: a standalone `$$` line, TeX body lines, a closing `$$` line.
+    // The body between the fences is the raw content (leading/trailing fence lines dropped).
+    let src = "@p{$$\n\\sum x\n$$}";
+    nota_expr(src, "h(\"p\", {}, [h(Math, { display: true }, [String.raw`\\sum x`])])");
+    // `|@` arms an interpolation inside the fence body.
+    let src = "@p{$$\n\\sum_|@n x\n$$}";
+    nota_expr(
+        src,
+        "h(\"p\", {}, [h(Math, { display: true }, [String.raw`\\sum_`, n, String.raw` x`])])",
+    );
 }
 
 #[test]
-fn math_display_plain() {
-    nota_expr(r"@p{$$x^2$$}", r#"h("p", {}, [h(Math, { display: true }, [String.raw`x^2`])])"#);
+fn math_dollar_dollar_in_paragraph_is_inline_run2() {
+    // `$$x^2$$` in a paragraph is now INLINE math with run-2 delimiters (a nonempty opener-line
+    // tail forbids the fence) and NO display prop. Display math is exactly the standalone fence.
+    nota_expr(r"@p{$$x^2$$}", r#"h("p", {}, [h(Math, {}, [String.raw`x^2`])])"#);
+    // A single `$` inside a run-2 span is literal content (mirrors the backtick fence-length rule).
+    nota_expr(r"@p{$$a$b$$}", r#"h("p", {}, [h(Math, {}, [String.raw`a$b`])])"#);
 }
 
 #[test]
-fn math_interp_paren_expr() {
-    nota_expr(r"@p{$a_@(i + 1)$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_${i + 1}`])])"#);
+fn math_run_length_ge_rule() {
+    // Mirrors the backtick `≥`-rule: a run of 1 opens and closes at the FIRST `$` of the next
+    // `≥1` run, resuming past ONE `$`. So `$a$$b$` is TWO inline spans (`a` then `b`), not one.
+    nota_expr(
+        r"@p{$a$$b$}",
+        r#"h("p", {}, [h(Math, {}, [String.raw`a`]), h(Math, {}, [String.raw`b`])])"#,
+    );
+    // `$$a$$` inline is run-2 (already covered above); here the run-2 opener/closer over `a`.
+    nota_expr(r"@p{$$a$$}", r#"h("p", {}, [h(Math, {}, [String.raw`a`])])"#);
 }
 
 #[test]
-fn math_interp_with_template_breaker_falls_back_to_cooked_template() {
-    // A backtick (or literal `${`) cannot ride through `String.raw` with substitutions — the `\`
-    // escaping it would leak into the runtime string (`String.raw` does not process escapes).
-    // The reader emits a plain (cooked) template instead, whose value reproduces the raw text.
-    let js = nota_expr_raw("@p{$a`b_@i$}");
-    assert!(!js.contains("String.raw"), "breaker content must not use String.raw: {js}");
-    assert_js_eq(&js, r#"h("p", {}, [h(Math, {}, [`a\`b_${i}`])])"#);
+fn math_armed_paren_expr() {
+    // `|@(expr)` arms a parenthesized-expression interpolation.
+    nota_expr(r"@p{$a_|@(i + 1)$}", r#"h("p", {}, [h(Math, {}, [String.raw`a_`, i + 1])])"#);
+}
 
-    // `${` in display math (a single `$` is literal there): same fallback.
-    let js = nota_expr_raw("@p{$$a${b}_@i$$}");
-    assert!(!js.contains("String.raw"), "breaker content must not use String.raw: {js}");
-    assert_js_eq(&js, r#"h("p", {}, [h(Math, { display: true }, [`a\${b}_${i}`])])"#);
+#[test]
+fn math_armed_interp_with_template_breaker_falls_back_to_cooked() {
+    // A raw run containing a template breaker (a backtick or `${`) cannot ride `String.raw`; the
+    // reader emits a cooked string literal for THAT run instead (`build_string_raw`'s fallback),
+    // while the armed interpolation stays a sibling part.
+    let js = nota_expr_raw("@p{$a`b_|@i$}");
+    assert!(!js.contains("String.raw`a`b_`"), "breaker run must not use String.raw: {js}");
+    assert_js_eq(&js, r#"h("p", {}, [h(Math, {}, ["a`b_", i])])"#);
 }
 
 #[test]
@@ -1446,6 +1504,17 @@ fn unterminated_verbatim_is_an_error() {
 }
 
 #[test]
+fn armed_form_overrunning_a_raw_span_is_an_error() {
+    // The span extent is fixed first; a `|@`-armed form whose body swallows the span's close is
+    // malformed. Both a braced body and a nested verbatim `}|` that cross the close diagnose (the
+    // exact message varies — the armed parse is clamped to the extent, so it hits the close as an
+    // EOF — but it is always an error, never a silent parse-through or a panic).
+    nota_doc_err("$a |@em{b$ c}$\n"); // the `@em{…}` body swallows the closing `$`
+    nota_doc_err("$|@x|{a$b}|$\n"); // the armed verbatim `}|` is past the math close
+    nota_doc_err("`a |@em{b`c}`\n"); // same, for inline code
+}
+
+#[test]
 fn emphasis_close_skips_raw_spans() {
     // A `*`/`_` *inside* a raw span (code/math/verbatim) must NOT close the surrounding emphasis —
     // `find_emphasis_close` steps over raw spans. Adversarial: spaces around the inner `*` make it a
@@ -1492,7 +1561,7 @@ fn phase_f_mixed_document_end_to_end() {
     let src = "\
 # Demo
 
-The fn `id` returns @em{x}; cost is \\$5 and $a_@i$.
+The fn `id` returns @em{x}; cost is \\$5 and $a_|@i$.
 
 ```rust
 fn id(x: i32) -> i32 { x }
@@ -1503,7 +1572,8 @@ fn id(x: i32) -> i32 { x }
     let js = nota_doc(src);
     assert!(js.contains(r#"h("h1", {}, ["Demo"])"#), "heading: {js}");
     assert!(js.contains(r"h(CodeInline, {}, [String.raw`id`])"), "inline code: {js}");
-    assert!(js.contains(r"h(Math, {}, [String.raw`a_${i}`])"), "math interp: {js}");
+    // Math `|@i` arms an interpolation as a sibling part (a bare `@` would be literal now).
+    assert!(js.contains(r"h(Math, {}, [String.raw`a_`, i])"), "math armed interp: {js}");
     assert!(js.contains("cost is $5 and"), "escaped dollar → literal `$` in prose: {js}");
     assert!(js.contains(r#"h(CodeBlock, { lang: "rust" }"#), "fenced: {js}");
     assert!(js.contains(r#"h("figure", {}, [String.raw`verbatim @keep{raw}`])"#), "verbatim: {js}");

@@ -4913,18 +4913,6 @@ impl NotaElse<'_> {
     }
 }
 
-impl NotaMathPart<'_> {
-    /// Get [`NodeId`] of [`NotaMathPart`].
-    // `#[inline(always)]` because this should boil down to a single instruction.
-    #[inline(always)]
-    pub fn node_id(&self) -> NodeId {
-        match self {
-            Self::Raw(it) => it.node_id(),
-            Self::Interpolation(it) => it.node_id(),
-        }
-    }
-}
-
 impl NotaVerbatimPart<'_> {
     /// Get [`NodeId`] of [`NotaVerbatimPart`].
     // `#[inline(always)]` because this should boil down to a single instruction.

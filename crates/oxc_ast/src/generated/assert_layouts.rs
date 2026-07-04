@@ -1959,24 +1959,21 @@ const _: () = {
     assert!(offset_of!(NotaFor, body) == 48);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaCode>() == 48);
+    assert!(size_of::<NotaCode>() == 56);
     assert!(align_of::<NotaCode>() == 8);
     assert!(offset_of!(NotaCode, span) == 0);
     assert!(offset_of!(NotaCode, node_id) == 8);
     assert!(offset_of!(NotaCode, block) == 12);
     assert!(offset_of!(NotaCode, language) == 16);
-    assert!(offset_of!(NotaCode, value) == 32);
+    assert!(offset_of!(NotaCode, parts) == 32);
 
     // Padding: 3 bytes
     assert!(size_of::<NotaMath>() == 40);
     assert!(align_of::<NotaMath>() == 8);
     assert!(offset_of!(NotaMath, span) == 0);
     assert!(offset_of!(NotaMath, node_id) == 8);
-    assert!(offset_of!(NotaMath, display) == 12);
+    assert!(offset_of!(NotaMath, block) == 12);
     assert!(offset_of!(NotaMath, parts) == 16);
-
-    assert!(size_of::<NotaMathPart>() == 16);
-    assert!(align_of::<NotaMathPart>() == 8);
 
     // Padding: 4 bytes
     assert!(size_of::<NotaVerbatim>() == 56);
@@ -3972,24 +3969,21 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaFor, body) == 28);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaCode>() == 32);
+    assert!(size_of::<NotaCode>() == 40);
     assert!(align_of::<NotaCode>() == 4);
     assert!(offset_of!(NotaCode, span) == 0);
     assert!(offset_of!(NotaCode, node_id) == 8);
     assert!(offset_of!(NotaCode, block) == 12);
     assert!(offset_of!(NotaCode, language) == 16);
-    assert!(offset_of!(NotaCode, value) == 24);
+    assert!(offset_of!(NotaCode, parts) == 24);
 
     // Padding: 3 bytes
     assert!(size_of::<NotaMath>() == 32);
     assert!(align_of::<NotaMath>() == 4);
     assert!(offset_of!(NotaMath, span) == 0);
     assert!(offset_of!(NotaMath, node_id) == 8);
-    assert!(offset_of!(NotaMath, display) == 12);
+    assert!(offset_of!(NotaMath, block) == 12);
     assert!(offset_of!(NotaMath, parts) == 16);
-
-    assert!(size_of::<NotaMathPart>() == 8);
-    assert!(align_of::<NotaMathPart>() == 4);
 
     // Padding: 0 bytes
     assert!(size_of::<NotaVerbatim>() == 36);

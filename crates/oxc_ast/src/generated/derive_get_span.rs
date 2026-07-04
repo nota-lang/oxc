@@ -2410,15 +2410,6 @@ impl GetSpan for NotaMath<'_> {
     }
 }
 
-impl GetSpan for NotaMathPart<'_> {
-    fn span(&self) -> Span {
-        match self {
-            Self::Raw(it) => GetSpan::span(&**it),
-            Self::Interpolation(it) => GetSpan::span(&**it),
-        }
-    }
-}
-
 impl GetSpan for NotaVerbatim<'_> {
     #[inline]
     fn span(&self) -> Span {

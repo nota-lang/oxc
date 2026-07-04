@@ -1380,6 +1380,14 @@ pub fn nota_unterminated_verbatim(span: Span) -> OxcDiagnostic {
         .with_label(span.label("this `|{` is never closed"))
 }
 
+/// A `|@`-armed `@`-form inside a raw span (inline/block code or math) whose parse ran past the
+/// span's fixed content extent — it swallowed the span's closing delimiter.
+#[cold]
+pub fn nota_armed_form_overruns_span(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("armed `|@` form runs past the end of its raw span")
+        .with_label(span.label("this `|@` form's body extends beyond the span's closing delimiter"))
+}
+
 /// A `%` statement's JS failed to parse and its region was clipped at a blank line — the likely
 /// cause of the failure (a blank line always ends a `%` statement).
 #[cold]

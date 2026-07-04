@@ -1,8 +1,8 @@
 //! Nota `CodeMapping` marks — Volar structured `CodeMappings`.
 //!
 //! The Nota lowering ([`super::NotaLowering`]) turns `@`-markup into a plain oxc `Program`. Embedded
-//! JS — prop values, `@(expr)`/`@name` interpolation, `%`/`%%%` statement bodies, math
-//! interpolation, `@if`/`@for` heads — is spliced as real oxc nodes carrying their *source* spans;
+//! JS — prop values, `@(expr)`/`@name` interpolation, `%`/`%%%` statement bodies, `|@`-armed forms
+//! in raw spans (code / math / verbatim), `@if`/`@for` heads — is spliced as real oxc nodes carrying their *source* spans;
 //! component tags (`@Aside` → `h(Aside, …)`) become real identifier references, also source-spanned.
 //! Everything the lowering *synthesizes* (`h(`, `{}`, `[`, `Fragment`, `.map`, `String.raw`, the keyed
 //! `Fragment({key:_i},…)` scaffolding) uses `Span::empty`, so it carries no source.
@@ -25,8 +25,8 @@ use oxc_span::Span;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotaMappingKind {
     /// Embedded JavaScript/TypeScript spliced verbatim from the source: a prop value expression, an
-    /// `@(expr)`/`@name` interpolation, a `%`/`%%%` statement body, a math `@`-interpolation, or an
-    /// `@if`/`@for` head (condition / iterable / binding). Full IDE capabilities.
+    /// `@(expr)`/`@name` interpolation, a `%`/`%%%` statement body, a `|@`-armed form in a raw span
+    /// (code / math / verbatim), or an `@if`/`@for` head (condition / iterable / binding). Full IDE capabilities.
     EmbeddedJs,
     /// A component-tag identifier reference: `@Aside` lowering to `h(Aside, …)`. The TS service
     /// resolves it like any identifier (hover, go-to-def, find-references, rename, and the

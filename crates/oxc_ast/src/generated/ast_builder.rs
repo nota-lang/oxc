@@ -15674,20 +15674,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `language`: Fence language tag, if any (block code only).
-    /// * `value`: The raw code text.
     /// * `block`: `true` for a fenced block, `false` for inline.
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
-    pub fn nota_form_code<A1>(
+    pub fn nota_form_code(
         self,
         span: Span,
         language: Option<Str<'a>>,
-        value: A1,
         block: bool,
-    ) -> NotaForm<'a>
-    where
-        A1: Into<Str<'a>>,
-    {
-        NotaForm::Code(self.alloc_nota_code(span, language, value, block))
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaForm<'a> {
+        NotaForm::Code(self.alloc_nota_code(span, language, block, parts))
     }
 
     /// Build a [`NotaForm::Math`].
@@ -15696,16 +15693,16 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `display`: `true` for `$$display$$`.
-    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    /// * `block`: `true` for the `$$…$$` fenced (display) form; `false` for an inline `$…$` span. Mirrors
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn nota_form_math(
         self,
         span: Span,
-        display: bool,
-        parts: Vec<'a, NotaMathPart<'a>>,
+        block: bool,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaForm<'a> {
-        NotaForm::Math(self.alloc_nota_math(span, display, parts))
+        NotaForm::Math(self.alloc_nota_math(span, block, parts))
     }
 
     /// Build a [`NotaForm::Verbatim`].
@@ -16508,20 +16505,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `language`: Fence language tag, if any (block code only).
-    /// * `value`: The raw code text.
     /// * `block`: `true` for a fenced block, `false` for inline.
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
-    pub fn nota_code<A1>(
+    pub fn nota_code(
         self,
         span: Span,
         language: Option<Str<'a>>,
-        value: A1,
         block: bool,
-    ) -> NotaCode<'a>
-    where
-        A1: Into<Str<'a>>,
-    {
-        NotaCode { node_id: Default::default(), span, language, value: value.into(), block }
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> NotaCode<'a> {
+        NotaCode { node_id: Default::default(), span, language, block, parts }
     }
 
     /// Build a [`NotaCode`], and store it in the memory arena.
@@ -16532,20 +16526,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `language`: Fence language tag, if any (block code only).
-    /// * `value`: The raw code text.
     /// * `block`: `true` for a fenced block, `false` for inline.
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
-    pub fn alloc_nota_code<A1>(
+    pub fn alloc_nota_code(
         self,
         span: Span,
         language: Option<Str<'a>>,
-        value: A1,
         block: bool,
-    ) -> Box<'a, NotaCode<'a>>
-    where
-        A1: Into<Str<'a>>,
-    {
-        Box::new_in(self.nota_code(span, language, value, block), self.allocator)
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
+    ) -> Box<'a, NotaCode<'a>> {
+        Box::new_in(self.nota_code(span, language, block, parts), self.allocator)
     }
 
     /// Build a [`NotaMath`].
@@ -16555,16 +16546,16 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `display`: `true` for `$$display$$`.
-    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    /// * `block`: `true` for the `$$…$$` fenced (display) form; `false` for an inline `$…$` span. Mirrors
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn nota_math(
         self,
         span: Span,
-        display: bool,
-        parts: Vec<'a, NotaMathPart<'a>>,
+        block: bool,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaMath<'a> {
-        NotaMath { node_id: Default::default(), span, display, parts }
+        NotaMath { node_id: Default::default(), span, block, parts }
     }
 
     /// Build a [`NotaMath`], and store it in the memory arena.
@@ -16574,47 +16565,16 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `display`: `true` for `$$display$$`.
-    /// * `parts`: Alternating raw runs and `@`-interpolations.
+    /// * `block`: `true` for the `$$…$$` fenced (display) form; `false` for an inline `$…$` span. Mirrors
+    /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn alloc_nota_math(
         self,
         span: Span,
-        display: bool,
-        parts: Vec<'a, NotaMathPart<'a>>,
+        block: bool,
+        parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> Box<'a, NotaMath<'a>> {
-        Box::new_in(self.nota_math(span, display, parts), self.allocator)
-    }
-
-    /// Build a [`NotaMathPart::Raw`].
-    ///
-    /// This node contains a [`NotaText`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `value`: The raw source text (Scribble whitespace processing is deferred to lowering).
-    #[inline]
-    pub fn nota_math_part_raw<A1>(self, span: Span, value: A1) -> NotaMathPart<'a>
-    where
-        A1: Into<Str<'a>>,
-    {
-        NotaMathPart::Raw(self.alloc_nota_text(span, value))
-    }
-
-    /// Build a [`NotaMathPart::Interpolation`].
-    ///
-    /// This node contains a [`NotaInterpolation`] that will be stored in the memory arena.
-    ///
-    /// ## Parameters
-    /// * `span`: The [`Span`] covering this node
-    /// * `expression`
-    #[inline]
-    pub fn nota_math_part_interpolation(
-        self,
-        span: Span,
-        expression: Expression<'a>,
-    ) -> NotaMathPart<'a> {
-        NotaMathPart::Interpolation(self.alloc_nota_interpolation(span, expression))
+        Box::new_in(self.nota_math(span, block, parts), self.allocator)
     }
 
     /// Build a [`NotaVerbatim`].

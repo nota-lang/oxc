@@ -343,12 +343,13 @@ pub(crate) enum AncestorType {
     NotaForBinding = 319,
     NotaForIterable = 320,
     NotaForBody = 321,
-    NotaMathParts = 322,
-    NotaVerbatimTag = 323,
-    NotaVerbatimParts = 324,
-    NotaEmphasisChildren = 325,
-    NotaHeadingChildren = 326,
-    NotaListItemChildren = 327,
+    NotaCodeParts = 322,
+    NotaMathParts = 323,
+    NotaVerbatimTag = 324,
+    NotaVerbatimParts = 325,
+    NotaEmphasisChildren = 326,
+    NotaHeadingChildren = 327,
+    NotaListItemChildren = 328,
 }
 
 /// Ancestor type used in AST traversal.
@@ -961,6 +962,7 @@ pub enum Ancestor<'a, 't> {
     NotaForBinding(NotaForWithoutBinding<'a, 't>) = AncestorType::NotaForBinding as u16,
     NotaForIterable(NotaForWithoutIterable<'a, 't>) = AncestorType::NotaForIterable as u16,
     NotaForBody(NotaForWithoutBody<'a, 't>) = AncestorType::NotaForBody as u16,
+    NotaCodeParts(NotaCodeWithoutParts<'a, 't>) = AncestorType::NotaCodeParts as u16,
     NotaMathParts(NotaMathWithoutParts<'a, 't>) = AncestorType::NotaMathParts as u16,
     NotaVerbatimTag(NotaVerbatimWithoutTag<'a, 't>) = AncestorType::NotaVerbatimTag as u16,
     NotaVerbatimParts(NotaVerbatimWithoutParts<'a, 't>) = AncestorType::NotaVerbatimParts as u16,
@@ -2037,6 +2039,11 @@ impl<'a, 't> Ancestor<'a, 't> {
     }
 
     #[inline]
+    pub fn is_nota_code(self) -> bool {
+        matches!(self, Self::NotaCodeParts(_))
+    }
+
+    #[inline]
     pub fn is_nota_math(self) -> bool {
         matches!(self, Self::NotaMathParts(_))
     }
@@ -2453,13 +2460,8 @@ impl<'a, 't> Ancestor<'a, 't> {
     }
 
     #[inline]
-    pub fn is_parent_of_nota_math_part(self) -> bool {
-        matches!(self, Self::NotaMathParts(_))
-    }
-
-    #[inline]
     pub fn is_parent_of_nota_verbatim_part(self) -> bool {
-        matches!(self, Self::NotaVerbatimParts(_))
+        matches!(self, Self::NotaCodeParts(_) | Self::NotaMathParts(_) | Self::NotaVerbatimParts(_))
     }
 }
 
@@ -2791,6 +2793,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::NotaForBinding(a) => a.address(),
             Self::NotaForIterable(a) => a.address(),
             Self::NotaForBody(a) => a.address(),
+            Self::NotaCodeParts(a) => a.address(),
             Self::NotaMathParts(a) => a.address(),
             Self::NotaVerbatimTag(a) => a.address(),
             Self::NotaVerbatimParts(a) => a.address(),
@@ -19553,9 +19556,53 @@ impl<'a, 't> GetAddress for NotaForWithoutBody<'a, 't> {
     }
 }
 
+pub(crate) const OFFSET_NOTA_CODE_NODE_ID: usize = offset_of!(NotaCode, node_id);
+pub(crate) const OFFSET_NOTA_CODE_SPAN: usize = offset_of!(NotaCode, span);
+pub(crate) const OFFSET_NOTA_CODE_LANGUAGE: usize = offset_of!(NotaCode, language);
+pub(crate) const OFFSET_NOTA_CODE_BLOCK: usize = offset_of!(NotaCode, block);
+pub(crate) const OFFSET_NOTA_CODE_PARTS: usize = offset_of!(NotaCode, parts);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaCodeWithoutParts<'a, 't>(
+    pub(crate) *const NotaCode<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaCodeWithoutParts<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn language(self) -> &'t Option<Str<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_LANGUAGE) as *const Option<Str<'a>>)
+        }
+    }
+
+    #[inline]
+    pub fn block(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_BLOCK) as *const bool) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaCodeWithoutParts<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
 pub(crate) const OFFSET_NOTA_MATH_NODE_ID: usize = offset_of!(NotaMath, node_id);
 pub(crate) const OFFSET_NOTA_MATH_SPAN: usize = offset_of!(NotaMath, span);
-pub(crate) const OFFSET_NOTA_MATH_DISPLAY: usize = offset_of!(NotaMath, display);
+pub(crate) const OFFSET_NOTA_MATH_BLOCK: usize = offset_of!(NotaMath, block);
 pub(crate) const OFFSET_NOTA_MATH_PARTS: usize = offset_of!(NotaMath, parts);
 
 #[repr(transparent)]
@@ -19577,8 +19624,8 @@ impl<'a, 't> NotaMathWithoutParts<'a, 't> {
     }
 
     #[inline]
-    pub fn display(self) -> &'t bool {
-        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MATH_DISPLAY) as *const bool) }
+    pub fn block(self) -> &'t bool {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_MATH_BLOCK) as *const bool) }
     }
 }
 

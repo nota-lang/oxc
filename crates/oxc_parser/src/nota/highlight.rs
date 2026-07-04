@@ -43,8 +43,8 @@ use crate::{
     ParserConfig as Config, ParserImpl,
     lexer::Kind,
     lexer::nota::{
-        CodeScan, byte_at, colon_prop_line_at, find_fence_close, lex_code_span, line_content_end,
-        list_marker_at, sigil_run_end, statement_kind,
+        CodeScan, MathScan, byte_at, colon_prop_line_at, find_fence_close, lex_code_span,
+        lex_math_span, line_content_end, list_marker_at, sigil_run_end, statement_kind,
     },
 };
 
@@ -79,7 +79,7 @@ pub enum NotaHighlightKind {
     EmphasisStrong = 9,
     /// A whole `_…_` span (under-layer).
     EmphasisEm = 10,
-    /// A math delimiter (`$` / `$$`).
+    /// A math delimiter (an inline `$`-run; for a fence, the whole opening `$$` line / closing run).
     MathDelim = 11,
     /// A raw math (LaTeX) run.
     Math = 12,
@@ -454,10 +454,6 @@ impl<'a> Visit<'a> for Highlighter<'a> {
                 }
                 self.emit(start, ident.span.end, NotaHighlightKind::Interpolation);
             }
-            // Math's literal-`@` splice (`"@"` with the `@`'s own span): keep it math-colored.
-            Expression::StringLiteral(lit) if lit.value == "@" => {
-                self.emit(lit.span.start, lit.span.end, NotaHighlightKind::Math);
-            }
             // `@(expr)` — sigil (scan back over the `(`), then the expression as embedded JS.
             expr => {
                 let bytes = self.source.as_bytes();
@@ -539,33 +535,28 @@ impl<'a> Visit<'a> for Highlighter<'a> {
     }
 
     fn visit_nota_code(&mut self, it: &NotaCode<'a>) {
-        // Re-scan the span for the delimiter/content geometry (the node keeps only the values).
+        // Re-scan the span for delimiter/lang geometry (the node keeps only values); paint the
+        // interior from `parts`, so a `|@`-armed form inside gets its normal element/JS paints.
         if let CodeScan::Code { span, lang, content, .. } =
             lex_code_span(self.source, it.span.start)
         {
-            let content_start = (content.as_ptr() as usize - self.source.as_ptr() as usize) as u32;
-            let content_end = content_start + content.len() as u32;
-            self.emit(span.start, content_start, NotaHighlightKind::CodeDelim);
+            self.emit(span.start, content.start, NotaHighlightKind::CodeDelim);
             if let Some(lang) = lang {
                 let lang_start = (lang.as_ptr() as usize - self.source.as_ptr() as usize) as u32;
                 self.emit(lang_start, lang_start + lang.len() as u32, NotaHighlightKind::CodeLang);
             }
-            self.emit(content_start, content_end, NotaHighlightKind::Code);
-            self.emit(content_end, span.end, NotaHighlightKind::CodeDelim);
+            self.emit_raw_parts(&it.parts, NotaHighlightKind::Code);
+            self.emit(content.end, span.end, NotaHighlightKind::CodeDelim);
         }
     }
 
     fn visit_nota_math(&mut self, it: &NotaMath<'a>) {
-        let delim = if it.display { 2 } else { 1 };
-        self.emit(it.span.start, it.span.start + delim, NotaHighlightKind::MathDelim);
-        self.emit(it.span.end - delim, it.span.end, NotaHighlightKind::MathDelim);
-        for part in &it.parts {
-            match part {
-                NotaMathPart::Raw(text) => {
-                    self.emit(text.span.start, text.span.end, NotaHighlightKind::Math);
-                }
-                NotaMathPart::Interpolation(interp) => self.visit_nota_interpolation(interp),
-            }
+        // Delimiters are run-length (inline) or whole-line (fence), so re-scan for the geometry
+        // rather than assuming a fixed width; the interior paints from `parts` like code/verbatim.
+        if let MathScan::Math { span, content, .. } = lex_math_span(self.source, it.span.start) {
+            self.emit(span.start, content.start, NotaHighlightKind::MathDelim);
+            self.emit_raw_parts(&it.parts, NotaHighlightKind::Math);
+            self.emit(content.end, span.end, NotaHighlightKind::MathDelim);
         }
     }
 
@@ -576,9 +567,22 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         if end >= 2 && &self.source[end as usize - 2..end as usize] == "}|" {
             self.emit(end - 2, end, NotaHighlightKind::Sigil);
         }
-        for part in &it.parts {
+        self.emit_raw_parts(&it.parts, NotaHighlightKind::Verbatim);
+    }
+}
+
+impl<'a> Highlighter<'a> {
+    /// Paint the shared raw-span parts (verbatim / code / math): a raw run in `raw_kind`; a
+    /// `|@`-armed `@`-form via the normal walk (its arming `|` a sigil, its embedded element/JS its
+    /// own paints). One painter for all three spans, mirroring the unified content model.
+    fn emit_raw_parts(
+        &mut self,
+        parts: &ArenaVec<'a, NotaVerbatimPart<'a>>,
+        raw_kind: NotaHighlightKind,
+    ) {
+        for part in parts {
             if let NotaVerbatimPart::Raw(text) = part {
-                self.emit(text.span.start, text.span.end, NotaHighlightKind::Verbatim);
+                self.emit(text.span.start, text.span.end, raw_kind);
             } else {
                 // A `|@`-re-armed form: its span starts at the `@`; the arming `|` sits before it.
                 let form_start = part.span().start;
@@ -854,13 +858,17 @@ mod tests {
     }
 
     #[test]
-    fn math_inline_display_and_interpolation() {
-        let spans = hl("$a_@i$ and $$\\sum_@(n + 1) x$$\n");
-        assert_eq!(spans.iter().filter(|(k, t)| *k == K::MathDelim && t == "$").count(), 2);
-        assert_eq!(spans.iter().filter(|(k, t)| *k == K::MathDelim && t == "$$").count(), 2);
-        assert!(has(&spans, K::Interpolation, "i"));
-        assert!(has(&spans, K::JsNumber, "1"));
-        assert!(spans.iter().any(|(k, t)| *k == K::Math && t.contains("\\sum_")));
+    fn math_inline_armed_and_fence() {
+        // `|@` arms a form inside math (a bare `@` would be literal raw text now); a display fence
+        // is standalone `$$` lines. Inline delimiters are the `$` runs; the fence opener paints as
+        // a whole-line-leading `$$` delimiter.
+        let spans = hl("$a_|@em{i}$ and $$\n\\sum x\n$$\n");
+        assert!(has(&spans, K::MathDelim, "$")); // inline delimiter
+        assert!(has(&spans, K::Sigil, "|")); // the arming pipe (element span starts at `@`)
+        assert!(has(&spans, K::TagHost, "em")); // the armed element
+        assert!(spans.iter().any(|(k, t)| *k == K::Math && t.contains("a_")));
+        assert!(spans.iter().any(|(k, t)| *k == K::Math && t.contains("\\sum x")));
+        assert!(spans.iter().any(|(k, t)| *k == K::MathDelim && t.starts_with("$$")));
     }
 
     #[test]

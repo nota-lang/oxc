@@ -1317,11 +1317,6 @@ pub trait VisitMut<'a>: Sized {
     }
 
     #[inline]
-    fn visit_nota_math_part(&mut self, it: &mut NotaMathPart<'a>) {
-        walk_nota_math_part(self, it);
-    }
-
-    #[inline]
     fn visit_nota_verbatim(&mut self, it: &mut NotaVerbatim<'a>) {
         walk_nota_verbatim(self, it);
     }
@@ -1500,11 +1495,6 @@ pub trait VisitMut<'a>: Sized {
     #[inline]
     fn visit_nota_props(&mut self, it: &mut Vec<'a, NotaProp<'a>>) {
         walk_nota_props(self, it);
-    }
-
-    #[inline]
-    fn visit_nota_math_parts(&mut self, it: &mut Vec<'a, NotaMathPart<'a>>) {
-        walk_nota_math_parts(self, it);
     }
 
     #[inline]
@@ -4881,6 +4871,7 @@ pub mod walk_mut {
         let kind = AstType::NotaCode;
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
+        visitor.visit_nota_verbatim_parts(&mut it.parts);
         visitor.leave_node(kind);
     }
 
@@ -4889,17 +4880,8 @@ pub mod walk_mut {
         let kind = AstType::NotaMath;
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
-        visitor.visit_nota_math_parts(&mut it.parts);
+        visitor.visit_nota_verbatim_parts(&mut it.parts);
         visitor.leave_node(kind);
-    }
-
-    #[inline]
-    pub fn walk_nota_math_part<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaMathPart<'a>) {
-        // No `AstType` for this type
-        match it {
-            NotaMathPart::Raw(it) => visitor.visit_nota_text(it),
-            NotaMathPart::Interpolation(it) => visitor.visit_nota_interpolation(it),
-        }
     }
 
     #[inline]
@@ -5229,16 +5211,6 @@ pub mod walk_mut {
     pub fn walk_nota_props<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut Vec<'a, NotaProp<'a>>) {
         for el in it {
             visitor.visit_nota_prop(el);
-        }
-    }
-
-    #[inline]
-    pub fn walk_nota_math_parts<'a, V: VisitMut<'a>>(
-        visitor: &mut V,
-        it: &mut Vec<'a, NotaMathPart<'a>>,
-    ) {
-        for el in it {
-            visitor.visit_nota_math_part(el);
         }
     }
 

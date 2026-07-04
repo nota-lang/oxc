@@ -1325,11 +1325,6 @@ pub trait Visit<'a>: Sized {
     }
 
     #[inline]
-    fn visit_nota_math_part(&mut self, it: &NotaMathPart<'a>) {
-        walk_nota_math_part(self, it);
-    }
-
-    #[inline]
     fn visit_nota_verbatim(&mut self, it: &NotaVerbatim<'a>) {
         walk_nota_verbatim(self, it);
     }
@@ -1505,11 +1500,6 @@ pub trait Visit<'a>: Sized {
     #[inline]
     fn visit_nota_props(&mut self, it: &Vec<'a, NotaProp<'a>>) {
         walk_nota_props(self, it);
-    }
-
-    #[inline]
-    fn visit_nota_math_parts(&mut self, it: &Vec<'a, NotaMathPart<'a>>) {
-        walk_nota_math_parts(self, it);
     }
 
     #[inline]
@@ -4639,6 +4629,7 @@ pub mod walk {
         let kind = AstKind::NotaCode(visitor.alloc(it));
         visitor.enter_node(kind);
         visitor.visit_span(&it.span);
+        visitor.visit_nota_verbatim_parts(&it.parts);
         visitor.leave_node(kind);
     }
 
@@ -4647,17 +4638,8 @@ pub mod walk {
         let kind = AstKind::NotaMath(visitor.alloc(it));
         visitor.enter_node(kind);
         visitor.visit_span(&it.span);
-        visitor.visit_nota_math_parts(&it.parts);
+        visitor.visit_nota_verbatim_parts(&it.parts);
         visitor.leave_node(kind);
-    }
-
-    #[inline]
-    pub fn walk_nota_math_part<'a, V: Visit<'a>>(visitor: &mut V, it: &NotaMathPart<'a>) {
-        // No `AstKind` for this type
-        match it {
-            NotaMathPart::Raw(it) => visitor.visit_nota_text(it),
-            NotaMathPart::Interpolation(it) => visitor.visit_nota_interpolation(it),
-        }
     }
 
     #[inline]
@@ -4966,13 +4948,6 @@ pub mod walk {
     pub fn walk_nota_props<'a, V: Visit<'a>>(visitor: &mut V, it: &Vec<'a, NotaProp<'a>>) {
         for el in it {
             visitor.visit_nota_prop(el);
-        }
-    }
-
-    #[inline]
-    pub fn walk_nota_math_parts<'a, V: Visit<'a>>(visitor: &mut V, it: &Vec<'a, NotaMathPart<'a>>) {
-        for el in it {
-            visitor.visit_nota_math_part(el);
         }
     }
 

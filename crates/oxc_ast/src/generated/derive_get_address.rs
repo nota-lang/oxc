@@ -911,17 +911,6 @@ impl GetAddress for NotaElse<'_> {
     }
 }
 
-impl GetAddress for NotaMathPart<'_> {
-    // `#[inline]` because compiler should boil this down to a single assembly instruction
-    #[inline]
-    fn address(&self) -> Address {
-        match self {
-            Self::Raw(it) => GetAddress::address(it),
-            Self::Interpolation(it) => GetAddress::address(it),
-        }
-    }
-}
-
 impl GetAddress for NotaVerbatimPart<'_> {
     // `#[inline]` because compiler should boil this down to a single assembly instruction
     #[inline]

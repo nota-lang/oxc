@@ -2410,15 +2410,6 @@ impl GetSpanMut for NotaMath<'_> {
     }
 }
 
-impl GetSpanMut for NotaMathPart<'_> {
-    fn span_mut(&mut self) -> &mut Span {
-        match self {
-            Self::Raw(it) => GetSpanMut::span_mut(&mut **it),
-            Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
-        }
-    }
-}
-
 impl GetSpanMut for NotaVerbatim<'_> {
     #[inline]
     fn span_mut(&mut self) -> &mut Span {

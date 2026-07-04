@@ -210,7 +210,7 @@ pub static STRUCTS: phf::Map<&'static str, StructDetails> = ::phf::Map {
         ("NotaPropExpr", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("TSVoidKeyword", StructDetails { field_order: Some(&[1, 0]) }),
         ("TSImportEqualsDeclaration", StructDetails { field_order: Some(&[1, 0, 3, 4, 2]) }),
-        ("NotaCode", StructDetails { field_order: Some(&[1, 0, 3, 4, 2]) }),
+        ("NotaCode", StructDetails { field_order: Some(&[1, 0, 3, 2, 4]) }),
         (
             "Function",
             StructDetails {

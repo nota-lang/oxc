@@ -325,40 +325,6 @@ impl<'a> NotaLowering<'a> {
         self.tag_string_raw(span, quasi)
     }
 
-    /// `String.raw\`q0${e0}q1${e1}…\`` — a tagged template with substitutions (math `@`-interp).
-    ///
-    /// When any quasi contains a template-syntax breaker, `String.raw` cannot carry it (a `\`
-    /// escape would leak into the runtime string — see [`Self::build_string_raw`]), and the
-    /// whole-span cooked-literal fallback is unavailable (there are substitutions). We emit a
-    /// **plain (cooked) template** instead, its quasis escaped so each cooked value reproduces the
-    /// raw text exactly; substitution semantics (`ToString`) are identical with or without the
-    /// `String.raw` tag.
-    pub(super) fn build_string_raw_interp(
-        &self,
-        span: Span,
-        quasis_raw: Vec<&'a str>,
-        exprs: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        debug_assert_eq!(quasis_raw.len(), exprs.len() + 1);
-        let cooked = quasis_raw.iter().any(|q| Self::has_template_breaker(q));
-        let last = quasis_raw.len() - 1;
-        let mut quasis = self.ast.vec_with_capacity(quasis_raw.len());
-        for (i, q) in quasis_raw.into_iter().enumerate() {
-            let quasi = if cooked {
-                self.cooked_quasi(span, q, i == last)
-            } else {
-                self.raw_quasi(span, q, i == last)
-            };
-            quasis.push(quasi);
-        }
-        let template = self.ast.template_literal(span, quasis, exprs);
-        if cooked {
-            Expression::TemplateLiteral(self.ast.alloc(template))
-        } else {
-            self.tag_string_raw(span, template)
-        }
-    }
-
     /// One template-literal quasi carrying `raw` **verbatim** as its raw value, `cooked: None` (a
     /// `String.raw` tag reads only the raw text: `\` and `{}` are NOT interpreted). We do **not**
     /// use codegen's `escape_raw` (which doubles every `\`, wrong for `String.raw`); the caller
@@ -369,43 +335,15 @@ impl<'a> NotaLowering<'a> {
         self.ast.template_element(span, value, tail, false)
     }
 
-    /// One **cooked** template quasi whose runtime value is exactly `raw`: the raw text escapes
-    /// `\` `` ` `` `${` and CR ([`Self::escape_cooked_template`]), and `cooked` records the
-    /// original.
-    fn cooked_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
-        let value = TemplateElementValue {
-            raw: self.ast.str(self.escape_cooked_template(raw)),
-            cooked: Some(self.ast.str(raw)),
-        };
-        self.ast.template_element(span, value, tail, false)
-    }
-
     /// Does `raw` contain a template-syntax breaker — a backtick or a `${` — that a `String.raw`
-    /// template cannot represent without a `\` that leaks at runtime?
+    /// template cannot represent without a `\` that leaks at runtime? Such content falls back to a
+    /// cooked string literal ([`Self::build_string_raw`]).
     fn has_template_breaker(raw: &str) -> bool {
         let bytes = raw.as_bytes();
         bytes
             .iter()
             .enumerate()
             .any(|(i, &b)| b == b'`' || (b == b'$' && bytes.get(i + 1) == Some(&b'{')))
-    }
-
-    /// Escape `raw` for a **plain** template quasi so its cooked value reproduces `raw` exactly:
-    /// `\` and `` ` `` and a `$` opening `${` get a `\` prefix (cooked processing strips it), and a
-    /// literal CR becomes `\r` (the spec normalizes raw CR/CRLF to LF).
-    fn escape_cooked_template(&self, raw: &str) -> &'a str {
-        let mut out = String::with_capacity(raw.len() + 8);
-        let mut chars = raw.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '`' => out.push_str("\\`"),
-                '\r' => out.push_str("\\r"),
-                '$' if chars.peek() == Some(&'{') => out.push_str("\\$"),
-                c => out.push(c),
-            }
-        }
-        self.ast.allocator.alloc_str(&out)
     }
 
     /// `String.raw` — the member-expression callee for the raw tagged template.

@@ -11451,13 +11451,19 @@ impl<'a> AstNode<'a, NotaCode<'a>> {
     }
 
     #[inline]
-    pub fn value(&self) -> Str<'a> {
-        self.inner.value
+    pub fn block(&self) -> bool {
+        self.inner.block
     }
 
     #[inline]
-    pub fn block(&self) -> bool {
-        self.inner.block
+    pub fn parts(&self) -> &AstNode<'a, Vec<'a, NotaVerbatimPart<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.parts,
+            allocator: self.allocator,
+            parent: AstNodes::NotaCode(transmute_self(self)),
+            following_span_start,
+        })
     }
 
     pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
@@ -11477,12 +11483,12 @@ impl<'a> AstNode<'a, NotaMath<'a>> {
     }
 
     #[inline]
-    pub fn display(&self) -> bool {
-        self.inner.display
+    pub fn block(&self) -> bool {
+        self.inner.block
     }
 
     #[inline]
-    pub fn parts(&self) -> &AstNode<'a, Vec<'a, NotaMathPart<'a>>> {
+    pub fn parts(&self) -> &AstNode<'a, Vec<'a, NotaVerbatimPart<'a>>> {
         let following_span_start = self.following_span_start;
         self.allocator.alloc(AstNode {
             inner: &self.inner.parts,
@@ -11499,30 +11505,6 @@ impl<'a> AstNode<'a, NotaMath<'a>> {
     pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
         format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
             .fmt(f);
-    }
-}
-
-impl<'a> AstNode<'a, NotaMathPart<'a>> {
-    #[inline]
-    pub fn as_ast_nodes(&self) -> &AstNodes<'a> {
-        let parent = self.parent;
-        let node = match self.inner {
-            NotaMathPart::Raw(s) => AstNodes::NotaText(self.allocator.alloc(AstNode {
-                inner: s.as_ref(),
-                parent,
-                allocator: self.allocator,
-                following_span_start: self.following_span_start,
-            })),
-            NotaMathPart::Interpolation(s) => {
-                AstNodes::NotaInterpolation(self.allocator.alloc(AstNode {
-                    inner: s.as_ref(),
-                    parent,
-                    allocator: self.allocator,
-                    following_span_start: self.following_span_start,
-                }))
-            }
-        };
-        self.allocator.alloc(node)
     }
 }
 

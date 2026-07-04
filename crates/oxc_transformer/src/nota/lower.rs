@@ -344,16 +344,30 @@ impl<'a> NotaLowering<'a> {
     // Verbatim / code / math (→ `String.raw` templates + ambient prelude tags)
     // ===========================================================================================
 
-    #[expect(
-        clippy::needless_pass_by_value,
-        clippy::needless_pass_by_ref_mut,
-        reason = "keeps the uniform lower_*(&mut self, NotaX<'a>) dispatch; lower_code alone \
-                  needs neither ownership nor &mut"
-    )]
+    /// Lower the shared raw-span parts (verbatim / code / math): each raw run → a `String.raw`
+    /// child (`build_string_raw` handles template escaping / the cooked-literal fallback), each
+    /// `|@`-armed form → its lowered sibling. One lowering for the unified content model.
+    fn lower_raw_parts(
+        &mut self,
+        parts: ArenaVec<'a, NotaVerbatimPart<'a>>,
+    ) -> ArenaVec<'a, Expression<'a>> {
+        let mut children = self.ast.vec_with_capacity(parts.len());
+        for part in parts {
+            children.push(match part {
+                NotaVerbatimPart::Raw(t) => {
+                    let t = t.unbox();
+                    self.build_string_raw(t.span, t.value.as_str())
+                }
+                // A `|@`-re-entered form — the inherited form variants.
+                form => self.lower_form(form.into_nota_form()),
+            });
+        }
+        children
+    }
+
     fn lower_code(&mut self, c: NotaCode<'a>) -> Expression<'a> {
-        let NotaCode { span, language, value, block, .. } = c;
-        let raw_child = self.build_string_raw(span, value.as_str());
-        let children = self.ast.vec1(raw_child);
+        let NotaCode { span, language, block, parts, .. } = c;
+        let children = self.lower_raw_parts(parts);
         if block {
             let mut props = self.ast.vec();
             if let Some(lang) = language {
@@ -367,54 +381,20 @@ impl<'a> NotaLowering<'a> {
     }
 
     fn lower_math(&mut self, m: NotaMath<'a>) -> Expression<'a> {
-        let NotaMath { span, display, parts, .. } = m;
-        // Rebuild the template shape: quasis and exprs strictly alternate starting and ending
-        // with a quasi, so pad an empty quasi wherever two interpolations are adjacent (the
-        // parser only stores non-empty raw runs).
-        let mut quasis: Vec<&'a str> = Vec::new();
-        let mut exprs = self.ast.vec();
-        for part in parts {
-            match part {
-                NotaMathPart::Raw(t) => quasis.push(t.unbox().value.as_str()),
-                NotaMathPart::Interpolation(i) => {
-                    if quasis.len() == exprs.len() {
-                        quasis.push("");
-                    }
-                    let expr = i.unbox().expression;
-                    self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
-                    exprs.push(expr);
-                }
-            }
-        }
-        if quasis.len() == exprs.len() {
-            quasis.push("");
-        }
-        let raw_child = if exprs.is_empty() {
-            self.build_string_raw(span, quasis.first().copied().unwrap_or(""))
-        } else {
-            self.build_string_raw_interp(span, quasis, exprs)
-        };
+        let NotaMath { span, block, parts, .. } = m;
+        let children = self.lower_raw_parts(parts);
+        // The runtime prop is `display` (the AST field renamed to `block` to mirror `NotaCode`).
         let mut props = self.ast.vec();
-        if display {
+        if block {
             let val = self.ast.expression_boolean_literal(Span::empty(0), true);
             props.push(self.obj_prop(Span::empty(0), Span::empty(0), "display", val, false));
         }
-        self.build_raw_element(span, super::MATH, props, self.ast.vec1(raw_child))
+        self.build_raw_element(span, super::MATH, props, children)
     }
 
     fn lower_verbatim(&mut self, v: NotaVerbatim<'a>) -> Expression<'a> {
         let NotaVerbatim { span, tag, parts, .. } = v;
-        let mut children = self.ast.vec_with_capacity(parts.len());
-        for part in parts {
-            children.push(match part {
-                NotaVerbatimPart::Raw(t) => {
-                    let t = t.unbox();
-                    self.build_string_raw(t.span, t.value.as_str())
-                }
-                // A `|@`-re-entered form — the inherited form variants.
-                form => self.lower_form(form.into_nota_form()),
-            });
-        }
+        let children = self.lower_raw_parts(parts);
         self.lower_tagged(span, tag, self.ast.vec(), children)
     }
 
