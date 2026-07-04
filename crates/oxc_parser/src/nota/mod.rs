@@ -140,7 +140,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// exclude it — an interpolation's span is its expression's).
     pub(crate) fn parse_nota_markup_expression(&mut self) -> Expression<'a> {
         let span_start = self.start_span();
-        let form = self.parse_nota_form_in(NotaRegion::Js);
+        let (form, _) = self.enter_region(NotaRegion::Js, Self::parse_nota_form);
         let span = self.end_span(span_start);
         let markup = self.ast.nota_markup(span, NotaMarkupKind::from(form));
         Expression::NotaMarkup(self.ast.alloc(markup))
@@ -378,7 +378,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
         // The body content starts one past `{` (R9: that offset counts as a line start).
-        let (close, items) = self.enter_markup_body(BodyMode::Body, open.end, Self::collect_markup);
+        let (close, items) = self.collect_markup(BodyMode::Body, open.end);
         let end = match close {
             MarkupClose::Curly { end } => end,
             MarkupClose::Eof => {
@@ -418,12 +418,23 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.push_nota_item(item);
     }
 
+    fn collect_markup(&mut self, mode: BodyMode, start: u32) -> (MarkupClose, NotaChildren<'a>) {
+        let (close, region) = self.enter_region(
+            NotaRegion::Markup { mode, start, items: self.ast.vec() },
+            Self::collect_markup_inner,
+        );
+        let NotaRegion::Markup { items, .. } = region else {
+            unreachable!("enter_region returned unexpected region")
+        };
+        (close, items)
+    }
+
     /// The core markup-collection loop, shared by element/control bodies, the document body, and
     /// bounded sub-ranges. Dispatches on the typed child tokens from `next_nota_child`; balanced
     /// `{…}` braces are literal text (Scribble `@foo{f{o}o}` → `"f{o}o"`); `\n` runs stay in the
     /// text stream verbatim (the Scribble whitespace pass owns line handling at lowering time).
-    /// Entered with the current token already lexed as a markup child.
-    fn collect_markup(&mut self) -> MarkupClose {
+    /// Entered with the current token already lexed as a markup child.x
+    fn collect_markup_inner(&mut self) -> MarkupClose {
         let mut depth = 0u32; // balanced-brace depth inside the body
         // R9: the start of a body/range is a line start. A body opening directly with a marker —
         // `@{- item}`, `@foo: - item`, `*- item*`, the document's first line — opens the construct
@@ -597,8 +608,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// line-start list/heading sugar is still recognized.
     fn collect_markup_range(&mut self, start: u32, end: u32) -> NotaChildren<'a> {
         self.nota_seek_markup(start);
-        let (_, items) =
-            self.enter_markup_body(BodyMode::Bounded { end }, start, Self::collect_markup);
+        let (_, items) = self.collect_markup(BodyMode::Bounded { end }, start);
         items
     }
 
@@ -751,7 +761,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// accumulate (union). Entered with the current token at `[`. The closing `]` is validated but
     /// left as the current token — [`Self::parse_element`] chooses the continuation by a raw byte
     /// peek past it, so the JS lexer never reads the (possibly raw-markup) bytes after the `]`.
-    fn parse_props_group(&mut self, props: &mut ArenaVec<'a, NotaProp<'a>>) {
+    fn parse_props_group(&mut self, props: &mut NotaProps<'a>) {
         let open = self.cur_token().span();
         self.bump_any(); // consume `[`
         while !self.at(Kind::RBrack) && !self.at(Kind::Eof) && !self.has_fatal_error() {
@@ -768,7 +778,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         content_start: u32,
         line_end: u32,
-        props: &mut ArenaVec<'a, NotaProp<'a>>,
+        props: &mut NotaProps<'a>,
     ) {
         self.nota_seek_to(content_start);
         while self.cur_token().start() < line_end && !self.at(Kind::Eof) && !self.has_fatal_error()
@@ -781,7 +791,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// One prop-list entry: `...spread`, `key: value`, or bare `key`.
-    fn parse_prop_or_spread(&mut self, props: &mut ArenaVec<'a, NotaProp<'a>>) {
+    fn parse_prop_or_spread(&mut self, props: &mut NotaProps<'a>) {
         if self.at(Kind::Dot3) {
             let span_start = self.start_span();
             self.bump_any();
@@ -816,7 +826,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if self.eat(Kind::Colon) {
             // `key: value` — the value is embedded JS, or markup (`@`-form).
             let value = if self.at(Kind::At) {
-                NotaPropValue::from(self.parse_nota_form_in(NotaRegion::Js))
+                let (form, _) = self.enter_region(NotaRegion::Js, Self::parse_nota_form);
+                NotaPropValue::from(form)
             } else {
                 let expr = self.parse_assignment_expression_or_higher();
                 let span = expr.span();
@@ -1127,7 +1138,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn push_armed_form(&mut self, parts: &mut ArenaVec<'a, NotaVerbatimPart<'a>>, at: u32) -> u32 {
         self.nota_seek_to(at);
         debug_assert!(self.at(Kind::At), "armed `|@` not at `@`");
-        let form = self.parse_nota_form_in(NotaRegion::Raw);
+        let (form, _) = self.enter_region(NotaRegion::Raw, Self::parse_nota_form);
         parts.push(NotaVerbatimPart::from(form));
         self.prev_token_end
     }
@@ -1211,7 +1222,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // (R9: a body/range start is a line start — the document body included).
         self.nota_seek_markup(start);
 
-        let (_, items) = self.enter_markup_body(BodyMode::Document, start, Self::collect_markup);
+        let (_, items) = self.collect_markup(BodyMode::Document, start);
 
         let span = Span::new(0, self.source_text.len() as u32);
         self.ast.nota_document(span, items)
@@ -1226,7 +1237,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // a `Markup` top at a line start, so colon sugar is never entered in a `Js`/`Raw` host — the
         // line-oriented body ("rest of the line + following indented lines") is only well-defined in
         // a markup body. (Was a runtime diagnostic; the gate makes it unreachable.)
-        debug_assert!(self.nota_in_markup_body(), "colon sugar entered outside a markup body");
+        debug_assert!(
+            matches!(self.nota_top_region(), NotaRegion::Markup { .. }),
+            "colon sugar entered outside a markup body"
+        );
         let colon_end = self.cur_token().end();
         let head_line_indent = line_indent_of(self.source_text, span_start);
 
@@ -1255,11 +1269,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Collect the colon-sugar body over `[start, end)`: leading `|` lines (continuation lines
     /// whose first non-whitespace is `|`) become prop groups; the rest is the markup body.
-    fn collect_colon_body(
-        &mut self,
-        start: u32,
-        end: u32,
-    ) -> (ArenaVec<'a, NotaProp<'a>>, NotaChildren<'a>) {
+    fn collect_colon_body(&mut self, start: u32, end: u32) -> (NotaProps<'a>, NotaChildren<'a>) {
         let mut props = self.ast.vec();
         let mut body_start = start;
         let first_cont = next_line_start(self.source_text, start);
@@ -1313,6 +1323,7 @@ fn is_component_name(name: &str) -> bool {
 }
 
 type NotaChildren<'a> = ArenaVec<'a, NotaChild<'a>>;
+type NotaProps<'a> = ArenaVec<'a, NotaProp<'a>>;
 
 /// The host region an inner `@`-form's tail resumes into (Axis 2 — orthogonal to [`BodyMode`],
 /// which is the *collection* semantics of a markup body, Axis 1). The parser owns a stack of these
@@ -1338,42 +1349,19 @@ pub struct NotaParserState<'a> {
 }
 
 impl<'a, C: Config> ParserImpl<'a, C> {
-    /// Collect a markup body of semantics `mode`: push a [`NotaRegion::Markup`], run `f` (which
-    /// appends children via [`Self::push_nota_item`]), then pop and hand back `(f's value, items)`.
-    /// The three markup-body callers (braced / document / bounded) enter through here.
-    fn enter_markup_body<T>(
+    fn enter_region<T>(
         &mut self,
-        mode: BodyMode,
-        start: u32,
+        region: NotaRegion<'a>,
         f: impl FnOnce(&mut Self) -> T,
-    ) -> (T, NotaChildren<'a>) {
-        self.state.nota.regions.push(NotaRegion::Markup { mode, start, items: self.ast.vec() });
-        let t = f(self);
-        let Some(NotaRegion::Markup { items, .. }) = self.state.nota.regions.pop() else {
-            unreachable!("enter_markup_body popped a non-Markup region")
-        };
-        (t, items)
-    }
-
-    /// Parse one `@`-form whose tail resumes into `region` — [`NotaRegion::Js`] for an embedded-JS
-    /// position (expression / prop value), [`NotaRegion::Raw`] for a verbatim `|@` armed form. The
-    /// region governs how the form's exits [`Self::resume_at`]; it holds no children.
-    fn parse_nota_form_in(&mut self, region: NotaRegion<'a>) -> NotaForm<'a> {
-        debug_assert!(!matches!(region, NotaRegion::Markup { .. }), "use enter_markup_body");
+    ) -> (T, NotaRegion<'a>) {
         self.state.nota.regions.push(region);
-        let form = self.parse_nota_form();
-        self.state.nota.regions.pop().expect("parse_nota_form_in: region underflow");
-        form
+        let t = f(self);
+        let region = self.state.nota.regions.pop().expect("enter_region: region underflow");
+        (t, region)
     }
 
     fn nota_top_region(&self) -> &NotaRegion<'a> {
         self.state.nota.regions.last().expect("Nota region stack is empty")
-    }
-
-    /// Is the top region a markup body — so an inner form's tail resumes as markup text (vs a `Js`
-    /// island or a `Raw` scan)?
-    fn nota_in_markup_body(&self) -> bool {
-        matches!(self.nota_top_region(), NotaRegion::Markup { .. })
     }
 
     /// The positional colon-sugar gate (contract R9): the `:` glued to an `@head:` at `span_start`
