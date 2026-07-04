@@ -33,12 +33,12 @@ use crate::{
     error_handler::FatalError,
     lexer::Kind,
     lexer::nota::{
-        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, brace_clip_on_line,
-        byte_at, colon_block_extent, colon_prop_line_at, else_peek, escape_span,
-        find_emphasis_close, find_fence_close, heading_at, is_ident_start_at, is_statement_line,
-        lex_code_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
-        markup_trigger, math_boundary, next_line_start, percent_line_is_empty, scan_hyphen_tail,
-        sigil_run_end, statement_bound, statement_kind, verbatim_boundary,
+        CodeScan, ElsePeek, MarkupTrigger, MathBoundary, VerbatimBoundary, at_line_start_in_frame,
+        brace_clip_on_line, byte_at, colon_block_extent, colon_prop_line_at, else_peek,
+        escape_span, find_emphasis_close, find_fence_close, heading_at, is_ident_start_at,
+        is_statement_line, lex_code_span, line_content_end, line_indent_of, list_item_extent,
+        list_marker_at, markup_trigger, math_boundary, next_line_start, percent_line_is_empty,
+        scan_hyphen_tail, sigil_run_end, statement_bound, statement_kind, verbatim_boundary,
     },
 };
 
@@ -151,6 +151,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     pub(crate) fn parse_nota_form(&mut self) -> NotaForm<'a> {
         let span_start = self.start_span();
 
+        // The positional colon-sugar gate is fixed by where this form's `@` sits (contract R9):
+        // classified once here, from the *entry* region and position, and threaded into both
+        // trigger consumers below so a dead colon interpolates consistently.
+        let colon_live = self.colon_trigger_live(span_start);
+
         // Consume `@` and lex the head. An identifier-start head (`@foo`, `@if`, `@café`) is lexed
         // with Nota identifier rules (`next_nota_head`): a `\` *terminates* the head — so `@foo\:`
         // is `@foo` + the literal `\:` — instead of starting a JS `\u` escape. Keyword heads still
@@ -177,7 +182,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 self.ast.alloc(f)
             }),
             _ => {
-                let Some(head) = self.parse_nota_head() else {
+                let Some(head) = self.parse_nota_head(colon_live) else {
                     // `@` with no valid head (`@@`, `@ `, `@1`, EOF, …): diagnose, but recover as
                     // an empty fragment so the form stays well-shaped in any position.
                     self.set_unexpected();
@@ -185,7 +190,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let frag = self.ast.nota_fragment(span, self.ast.vec());
                     return NotaForm::Fragment(self.ast.alloc(frag));
                 };
-                match self.commit_head(&head) {
+                match self.commit_head(&head, colon_live) {
                     MarkupTrigger::Brace | MarkupTrigger::Bracket => NotaForm::Element({
                         let e = self.parse_element(span_start, head);
                         self.ast.alloc(e)
@@ -212,7 +217,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// boundary token (the identifier, or the `)`) is validated but NOT consumed — it stays as the
     /// one-token lookahead so [`Self::commit_head`] can classify the trigger glued to it and then
     /// consume it in the right lexer mode. Returns `None` for an invalid head.
-    fn parse_nota_head(&mut self) -> Option<NotaHead<'a>> {
+    fn parse_nota_head(&mut self, colon_live: bool) -> Option<NotaHead<'a>> {
         if self.eat(Kind::LParen) {
             let expr = self.parse_expr();
             self.expect_without_advance(Kind::RParen);
@@ -225,10 +230,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             let span = token.span();
             // Hyphenated host tag (`@my-widget`): a lowercase head may continue over `-`-joined
             // segments, but only when an element trigger follows the full name — otherwise the `-`
-            // is literal text after an interpolation (`@my-foo bar` is `@my` + `-foo bar`).
+            // is literal text after an interpolation (`@my-foo bar` is `@my` + `-foo bar`). A dead
+            // colon (`t @my-foo:` mid-line) is not a trigger, so it does not pull in the tail either
+            // — `effective_trigger` demotes it, keeping this site in step with `commit_head`.
             if !is_component_name(name)
                 && let Some(ext_end) = scan_hyphen_tail(self.source_text, span.end)
-                && !matches!(markup_trigger(self.source_text, ext_end), MarkupTrigger::None)
+                && !matches!(self.effective_trigger(ext_end, colon_live), MarkupTrigger::None)
             {
                 let full = &self.source_text[span.start as usize..ext_end as usize];
                 let span = Span::new(span.start, ext_end);
@@ -244,8 +251,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// mode that trigger implies. This is the one place the boundary token is consumed, uniform
     /// across named and dynamic heads. (Seeks, not bumps: an *extended* hyphenated head runs past
     /// the lexer's current boundary token, and a seek from `head.end` covers both cases.)
-    fn commit_head(&mut self, head: &NotaHead<'a>) -> MarkupTrigger {
-        let trigger = markup_trigger(self.source_text, head.end);
+    fn commit_head(&mut self, head: &NotaHead<'a>, colon_live: bool) -> MarkupTrigger {
+        // A dead colon (positional rule R9) is demoted to `None`, so the head interpolates and the
+        // `:` is left un-consumed for the surrounding host to lex as literal text / JS.
+        let trigger = self.effective_trigger(head.end, colon_live);
         match trigger {
             // Lex the trigger (`{` / `[` / `:`) as the next JS token.
             MarkupTrigger::Brace | MarkupTrigger::Bracket | MarkupTrigger::Colon => {
@@ -367,7 +376,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let open = self.cur_token().span();
         self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
-        let (close, items) = self.enter_markup_body(BodyMode::Body, Self::collect_markup);
+        // The body content starts one past `{` (R9: that offset counts as a line start).
+        let (close, items) = self.enter_markup_body(BodyMode::Body, open.end, Self::collect_markup);
         let end = match close {
             MarkupClose::Curly { end } => end,
             MarkupClose::Eof => {
@@ -585,7 +595,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// line-start list/heading sugar is still recognized.
     fn collect_markup_range(&mut self, start: u32, end: u32) -> NotaChildren<'a> {
         self.nota_seek_markup(start);
-        let (_, items) = self.enter_markup_body(BodyMode::Bounded { end }, Self::collect_markup);
+        let (_, items) =
+            self.enter_markup_body(BodyMode::Bounded { end }, start, Self::collect_markup);
         items
     }
 
@@ -1188,7 +1199,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // (R9: a body/range start is a line start — the document body included).
         self.nota_seek_markup(start);
 
-        let (_, items) = self.enter_markup_body(BodyMode::Document, Self::collect_markup);
+        let (_, items) = self.enter_markup_body(BodyMode::Document, start, Self::collect_markup);
 
         let span = Span::new(0, self.source_text.len() as u32);
         self.ast.nota_document(span, items)
@@ -1199,24 +1210,28 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Entered with `:` as the current token.
     fn parse_colon_body(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaElement<'a> {
         debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
+        // The positional gate ([`Self::colon_trigger_live`]) classifies a `:` as `Colon` only under
+        // a `Markup` top at a line start, so colon sugar is never entered in a `Js`/`Raw` host — the
+        // line-oriented body ("rest of the line + following indented lines") is only well-defined in
+        // a markup body. (Was a runtime diagnostic; the gate makes it unreachable.)
+        debug_assert!(self.nota_in_markup_body(), "colon sugar entered outside a markup body");
         let colon_end = self.cur_token().end();
         let head_line_indent = line_indent_of(self.source_text, span_start);
 
-        // Colon sugar is line-oriented (body = rest of the line + following indented lines), so it
-        // is only meaningful inside a markup body — never in an embedded-JS position (expression,
-        // prop value, verbatim `|@`), where "rest of the line" would swallow JS. Diagnose, but keep
-        // parsing the body so the recovered element still has a faithful span.
-        if !self.nota_in_markup_body() {
-            let colon = self.cur_token().span();
-            self.error(diagnostics::nota_colon_sugar_outside_body(colon));
-        }
-
         // Clip the first line at a depth-0 `}` only inside an element/control body, where that `}`
-        // is the enclosing closer (never in a Document / Bounded / Js / Raw host).
-        let clip_at_brace =
-            matches!(self.nota_top_region(), NotaRegion::Markup { mode: BodyMode::Body, .. });
-        let (body_src_start, body_src_end) =
+        // is the enclosing closer (never in a Document / Bounded host). A bounded host additionally
+        // clips the whole body at its end (R9): an emphasis / heading / list-item / colon body that
+        // contains a `@head:` child must not let it escape the range — `*@a: bar* rest`.
+        let (clip_at_brace, bound) = match self.nota_top_region() {
+            NotaRegion::Markup { mode, .. } => (matches!(mode, BodyMode::Body), mode.bound()),
+            // Unreachable per the debug_assert above; interpolate defensively rather than panic.
+            NotaRegion::Js | NotaRegion::Raw => (false, None),
+        };
+        let (body_src_start, mut body_src_end) =
             colon_block_extent(self.source_text, colon_end, head_line_indent, clip_at_brace);
+        if let Some(end) = bound {
+            body_src_end = body_src_end.min(end);
+        }
 
         let (props, items) = self.collect_colon_body(body_src_start, body_src_end);
 
@@ -1292,8 +1307,11 @@ type NotaChildren<'a> = ArenaVec<'a, NotaChild<'a>>;
 /// in [`NotaParserState`]; the top drives [`ParserImpl::resume_at`] and gates markup-child pushes.
 enum NotaRegion<'a> {
     /// Collecting a markup body with these semantics; a form's tail resumes by markup-lexing.
-    /// The only region [`ParserImpl::push_nota_item`] may push a child into.
-    Markup { mode: BodyMode, items: NotaChildren<'a> },
+    /// The only region [`ParserImpl::push_nota_item`] may push a child into. `start` is the body's
+    /// content start (one past `{`, the post-BOM document start, or a bounded range's start): it
+    /// exists for the positional colon-sugar check ([`ParserImpl::colon_trigger_live`]) — R9 counts
+    /// a markup body's own start as a line start.
+    Markup { mode: BodyMode, start: u32, items: NotaChildren<'a> },
     /// An embedded-JS island (an expression-position form, a `k: @form` prop value): a form's tail
     /// resumes by JS-lexing.
     Js,
@@ -1314,9 +1332,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn enter_markup_body<T>(
         &mut self,
         mode: BodyMode,
+        start: u32,
         f: impl FnOnce(&mut Self) -> T,
     ) -> (T, NotaChildren<'a>) {
-        self.state.nota.regions.push(NotaRegion::Markup { mode, items: self.ast.vec() });
+        self.state.nota.regions.push(NotaRegion::Markup { mode, start, items: self.ast.vec() });
         let t = f(self);
         let Some(NotaRegion::Markup { items, .. }) = self.state.nota.regions.pop() else {
             unreachable!("enter_markup_body popped a non-Markup region")
@@ -1343,6 +1362,33 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// island or a `Raw` scan)?
     fn nota_in_markup_body(&self) -> bool {
         matches!(self.nota_top_region(), NotaRegion::Markup { .. })
+    }
+
+    /// The positional colon-sugar gate (contract R9): the `:` glued to an `@head:` at `span_start`
+    /// (the form's `@`) is an element trigger iff BOTH the form is a markup-body child (the top
+    /// region is `Markup`, never a `Js` island or a `Raw` scan) AND its `@` sits at a line start
+    /// modulo whitespace — walking back over spaces/tabs reaches file offset 0, a `\n`, or the top
+    /// markup frame's body start. Everywhere the gate is dead the head falls back to interpolation
+    /// and the trailing `: …` is literal text. Computed once per form (at `parse_nota_form` entry)
+    /// and threaded into both trigger consumers so they agree.
+    fn colon_trigger_live(&self, span_start: u32) -> bool {
+        match self.nota_top_region() {
+            NotaRegion::Markup { start, .. } => {
+                at_line_start_in_frame(self.source_text, span_start, *start)
+            }
+            NotaRegion::Js | NotaRegion::Raw => false,
+        }
+    }
+
+    /// The trigger glued to a head at `after`, with a dead colon (positional rule, `colon_live`
+    /// false) demoted to [`MarkupTrigger::None`] so the head interpolates and the `:` stays literal.
+    /// The one place both trigger consumers ([`Self::commit_head`] and the hyphen-extension check in
+    /// [`Self::parse_nota_head`]) route through, so they classify identically.
+    fn effective_trigger(&self, after: u32, colon_live: bool) -> MarkupTrigger {
+        match markup_trigger(self.source_text, after) {
+            MarkupTrigger::Colon if !colon_live => MarkupTrigger::None,
+            trigger => trigger,
+        }
     }
 
     /// The collection semantics of the markup body being collected. Only reachable while the top

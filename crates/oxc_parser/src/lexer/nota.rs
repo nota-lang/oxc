@@ -380,6 +380,22 @@ pub fn markup_trigger(source: &str, after: u32) -> MarkupTrigger {
     }
 }
 
+/// Is `at` a "line start modulo whitespace" inside a markup frame whose body content begins at
+/// `frame_start` (contract R9)? Walk back from `at` over spaces/tabs — never below `frame_start`,
+/// which bounds the frame's own body — and report whether the landing sits at the frame's body
+/// start, at file offset 0, or immediately after a `\n`. This is the position half of the
+/// positional colon-sugar gate: `@head:` is an element trigger only where this holds (and the top
+/// region is markup). A markup body's own start counts as a line start, so `@a` in `@a: @b: c`
+/// (the inner form sits at its enclosing colon body's start) and `@p{  @a: b}` both qualify.
+pub fn at_line_start_in_frame(source: &str, at: u32, frame_start: u32) -> bool {
+    let bytes = source.as_bytes();
+    let mut pos = at;
+    while pos > frame_start && matches!(bytes.get(pos as usize - 1), Some(b' ' | b'\t')) {
+        pos -= 1;
+    }
+    pos == frame_start || pos == 0 || bytes.get(pos as usize - 1) == Some(&b'\n')
+}
+
 // ================================================================================================
 // Escapes & keywords
 // ================================================================================================
@@ -1188,6 +1204,25 @@ mod tests {
         let (run_end, b) = verbatim_boundary("abc", 0);
         assert_eq!(run_end, 3);
         assert!(matches!(b, VerbatimBoundary::Eof));
+    }
+
+    #[test]
+    fn at_line_start_in_frame_predicate() {
+        // File offset 0 is a line start (frame_start irrelevant when it is 0).
+        assert!(at_line_start_in_frame("@a: b", 0, 0));
+        // The frame's own body start counts as a line start (R9), even mid-line: `@{@a: b}` — the
+        // inner `@a` sits at the fragment body start (offset 2).
+        assert!(at_line_start_in_frame("@{@a: b}", 2, 2));
+        // Walking back over spaces/tabs to the frame start still qualifies.
+        assert!(at_line_start_in_frame("@p{  @a}", 5, 3));
+        // Walking back over spaces/tabs to a newline qualifies (indented line inside a body).
+        assert!(at_line_start_in_frame("@p{\n  @a}", 6, 3));
+        // Mid-line (a non-whitespace byte precedes, above the frame start) does not.
+        assert!(!at_line_start_in_frame("@{x @a}", 4, 2));
+        // The walk never crosses below the frame start: a space *before* the frame start does not
+        // extend the scan (`@a: @b` — `@b` at 4 is the colon-body start 4, the space at 3 is out).
+        assert!(at_line_start_in_frame("@a: @b", 4, 4));
+        assert!(!at_line_start_in_frame("@a: @b", 4, 0));
     }
 
     #[test]

@@ -396,9 +396,94 @@ fn doc_f1_component_hoist_export_name() {
 
 #[test]
 fn colon_sugar_inline() {
-    // `@foo: hello world` → `@foo{hello world}`.
+    // At a markup-body start (R9 line start) the glued `:` fires: `@foo: …` → `@foo{…}`.
     nota_expr("@{@foo: hello world}", r#"Fragment(h("foo", {}, ["hello world"]))"#);
-    nota_expr_err("@foo: hello world");
+    // Mid-line (NOT a line start) the colon is now DEAD under the positional rule: `@foo`
+    // interpolates and `: …` is literal text. (Previously `nota_expr_err("@foo: hello world")` —
+    // colon sugar outside a body was a hard diagnostic; the positional rule supersedes that.
+    // NB: bare `parse_expression("@foo: hi")` reads one expression and silently *drops* the
+    // trailing `: hi` with no error — a pre-existing property of that entry, not colon-specific —
+    // so the literal tail is asserted inside a real markup host here.)
+    nota_expr("@{x @foo: hi}", r#"Fragment("x ", foo, ": hi")"#);
+}
+
+// ===============================================================================================
+// Positional colon sugar (contract R9): `@head:` is an element trigger iff the form is a
+// markup-body child AND its `@` sits at a line start (modulo whitespace, a body's own start
+// counting as one). Everywhere else the head interpolates and `: …` is literal.
+// ===============================================================================================
+
+#[test]
+fn colon_positional_mid_body_is_dead() {
+    // Mid markup body (not a line start): `@head:` does NOT sugar — the head interpolates, `: …`
+    // is literal. A bare `@Bar` stays a value interpolation (no auto-invocation of a component).
+    nota_expr("@{*foo @Bar: baz*}", r#"Fragment(h("strong", {}, ["foo ", Bar, ": baz"]))"#);
+    // Mid-line document text: same rule.
+    nota_expr("@{x @a: y}", r#"Fragment("x ", a, ": y")"#);
+    assert!(
+        nota_doc("x @a: y\n").contains(r#"Fragment("x ", a, ": y")"#),
+        "mid-line document colon is dead",
+    );
+}
+
+#[test]
+fn colon_positional_line_start_fires() {
+    // A braced-body start is a line start (R9): the first child's `:` fires.
+    nota_expr("@p{@a: b}", r#"h("p", {}, [h("a", {}, ["b"])])"#);
+    // Colon bodies chain: `@b` sits at `@a`'s colon-body start, itself a line start → `a{b{c}}`.
+    nota_expr("@{@a: @b: c}", r#"Fragment(h("a", {}, [h("b", {}, ["c"])]))"#);
+    // The rule is uniform over head shapes: Capitalized (component) and `@(expr)` (dynamic) heads
+    // at a line start fire too.
+    assert!(nota_doc("@Cap: hi\n").contains(r#"h(Cap, {}, ["hi"])"#), "Capitalized head fires");
+    assert!(nota_doc("@(t): hi\n").contains(r#"h(_Tag, {}, ["hi"])"#), "dynamic head fires");
+}
+
+#[test]
+fn colon_indented_line_start_in_braced_body_fires() {
+    // R9: an indented literal line start inside a braced body is a line start — the colon fires.
+    assert!(
+        nota_doc("@p{\n  @a: b\n}\n").contains(r#"h("p", {}, [h("a", {}, ["b"])])"#),
+        "indented line-start colon inside a braced body fires",
+    );
+}
+
+#[test]
+fn colon_bounded_clip_at_range_end() {
+    // R9 clip: a colon body nested in a bounded range ends at the range's own end — it cannot
+    // escape it. `*@a: bar* rest`: the emphasis close `*` clips `@a`'s body to "bar", and " rest"
+    // is a sibling of the emphasis. (Previously double-collected — "bar* rest" inside AND " rest"
+    // outside; this is the second bug fixed by this change.)
+    nota_expr("@{*@a: bar* rest}", r#"Fragment(h("strong", {}, [h("a", {}, ["bar"])]), " rest")"#);
+    // A heading's colon child is clipped at the heading's line end; the next line is outer text.
+    let js = nota_doc("# @a: t\ncont\n");
+    assert!(
+        js.contains(r#"h("h1", {}, [h("a", {}, ["t"])])"#),
+        "heading colon child clipped at the line end: {js}",
+    );
+    assert!(js.contains(r#""cont""#), "the next line is outer text: {js}");
+}
+
+#[test]
+fn colon_hyphen_head_agrees_with_the_gate() {
+    // The hyphen extension (`@my-foo`) reads the same gate: a dead (mid-line) colon is not a
+    // trigger, so it does not pull `-foo` into the head — `@my` interpolates and `-foo: bar` is
+    // literal (NOT `@my-foo{bar}`).
+    nota_expr("@{t @my-foo: bar}", r#"Fragment("t ", my, "-foo: bar")"#);
+    // At a line start the same head DOES extend and sugar (a hyphenated custom-element tag).
+    assert!(
+        nota_doc("@my-foo: bar\n").contains(r#"h("my-foo", {}, ["bar"])"#),
+        "at a line start the hyphenated head extends and sugars",
+    );
+}
+
+#[test]
+fn colon_dead_in_js_host_is_a_parse_error() {
+    // In a Js host a colon never triggers — even at a line start — so the `: …` is trailing JS
+    // garbage that fails to parse.
+    // `%`-statement: `@foo` is an expression-position form under a Js region; `: y` is stray JS.
+    nota_doc_err("% let x = @foo: y\n");
+    // Prop value: same — `@foo` interpolates, then `: bar` breaks the `[…]` group.
+    nota_doc_err("@p[k: @foo: bar]{x}\n");
 }
 
 #[test]

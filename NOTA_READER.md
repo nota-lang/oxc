@@ -118,6 +118,16 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   left as lookahead until `commit_head` classifies the glued trigger (`{` `[` `:` `|{` or none)
   and consumes it in the lexer mode that trigger implies. This is the single
   whitespace-sensitive byte peek at the head→body boundary (`@foo{` element vs `@foo ` interp).
+- **The glued `:` is *positional* (contract R9)**: `@head:` sugars only where the form is a
+  markup-body child (the top `NotaRegion` is `Markup`, never a `Js` island or a `Raw` scan) **and**
+  its `@` sits at a line start modulo whitespace — walking back over spaces/tabs reaches offset 0, a
+  `\n`, or the top markup frame's body start (`Markup { start }`; a body's own start is a line start,
+  so `@a: @b: c` chains and `@p{  @a: b}` fires). One `colon_trigger_live` is computed at
+  `parse_nota_form` entry and threaded into *both* trigger consumers — `commit_head` and the
+  hyphen-extension check — so a dead colon uniformly demotes to interpolation (the `:` stays literal)
+  and never extends a hyphenated head (`t @my-foo:` → `@my` + `-foo:`). A colon body nested in a
+  bounded frame (emphasis / heading / list-item / colon) additionally clips at that frame's end, so
+  `*@a: bar* rest` yields `strong[a["bar"]]` + `" rest"` rather than swallowing the tail.
 
 ## Lowering (the emit surface)
 
