@@ -234,9 +234,9 @@ pub fn compile(source: &str) -> Result<JsValue, JsError> {
 #[wasm_bindgen(js_name = parseAst)]
 pub fn parse_ast(source: &str) -> Result<JsValue, JsError> {
     // One arena for the parse; the `Program` borrows from it, so serialize before it drops.
-    // `tsx` is the canonical Nota parse mode (embedded TS admitted), matching the compile entries.
+    // `nota` is the canonical Nota parse mode (embedded TS admitted), matching the compile entries.
     let allocator = Allocator::default();
-    match Parser::new(&allocator, source, SourceType::tsx()).parse_nota_document() {
+    match Parser::new(&allocator, source, SourceType::nota()).parse_nota_document() {
         Ok(program) => to_js(&ParseAstResult { ast: program.to_estree_js_json(true) }),
         Err(errors) => Err(diagnostics_to_error(&errors)),
     }
@@ -294,8 +294,8 @@ pub fn compile_virtual(source: &str) -> Result<JsValue, JsError> {
 #[wasm_bindgen]
 pub fn highlight(source: &str) -> Result<Vec<u32>, JsError> {
     let allocator = Allocator::default();
-    // `tsx` is the canonical Nota parse mode, matching the compile entries and `parseAst`.
-    match Parser::new(&allocator, source, SourceType::tsx()).parse_nota_highlights() {
+    // `nota` is the canonical Nota parse mode, matching the compile entries and `parseAst`.
+    match Parser::new(&allocator, source, SourceType::nota()).parse_nota_highlights() {
         Ok(spans) => {
             let mut flat = Vec::with_capacity(spans.len() * 3);
             for span in spans {

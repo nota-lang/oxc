@@ -44,7 +44,7 @@ use oxc_transformer::NotaLowering;
 enum Mode {
     /// Whole `.nota` file (`parse_nota_document`). The default; matches real files.
     Document,
-    /// A single `@`-form (`parse_nota_expression`). For inspecting one construct in isolation.
+    /// A single `@`-form (`parse_expression` in Nota mode). For inspecting one construct in isolation.
     Expression,
 }
 
@@ -129,7 +129,7 @@ fn inspect(source: &str, mode: Mode, want_lower: bool) -> Report {
     // One arena for the whole reader pipeline; it must outlive every borrowed AST below. Both modes
     // parse as plain mjs (matching `oxc::nota::compile`); embedded TS is out of scope for the reader.
     let allocator = Allocator::default();
-    let source_type = SourceType::default();
+    let source_type = SourceType::nota();
 
     match mode {
         Mode::Document => {
@@ -200,7 +200,7 @@ fn run_document<'a>(
     }
 }
 
-/// Expression-mode pipeline: `parse_nota_expression` → `lower_expression` → `print_expression`.
+/// Expression-mode pipeline: `parse_expression` → `lower_expression` → `print_expression`.
 fn run_expression<'a>(
     allocator: &'a Allocator,
     source: &'a str,
@@ -211,7 +211,7 @@ fn run_expression<'a>(
 ) {
     // Stage 1 — parse.
     let parsed =
-        caught(captured, || Parser::new(allocator, source, source_type).parse_nota_expression());
+        caught(captured, || Parser::new(allocator, source, source_type).parse_expression());
     let mut expr = match parsed {
         Err(message) => {
             report.panic = Some(("parse".to_string(), message));

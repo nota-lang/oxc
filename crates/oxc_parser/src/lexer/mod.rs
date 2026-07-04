@@ -213,6 +213,21 @@ impl<'a, C: Config> Lexer<'a, C> {
         self.next_nota_head()
     }
 
+    /// Park the lexer at byte `offset` reading NO source bytes (Nota reader).
+    ///
+    /// Returns a synthetic zero-width [`Kind::Undetermined`] token at `offset`; the source cursor
+    /// is repositioned but nothing is lexed. Used when a raw scan owns the following bytes (the
+    /// tail after a verbatim `|@` armed form): the parser must not read them in any token regime —
+    /// the scan re-seeks itself — and `Undetermined` makes an accidental token inspection loud.
+    pub(crate) fn nota_park(&mut self, offset: u32) -> Token {
+        self.source.set_offset(offset);
+        self.token = Token::default();
+        self.token.set_start(offset);
+        self.token.set_end(offset);
+        self.token.set_kind(Kind::Undetermined);
+        self.token
+    }
+
     /// The lexer's current source end offset (Nota reader). Save before [`Self::nota_set_source_end`].
     pub(crate) fn nota_source_end(&self) -> u32 {
         self.source.end_offset()

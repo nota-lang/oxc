@@ -187,7 +187,7 @@ fn compile_internal(
 ) -> Result<CompileOutput, Vec<OxcDiagnostic>> {
     let allocator = Allocator::default();
     let mut program =
-        Parser::new(&allocator, source_text, SourceType::tsx()).parse_nota_document()?;
+        Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document()?;
 
     let lowered = NotaLowering::new(&allocator, source_text, config.collect_mappings)
         .lower_document_program(&mut program);

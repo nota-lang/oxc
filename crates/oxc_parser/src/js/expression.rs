@@ -237,15 +237,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 let literal = self.parse_literal_regexp();
                 Expression::RegExpLiteral(self.alloc(literal))
             }
-            // `@` is overloaded: a Nota markup sigil in Nota markup mode, otherwise a JS/TS
-            // decorator. Disambiguated solely by the parser-owned `nota_markup` flag. In expression
-            // position the form is not a body child (`in_body = false`). The parser leaves the form
-            // un-lowered (`Expression::NotaMarkup`); the separate lowering pass replaces it.
-            Kind::At if self.nota_markup => {
-                // Expression position: a `}` is not an enclosing markup-body close (`brace_significant`
-                // = false).
-                self.parse_nota_markup_expression(false, false)
-            }
+            // `@` is overloaded: a Nota markup sigil in Nota source (`SourceType::is_nota`),
+            // otherwise a JS/TS decorator. In expression position the form is an embedded-JS one
+            // (a `Script` body frame), so its trailing context resumes as JS. The parser leaves the
+            // form un-lowered (`Expression::NotaMarkup`); the separate lowering pass replaces it.
+            Kind::At if self.source_type.is_nota() => self.parse_nota_markup_expression(),
             Kind::At => self.parse_decorated_expression(),
             // Literal, RegularExpressionLiteral
             kind if kind.is_literal() => self.parse_literal_expression(),

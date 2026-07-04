@@ -730,7 +730,7 @@ mod tests {
     /// Highlight `source` → `(kind, excerpt)` pairs in paint order.
     fn hl(source: &str) -> Vec<(K, String)> {
         let allocator = Allocator::default();
-        let spans = Parser::new(&allocator, source, SourceType::tsx())
+        let spans = Parser::new(&allocator, source, SourceType::nota())
             .parse_nota_highlights()
             .expect("test doc must parse");
         spans
@@ -923,7 +923,7 @@ mod tests {
         let src = "# H *b*\n\n%let x = 1\n@em{y}\n";
         let allocator = Allocator::default();
         let spans =
-            Parser::new(&allocator, src, SourceType::tsx()).parse_nota_highlights().unwrap();
+            Parser::new(&allocator, src, SourceType::nota()).parse_nota_highlights().unwrap();
         for pair in spans.windows(2) {
             assert!(
                 pair[0].start < pair[1].start

@@ -3,7 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use oxc_ast::ast::AssignmentExpression;
 use oxc_span::Span;
 
-use crate::cursor::ParserCheckpoint;
+use crate::{cursor::ParserCheckpoint, nota::NotaParserState};
 
 pub struct ParserState<'a> {
     pub not_parenthesized_arrow: FxHashSet<u32>,
@@ -31,6 +31,8 @@ pub struct ParserState<'a> {
     /// Used to determine if a statement needs to be stored for potential reparsing
     /// in unambiguous mode.
     pub encountered_await_identifier: bool,
+
+    pub nota: NotaParserState<'a>,
 }
 
 impl ParserState<'_> {
@@ -41,6 +43,7 @@ impl ParserState<'_> {
             trailing_commas: FxHashMap::default(),
             potential_await_reparse: Vec::new(),
             encountered_await_identifier: false,
+            nota: NotaParserState::default(),
         }
     }
 }

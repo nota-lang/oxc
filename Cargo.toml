@@ -258,12 +258,12 @@ ignored = ["oxc_transform_napi", "oxc_parser_napi", "oxc_minify_napi"]
 [profile.dev]
 # Disabling debug info speeds up local and CI builds,
 # and we don't rely on it for debugging that much.
-debug = false
+debug = true
 
 [profile.test]
 # Disabling debug info speeds up local and CI builds,
 # and we don't rely on it for debugging that much.
-debug = false
+debug = true
 
 [profile.dev.package]
 # Compile macros with some optimizations to make consuming crates build faster

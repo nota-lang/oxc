@@ -145,6 +145,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.token = self.lexer.seek_and_lex_nota_head(offset);
     }
 
+    /// Park the parser at byte `offset` WITHOUT lexing (Nota reader): `prev_token_end` becomes
+    /// `offset` and the current token a synthetic zero-width [`Kind::Undetermined`] there.
+    ///
+    /// The resume primitive for a `Raw` region — the tail after a verbatim `|@` armed form, whose
+    /// bytes belong to the enclosing raw scan (`verbatim_boundary`). The parser must not read them
+    /// in any token regime; the scan re-seeks itself from `prev_token_end`, and `Undetermined`
+    /// makes an accidental token inspection after a park loud rather than lexing raw bytes as JS.
+    pub(crate) fn nota_park(&mut self, offset: u32) {
+        self.prev_token_end = offset;
+        self.token = self.lexer.nota_park(offset);
+    }
+
     /// Advance and return true if we are at `Kind`, return false otherwise
     #[inline]
     #[must_use = "Use `bump` instead of `eat` if you are ignoring the return value"]
@@ -229,6 +241,23 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             self.set_fatal_error(error);
         }
         self.advance(kind);
+    }
+
+    /// Like [`Self::expect_closing`] but leaves the closing token as the one-token lookahead
+    /// instead of advancing past it. Used where the bytes after the closer are owned by a raw
+    /// markup / verbatim scan the JS lexer must not read (Nota `[props]` groups).
+    #[inline]
+    pub(crate) fn expect_closing_without_advance(&mut self, kind: Kind, opening_span: Span) {
+        if !self.at(kind) {
+            let range = self.cur_token().span();
+            let error = diagnostics::expect_closing(
+                kind.to_str(),
+                self.cur_kind().to_str(),
+                range,
+                opening_span,
+            );
+            self.set_fatal_error(error);
+        }
     }
 
     #[inline]

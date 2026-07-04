@@ -71,10 +71,19 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   `bump_any` (JS), `advance_for_nota_child` (markup), or a `nota_seek_*` re-entry at a raw offset.
   After any multi-byte extent is consumed by a scan, the parser re-seeks explicitly.
 - **`collect_markup` is the one body loop**, dispatching on typed tokens; `BodyMode`
-  (`Body`/`Document`/`Bounded`) selects the three caller differences: does a depth-0 `}` close the
-  body, do `%` statement lines fire, is collection clipped to a range. Balanced `{…}` inside a
-  body is literal text (Scribble `@foo{f{o}o}`); brace depth is a parser counter over the typed
-  `LCurly`/`RCurly` tokens.
+  (`Body`/`Document`/`Bounded`) is *Axis 1* — the **collection semantics** of a markup body: does a
+  depth-0 `}` close the body, do `%` statement lines fire, is collection clipped to a range.
+  Balanced `{…}` inside a body is literal text (Scribble `@foo{f{o}o}`); brace depth is a parser
+  counter over the typed `LCurly`/`RCurly` tokens.
+- **A parser-owned `NotaRegion` stack is *Axis 2*** — the host an inner `@`-form's *tail* resumes
+  into, orthogonal to `BodyMode`: `Markup(BodyMode)` (resume by markup-lex — the only region markup
+  children may push into), `Js` (an expression-position form or a `k: @form` prop value — resume by
+  JS-lex), or `Raw` (the tail after a verbatim `|@` armed form — *parked*). `resume_at` is the one
+  exit primitive every construct returns through, a three-way dispatch on the top region;
+  `nota_park` sets a zero-width `Undetermined` token and reads no source (the enclosing raw scan
+  owns the following bytes and re-seeks itself from `prev_token_end`), and `Undetermined` makes an
+  accidental token inspection after a park loud. A markup-child push under a `Js`/`Raw` top is a
+  routing bug and panics.
 - **Line-start constructs chain**: the `\n` arm consumes a *run* of `%`/`%%%` statements, list
   runs, then a heading — each resumes at a line start that may open the next. **A body/range start
   is a line start too** (contract R9): `collect_markup`'s entry runs the same hook, so the
@@ -91,14 +100,18 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   embedded-JS skips (`skip_js_string`/`skip_balanced`/`skip_at_form`) make an `@`-form's
   `(…)`/`[…]` groups opaque — a bracket or `*` inside `"…"` cannot unbalance them.
 - **Embedded JS is parsed by oxc itself** (`parse_expr` / `parse_statement_list_item` /
-  `parse_binding_pattern`) with `nota_markup` left on, so `@`-forms nest inside embedded JS. A
-  `%`/`%%%` statement region's parse is **bounded** by temporarily clamping the lexer's source end
-  (`with_source_end_bound`) to `statement_bound` — the next line-leading `%` or the first **blank
-  line** (contract R8: ASI applies as at end of input) — / the closing fence; otherwise the JS
-  lexer reads the delimiter as `%` (modulo) or `%%%` as three operators. Within the bound a `%`
-  line is a JS statement *list* (`% a(); b();`), transitioning to markup at end-of-line; stale
-  lexer diagnostics from the trailing one-token lookahead (markup bytes JS can't lex) are dropped
-  when the region parses clean.
+  `parse_binding_pattern`) with `SourceType::is_nota()` set, so `@`-forms nest inside embedded JS.
+  **The JS lexer's one-token lookahead never reads bytes past a region boundary it does not own**: a
+  `[props]` group's `]` is validated *without advancing* and the continuation chosen by a raw byte
+  peek at its end, a math `@(…)`'s `)` is parked, and a verbatim body's raw runs stay the raw
+  scan's — each once mis-lexed a trailing `\`-run as a JS escape. The lone exception is a `%`/`%%%`
+  statement region, whose boundary is discoverable only *after* the JS parse: it is **bounded** by
+  temporarily clamping the lexer's source end (`with_source_end_bound`) to `statement_bound` — the
+  next line-leading `%` or the first **blank line** (contract R8: ASI applies as at end of input) —
+  / the closing fence; otherwise the JS lexer reads the delimiter as `%` (modulo) or `%%%` as three
+  operators. Within the bound a `%` line is a JS statement *list* (`% a(); b();`), transitioning to
+  markup at end-of-line; stale lexer diagnostics from the trailing one-token lookahead (markup bytes
+  JS can't lex) are **erased** when the region parses clean.
 - **Every text child is a real source slice** — including single-byte sigils that turned out
   literal — so `NotaText` spans are always true source positions (sourcemaps / Volar / ESTree).
 - **`@`-head commit protocol**: the head's boundary token (bare ident or the `)` of `@(expr)`) is

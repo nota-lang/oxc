@@ -90,6 +90,8 @@ pub enum LanguageVariant {
     Standard = 0,
     /// For sources using JSX or TSX
     Jsx = 1,
+    /// For custom Nota syntax
+    Nota = 2,
 }
 
 impl Default for SourceType {
@@ -364,6 +366,10 @@ impl SourceType {
         Self::ts().with_jsx(true)
     }
 
+    pub const fn nota() -> Self {
+        Self::ts().with_nota(true)
+    }
+
     /// Creates a [`SourceType`] representing a [`TypeScript definition`] file.
     ///
     /// ## Example
@@ -441,6 +447,10 @@ impl SourceType {
     /// Note that TSX is considered JSX in this context.
     pub fn is_jsx(self) -> bool {
         self.variant == LanguageVariant::Jsx
+    }
+
+    pub fn is_nota(self) -> bool {
+        self.variant == LanguageVariant::Nota
     }
 
     /// Does this source type implicitly use strict mode semantics?
@@ -547,6 +557,14 @@ impl SourceType {
     pub const fn with_jsx(mut self, yes: bool) -> Self {
         if yes {
             self.variant = LanguageVariant::Jsx;
+        }
+        self
+    }
+
+    #[must_use]
+    pub const fn with_nota(mut self, yes: bool) -> Self {
+        if yes {
+            self.variant = LanguageVariant::Nota;
         }
         self
     }

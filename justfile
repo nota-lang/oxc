@@ -322,3 +322,9 @@ clone-submodule dir url sha:
   cd {{dir}} ; git fetch --depth=1 origin {{sha}} ; git reset --hard {{sha}} ; git clean -f -q
 
 # ==================== NOTA ADDONS ====================
+
+nota-tests:
+  cargo test -p oxc_codegen -p oxc_parser nota
+
+nota-lints:
+  cargo clippy -p oxc_codegen -p oxc_parser

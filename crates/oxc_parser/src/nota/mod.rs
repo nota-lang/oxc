@@ -50,7 +50,9 @@ enum MarkupClose {
     Eof,
 }
 
-/// Selects the behaviours that differ between [`ParserImpl::collect_markup`]'s callers.
+/// The *collection semantics* of a markup body — the behaviours that differ between
+/// [`ParserImpl::collect_markup`]'s callers. This is Axis 1: it says nothing about the host a
+/// form's tail resumes into (that is [`NotaRegion`], Axis 2).
 #[derive(Clone, Copy)]
 enum BodyMode {
     /// An element / control-flow `{ … }` body: a depth-0 `}` closes it; `%`/`%%%` lines are
@@ -83,25 +85,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // Entry points
     // ===========================================================================================
 
-    /// Parse a whole source string as a single Nota *expression* (mirrors
-    /// [`ParserImpl::parse_expression`]). Document mode is [`Self::parse_nota_document`].
-    ///
-    /// # Errors
-    /// If the source is not a well-formed Nota expression.
-    pub(crate) fn parse_nota_expression(mut self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
-        self.nota_markup = true;
-        self.bump_any(); // prime `token` onto the first token
-        let expr = self.parse_nota_markup_expression(false, false);
-        self.finish_nota(expr)
-    }
-
     /// Parse a whole `.nota` file in *document mode* → a [`Program`] holding the un-lowered
     /// document as a single `Expression::NotaMarkup(Document)` statement.
     ///
     /// # Errors
-    /// If the file is not well-formed Nota.
+    /// If the file is not well-formed Nota.    
     pub(crate) fn parse_nota_document(mut self) -> Result<Program<'a>, Vec<OxcDiagnostic>> {
-        self.nota_markup = true;
         // No JS `bump_any` priming: the file starts as markup (or a `%` line), and a leading
         // `\`/`%`/etc. would choke the JS lexer. `parse_document_body` seeks from offset 0 itself.
         let document = self.parse_document_body();
@@ -148,13 +137,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse one `@`-form in JS *expression position*, wrapped as `Expression::NotaMarkup`. The
     /// umbrella [`NotaMarkup`] span covers the whole form from its `@` (an inner node's span may
     /// exclude it — an interpolation's span is its expression's).
-    pub(crate) fn parse_nota_markup_expression(
-        &mut self,
-        in_body: bool,
-        brace_significant: bool,
-    ) -> Expression<'a> {
+    pub(crate) fn parse_nota_markup_expression(&mut self) -> Expression<'a> {
         let span_start = self.start_span();
-        let form = self.parse_nota_form(in_body, brace_significant);
+        let form = self.parse_nota_form_in(NotaRegion::Js);
         let span = self.end_span(span_start);
         let markup = self.ast.nota_markup(span, NotaMarkupKind::from(form));
         Expression::NotaMarkup(self.ast.alloc(markup))
@@ -163,16 +148,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse one `@`-form. Entered with the current token at [`Kind::At`]. The returned
     /// [`NotaForm`] converts into any form-holding position (`NotaChild`, `NotaPropValue`,
     /// `NotaVerbatimPart`, `NotaMarkupKind`) via the inherited-variant `From` impls.
-    ///
-    /// `in_body`: this form is a child of a markup body, so its trailing context resumes as markup
-    /// text (the JSX `in_jsx_child` analog); `false` in JS expression position.
-    /// `brace_significant`: a depth-0 `}` here closes an *enclosing* `{…}` body, so `@head:` colon
-    /// sugar must clip its body before it (`@p{@a: b}`); `false` where `}` is literal text.
-    pub(crate) fn parse_nota_form(
-        &mut self,
-        in_body: bool,
-        brace_significant: bool,
-    ) -> NotaForm<'a> {
+    pub(crate) fn parse_nota_form(&mut self) -> NotaForm<'a> {
         let span_start = self.start_span();
 
         // Consume `@` and lex the head. An identifier-start head (`@foo`, `@if`, `@café`) is lexed
@@ -189,15 +165,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         match self.cur_kind() {
             Kind::If => NotaForm::If({
-                let n = self.parse_nota_if(span_start, in_body);
+                let n = self.parse_nota_if(span_start);
                 self.ast.alloc(n)
             }),
             Kind::For => NotaForm::For({
-                let n = self.parse_nota_for(span_start, in_body);
+                let n = self.parse_nota_for(span_start);
                 self.ast.alloc(n)
             }),
             Kind::LCurly => NotaForm::Fragment({
-                let f = self.parse_fragment(span_start, in_body);
+                let f = self.parse_fragment(span_start);
                 self.ast.alloc(f)
             }),
             _ => {
@@ -209,17 +185,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     let frag = self.ast.nota_fragment(span, self.ast.vec());
                     return NotaForm::Fragment(self.ast.alloc(frag));
                 };
-                match self.commit_head(&head, in_body) {
+                match self.commit_head(&head) {
                     MarkupTrigger::Brace | MarkupTrigger::Bracket => NotaForm::Element({
-                        let e = self.parse_element(span_start, head, in_body);
+                        let e = self.parse_element(span_start, head);
                         self.ast.alloc(e)
                     }),
                     MarkupTrigger::Colon => NotaForm::Element({
-                        let e = self.parse_colon_body(span_start, head, in_body, brace_significant);
+                        let e = self.parse_colon_body(span_start, head);
                         self.ast.alloc(e)
                     }),
                     MarkupTrigger::Verbatim => NotaForm::Verbatim({
-                        let v = self.parse_verbatim_element(span_start, head, in_body);
+                        let v = self.parse_verbatim_element(span_start, head);
                         self.ast.alloc(v)
                     }),
                     // No trigger glued to the head ⇒ interpolation.
@@ -268,7 +244,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// mode that trigger implies. This is the one place the boundary token is consumed, uniform
     /// across named and dynamic heads. (Seeks, not bumps: an *extended* hyphenated head runs past
     /// the lexer's current boundary token, and a seek from `head.end` covers both cases.)
-    fn commit_head(&mut self, head: &NotaHead<'a>, in_body: bool) -> MarkupTrigger {
+    fn commit_head(&mut self, head: &NotaHead<'a>) -> MarkupTrigger {
         let trigger = markup_trigger(self.source_text, head.end);
         match trigger {
             // Lex the trigger (`{` / `[` / `:`) as the next JS token.
@@ -279,7 +255,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             // stays current (the JS lexer must not eat the `|`).
             MarkupTrigger::Verbatim => {}
             // No trigger ⇒ interpolation: resume the surrounding context past the head.
-            MarkupTrigger::None => self.resume_at(head.end, in_body),
+            MarkupTrigger::None => self.resume_at(head.end),
         }
         trigger
     }
@@ -316,29 +292,48 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Parse `@head [props]* { body }?`. Entered with the `{`/`[` delimiter as the current token.
-    fn parse_element(
-        &mut self,
-        span_start: u32,
-        head: NotaHead<'a>,
-        in_body: bool,
-    ) -> NotaElement<'a> {
+    fn parse_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaElement<'a> {
         let mut props = self.ast.vec();
+
+        // `[props]` groups, then the body-vs-self-closing decision. A group's `]` is validated but
+        // NOT advanced past ([`Self::parse_props_group`]): the JS lexer's one-token lookahead must
+        // never read the bytes after the `]`, which in a markup / verbatim host are raw text. The
+        // continuation is a raw byte peek at the `]`'s end, re-lexed in the deliberate mode: `[` →
+        // another group, `{` → a braced body, anything else → self-closing (a `:`/`|` after `]`
+        // does not trigger — it stays literal text).
+        let mut self_closing_end = None;
         while self.at(Kind::LBrack) {
             self.parse_props_group(&mut props);
+            if self.has_fatal_error() {
+                break;
+            }
+            let bracket_end = self.cur_token().end();
+            match byte_at(self.source_text, bracket_end) {
+                Some(b'[') => self.nota_seek_to(bracket_end),
+                Some(b'{') => {
+                    self.nota_seek_to(bracket_end);
+                    break;
+                }
+                _ => {
+                    // Self-closing: resume the host region past the `]`, uniformly across hosts —
+                    // in a `Js` host, seeking at `bracket_end` re-lexes exactly the token a plain
+                    // advance past `]` would, so no body text is dropped and no raw byte is JS-lexed.
+                    self.resume_at(bracket_end);
+                    self_closing_end = Some(bracket_end);
+                    break;
+                }
+            }
         }
 
-        let (children, end) = if self.at(Kind::LCurly) {
+        let (children, end) = if let Some(end) = self_closing_end {
+            (self.ast.vec(), end)
+        } else if self.at(Kind::LCurly) && !self.has_fatal_error() {
             let (children, end) = self.parse_braced_body();
-            self.resume_at(end, in_body);
+            self.resume_at(end);
             (children, end)
         } else {
-            // Self-closing. The current JS token already ran past the `]`; re-lex the trailing
-            // markup text from right after it so no body text is dropped.
-            let end = self.prev_token_end;
-            if in_body {
-                self.resume_at(end, true);
-            }
-            (self.ast.vec(), end)
+            // Reached only after a fatal error in a prop group; keep a faithful span.
+            (self.ast.vec(), self.prev_token_end)
         };
 
         let span = Span::new(span_start, end);
@@ -347,9 +342,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// `@{ body }` → a fragment node. `@` already consumed.
-    fn parse_fragment(&mut self, span_start: u32, in_body: bool) -> NotaFragment<'a> {
+    fn parse_fragment(&mut self, span_start: u32) -> NotaFragment<'a> {
         let (children, end) = self.parse_braced_body();
-        self.resume_at(end, in_body);
+        self.resume_at(end);
         let span = Span::new(span_start, end);
         self.ast.nota_fragment(span, children)
     }
@@ -363,7 +358,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// immediately; control-flow callers first scan past it for an `else` continuation. Entered
     /// at the body `{`; a missing `{` is fatal (only reachable from control flow — element
     /// dispatch guarantees the brace).
-    fn parse_braced_body(&mut self) -> (ArenaVec<'a, NotaChild<'a>>, u32) {
+    fn parse_braced_body(&mut self) -> (NotaChildren<'a>, u32) {
         if !self.at(Kind::LCurly) {
             let error = diagnostics::nota_control_expects_body(self.cur_token().span());
             self.set_fatal_error(error);
@@ -372,41 +367,44 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let open = self.cur_token().span();
         self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
-        let mut items = self.ast.vec();
-        match self.collect_markup(&mut items, BodyMode::Body) {
-            MarkupClose::Curly { end } => (items, end),
+        let (close, items) = self.enter_markup_body(BodyMode::Body, Self::collect_markup);
+        let end = match close {
+            MarkupClose::Curly { end } => end,
             MarkupClose::Eof => {
                 self.expect_markup_body_close(open);
-                (items, self.prev_token_end)
+                self.prev_token_end
             }
-        }
+        };
+        (items, end)
     }
 
-    /// Resume lexing at raw offset `offset` in the mode the surrounding context implies: markup
-    /// text when the just-parsed form is a markup-body child, a normal JS token otherwise. The
-    /// single mode-switch primitive every construct exits through. No-op after a fatal error
-    /// (the collectors bail out; nothing left to lex).
-    fn resume_at(&mut self, offset: u32, in_body: bool) {
+    /// Resume the enclosing host at raw offset `offset` — the single exit primitive every `@`-form
+    /// construct returns through. A three-way dispatch on the top [`NotaRegion`]: a `Markup` body
+    /// re-lexes markup text, a `Js` island re-lexes a JS token, a `Raw` scan parks (no lex — it
+    /// re-seeks itself from `prev_token_end`). No-op after a fatal error (the collectors bail out;
+    /// nothing left to lex).
+    fn resume_at(&mut self, offset: u32) {
         if self.has_fatal_error() {
             return;
         }
-        if in_body {
-            self.nota_seek_markup(offset);
-        } else {
-            self.nota_seek_to(offset);
+        match self.nota_top_region() {
+            NotaRegion::Markup { .. } => self.nota_seek_markup(offset),
+            NotaRegion::Js => self.nota_seek_to(offset),
+            NotaRegion::Raw => self.nota_park(offset),
         }
     }
 
     /// Push the source slice `[start, end)` as a literal text child (skipped if empty). Every text
     /// child — including single-byte sigils that turned out literal — is a real source slice, so
     /// [`NotaText`] spans are always true source positions.
-    fn push_text(&self, items: &mut ArenaVec<'a, NotaChild<'a>>, start: u32, end: u32) {
+    fn push_text(&mut self, start: u32, end: u32) {
         if end <= start {
             return;
         }
         let slice = &self.source_text[start as usize..end as usize];
         let text = self.ast.nota_text(Span::new(start, end), slice);
-        items.push(NotaChild::Text(self.ast.alloc(text)));
+        let item = NotaChild::Text(self.ast.alloc(text));
+        self.push_nota_item(item);
     }
 
     /// The core markup-collection loop, shared by element/control bodies, the document body, and
@@ -414,11 +412,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `{…}` braces are literal text (Scribble `@foo{f{o}o}` → `"f{o}o"`); `\n` runs stay in the
     /// text stream verbatim (the Scribble whitespace pass owns line handling at lowering time).
     /// Entered with the current token already lexed as a markup child.
-    fn collect_markup(
-        &mut self,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-        mode: BodyMode,
-    ) -> MarkupClose {
+    fn collect_markup(&mut self) -> MarkupClose {
         let mut depth = 0u32; // balanced-brace depth inside the body
         // R9: the start of a body/range is a line start. A body opening directly with a marker —
         // `@{- item}`, `@foo: - item`, `*- item*`, the document's first line — opens the construct
@@ -426,11 +420,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // `{- x}` inside a paragraph stays text.)
         if !self.has_fatal_error() {
             let at = self.cur_token().start();
-            let resume = self.consume_line_start_constructs(at, 0, mode, items);
+            let resume = self.consume_line_start_constructs(at, 0);
             if resume != at {
                 self.nota_seek_markup(resume);
             }
         }
+        let mode = self.nota_body_mode();
         loop {
             if self.has_fatal_error() {
                 return MarkupClose::Eof;
@@ -445,12 +440,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             match self.cur_kind() {
                 Kind::MarkupText => {
                     let token = self.cur_token();
-                    let (end, reached_bound) = match mode {
+                    let (end, reached_bound) = match mode.bound() {
                         // Clip the run to a bounded range's end.
-                        BodyMode::Bounded { end } => (token.end().min(end), token.end() >= end),
-                        BodyMode::Body | BodyMode::Document => (token.end(), false),
+                        Some(end) => (token.end().min(end), token.end() >= end),
+                        None => (token.end(), false),
                     };
-                    self.push_text(items, token.start(), end);
+                    self.push_text(token.start(), end);
                     if reached_bound {
                         return MarkupClose::Eof;
                     }
@@ -460,20 +455,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // Line boundary: keep the `\n` as text, then consume any run of line-start
                     // constructs (`%`/`%%%` statements, lists, a heading) on the following lines.
                     let nl = self.cur_token().start();
-                    self.push_text(items, nl, nl + 1);
-                    let resume = self.consume_line_start_constructs(nl + 1, depth, mode, items);
+                    self.push_text(nl, nl + 1);
+                    let resume = self.consume_line_start_constructs(nl + 1, depth);
                     self.nota_seek_markup(resume);
                 }
                 Kind::LCurly => {
                     depth += 1;
                     let s = self.cur_token().start();
-                    self.push_text(items, s, s + 1);
+                    self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
                 Kind::RCurly if depth > 0 => {
                     depth -= 1;
                     let s = self.cur_token().start();
-                    self.push_text(items, s, s + 1);
+                    self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
                 // Body close: leave the `}` current so `parse_body` can consume it in the right
@@ -483,15 +478,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
                 Kind::RCurly => {
                     let s = self.cur_token().start();
-                    self.push_text(items, s, s + 1);
+                    self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
                 Kind::At => {
-                    // A depth-0 `}` closes an element/control body, so a child form's colon sugar
-                    // must clip before it; not so where `}` is literal.
-                    let brace_significant = matches!(mode, BodyMode::Body);
-                    let form = self.parse_nota_form(true, brace_significant);
-                    items.push(NotaChild::from(form));
+                    let form = self.parse_nota_form();
+                    self.push_nota_item(NotaChild::from(form));
                     // A colon-sugar body consumes through its final line's `\n` (and any trailing
                     // blank lines), so the form can resume AT a line start — a position the `\n`
                     // arm's line-start hook never sees. Run the same hook here: a heading, list,
@@ -501,7 +493,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                         && at > 0
                         && byte_at(self.source_text, at - 1) == Some(b'\n')
                     {
-                        let resume = self.consume_line_start_constructs(at, depth, mode, items);
+                        let resume = self.consume_line_start_constructs(at, depth);
                         self.nota_seek_markup(resume);
                     }
                 }
@@ -509,25 +501,25 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // The lexer emits these only for a valid opener (the Typst word-boundary
                     // rule); close-matching still decides marker-vs-literal.
                     let m = if self.cur_kind() == Kind::Star { b'*' } else { b'_' };
-                    self.parse_emphasis(m, self.cur_token().start(), items);
+                    self.parse_emphasis(m, self.cur_token().start());
                 }
                 Kind::NotaBackslash => {
                     // General escape: `\<c>` → literal `<c>`, the `\` dropped.
                     let span = escape_span(self.source_text, self.cur_token().start());
-                    self.push_text(items, span.start, span.end);
+                    self.push_text(span.start, span.end);
                     self.nota_seek_markup(span.end);
                 }
                 Kind::NotaBacktick => {
-                    self.parse_code_or_literal(items, self.cur_token().start());
+                    self.parse_code_or_literal(self.cur_token().start());
                 }
                 Kind::NotaDollar => {
-                    self.parse_math_or_literal(items, self.cur_token().start());
+                    self.parse_math_or_literal(self.cur_token().start());
                 }
                 Kind::Pipe => {
                     // A bare `|` in a markup body is literal (`|{`/`|@` are handled at the head
                     // switch / inside verbatim bodies, never here).
                     let s = self.cur_token().start();
-                    self.push_text(items, s, s + 1);
+                    self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
                 Kind::Eof => return MarkupClose::Eof,
@@ -546,23 +538,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// the loop chains. `depth` gates lists/headings (they fire only at brace depth 0). Returns
     /// the offset to resume markup text from; a heading resumes at its trailing `\n` so the
     /// caller's next `\n` iteration chains into whatever follows.
-    fn consume_line_start_constructs(
-        &mut self,
-        mut at: u32,
-        depth: u32,
-        mode: BodyMode,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) -> u32 {
+    fn consume_line_start_constructs(&mut self, mut at: u32, depth: u32) -> u32 {
+        let mode = self.nota_body_mode();
         loop {
             if mode.allows_statements() && is_statement_line(self.source_text, at) {
-                at = self.collect_statements(at, items);
+                at = self.collect_statements(at);
                 continue;
             }
             if depth == 0
                 && mode.bound().is_none_or(|end| at < end)
                 && list_marker_at(self.source_text, at).is_some()
             {
-                at = self.parse_list(at, mode, items);
+                at = self.parse_list(at, mode);
                 continue;
             }
             break;
@@ -571,7 +558,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             && mode.bound().is_none_or(|end| at < end)
             && let Some((heading, h_end)) = self.try_heading(at, mode)
         {
-            items.push(NotaChild::Heading(self.ast.alloc(heading)));
+            self.push_nota_item(NotaChild::Heading(self.ast.alloc(heading)));
             return h_end;
         }
         at
@@ -596,14 +583,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Collect markup over a bounded raw source range `[start, end)` — emphasis, colon-sugar,
     /// list-item, and heading bodies. A `}` is always literal, there are no statement lines, and
     /// line-start list/heading sugar is still recognized.
-    fn collect_markup_range(
-        &mut self,
-        start: u32,
-        end: u32,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) {
+    fn collect_markup_range(&mut self, start: u32, end: u32) -> NotaChildren<'a> {
         self.nota_seek_markup(start);
-        let _ = self.collect_markup(items, BodyMode::Bounded { end });
+        let (_, items) = self.enter_markup_body(BodyMode::Bounded { end }, Self::collect_markup);
+        items
     }
 
     // ===========================================================================================
@@ -624,21 +607,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse a run of consecutive `%`/`%%%` statement lines from `line_start`, pushing each parsed
     /// statement as a `NotaChild::Statement` (routing/IIFE-wrapping is the lowering's job).
     /// Returns the offset of the first non-statement line.
-    fn collect_statements(
-        &mut self,
-        line_start: u32,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) -> u32 {
+    fn collect_statements(&mut self, line_start: u32) -> u32 {
         let mut at = line_start;
         while let Some((content, is_fence)) = statement_kind(self.source_text, at) {
             let end = if is_fence {
-                self.collect_fence_statements(content, items)
+                self.collect_fence_statements(content)
             } else if percent_line_is_empty(self.source_text, content) {
                 // An empty / comment-only `%` line is a no-op; it must not swallow the following
                 // markup as a statement.
                 content
             } else {
-                self.collect_percent_statements(content, items)
+                self.collect_percent_statements(content)
             };
             // A fence resumes at the line after its closing `%%%`; a `%` statement's `end` is
             // mid-line, so advance to the next line.
@@ -656,11 +635,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// boundary: end of line once a statement completes there, a blank line (the lexer is clamped
     /// at [`statement_bound`], so ASI applies as at end of input), or the next line-leading `%`.
     /// Returns the offset just past the last statement.
-    fn collect_percent_statements(
-        &mut self,
-        content: u32,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) -> u32 {
+    fn collect_percent_statements(&mut self, content: u32) -> u32 {
         let bound = statement_bound(self.source_text, content);
         debug_assert!(self.source_text.is_char_boundary(bound as usize));
         let lexer_errors_before = self.lexer.errors.len();
@@ -670,7 +645,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             loop {
                 let stmt =
                     p.parse_statement_list_item(crate::context::StatementContext::StatementList);
-                p.push_statement(items, stmt);
+                p.push_statement(stmt);
                 if p.has_fatal_error() || p.errors.len() > parser_errors_before || p.at(Kind::Eof) {
                     break;
                 }
@@ -730,11 +705,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Parse the inner statements of a `%%%`…`%%%` fence (from `inner_start`). Returns the offset
     /// past the closing fence.
-    fn collect_fence_statements(
-        &mut self,
-        inner_start: u32,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) -> u32 {
+    fn collect_fence_statements(&mut self, inner_start: u32) -> u32 {
         let (inner_end, after_fence) = find_fence_close(self.source_text, inner_start);
         debug_assert!(self.source_text.is_char_boundary(inner_end as usize));
         // Bound the fence body's parse to `[inner_start, inner_end)` so the closing `%%%` is never
@@ -747,16 +718,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
                 let stmt =
                     p.parse_statement_list_item(crate::context::StatementContext::StatementList);
-                p.push_statement(items, stmt);
+                p.push_statement(stmt);
             }
         });
         after_fence
     }
 
-    fn push_statement(&self, items: &mut ArenaVec<'a, NotaChild<'a>>, stmt: Statement<'a>) {
+    fn push_statement(&mut self, stmt: Statement<'a>) {
         let span = stmt.span();
         let node = self.ast.nota_statement(span, stmt);
-        items.push(NotaChild::Statement(self.ast.alloc(node)));
+        self.push_nota_item(NotaChild::Statement(self.ast.alloc(node)));
     }
 
     // ===========================================================================================
@@ -764,7 +735,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     // ===========================================================================================
 
     /// Parse one `[ k:v, bare, ...spread, k:@markup ]` group into `props`. Multiple groups
-    /// accumulate (union). Entered with the current token at `[`.
+    /// accumulate (union). Entered with the current token at `[`. The closing `]` is validated but
+    /// left as the current token — [`Self::parse_element`] chooses the continuation by a raw byte
+    /// peek past it, so the JS lexer never reads the (possibly raw-markup) bytes after the `]`.
     fn parse_props_group(&mut self, props: &mut ArenaVec<'a, NotaProp<'a>>) {
         let open = self.cur_token().span();
         self.bump_any(); // consume `[`
@@ -774,7 +747,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             }
         }
-        self.expect_closing(Kind::RBrack, open);
+        self.expect_closing_without_advance(Kind::RBrack, open);
     }
 
     /// Parse `| k: v, …` prop entries of a colon-sugar prop line, from `[content_start, line_end)`.
@@ -830,7 +803,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if self.eat(Kind::Colon) {
             // `key: value` — the value is embedded JS, or markup (`@`-form).
             let value = if self.at(Kind::At) {
-                NotaPropValue::from(self.parse_nota_form(false, false))
+                NotaPropValue::from(self.parse_nota_form_in(NotaRegion::Js))
             } else {
                 let expr = self.parse_assignment_expression_or_higher();
                 let span = expr.span();
@@ -884,7 +857,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// `@if (cond) {branch}` with optional `else`/`else if` continuations. Entered at the `if`
     /// keyword.
-    fn parse_nota_if(&mut self, span_start: u32, in_body: bool) -> NotaIf<'a> {
+    fn parse_nota_if(&mut self, span_start: u32) -> NotaIf<'a> {
         assert!(self.eat(Kind::If));
         if !self.at(Kind::LParen) {
             let error = diagnostics::expect_token(
@@ -901,7 +874,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return self.ast.nota_if(span, cond, cons, None);
         }
         // The branch's `}` is the current token; scan for a continuation from one past it.
-        let alternate = self.parse_else_continuation(close_end, in_body);
+        let alternate = self.parse_else_continuation(close_end);
         let span = Span::new(span_start, self.prev_token_end);
         self.ast.nota_if(span, cond, cons, alternate)
     }
@@ -909,30 +882,30 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse what follows an `@if`/`else if` branch's `}`: an `else`/`else if` continuation, or
     /// nothing. The whole chain resumes the outer context exactly once, at its end (the `else if`
     /// recursion owns the resume of its own tail).
-    fn parse_else_continuation(&mut self, close_end: u32, in_body: bool) -> Option<NotaElse<'a>> {
+    fn parse_else_continuation(&mut self, close_end: u32) -> Option<NotaElse<'a>> {
         match else_peek(self.source_text, close_end) {
             ElsePeek::None => {
-                self.resume_at(close_end, in_body);
+                self.resume_at(close_end);
                 None
             }
             ElsePeek::ElseIf { if_offset } => {
                 self.nota_seek_to(if_offset);
                 let span_start = self.cur_token().start();
-                let nif = self.parse_nota_if(span_start, in_body);
+                let nif = self.parse_nota_if(span_start);
                 Some(NotaElse::ElseIf(self.ast.alloc(nif)))
             }
             ElsePeek::Else { brace_offset } => {
                 self.nota_seek_to(brace_offset);
                 let span_start = self.cur_token().start();
                 let (alt, else_end) = self.parse_branch_fragment(span_start);
-                self.resume_at(else_end, in_body);
+                self.resume_at(else_end);
                 Some(NotaElse::Else(self.ast.alloc(alt)))
             }
         }
     }
 
     /// `@for (bind of iter) {body}`; `bind` is any binding pattern. Entered at the `for` keyword.
-    fn parse_nota_for(&mut self, span_start: u32, in_body: bool) -> NotaFor<'a> {
+    fn parse_nota_for(&mut self, span_start: u32) -> NotaFor<'a> {
         self.bump_any(); // → `(`
         let open = self.cur_token().span();
         self.expect(Kind::LParen);
@@ -947,7 +920,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.expect_closing(Kind::RParen, open);
         let (body, body_end) = self.parse_branch_fragment(span_start);
         let span = Span::new(span_start, body_end);
-        self.resume_at(body_end, in_body);
+        self.resume_at(body_end);
         self.ast.nota_for(span, bind, iter, body)
     }
 
@@ -968,18 +941,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse an emphasis span opened by `marker` (`*`→strong, `_`→em) at raw offset `open`. With
     /// no matching close in scope the marker is literal (Typst behavior).
-    fn parse_emphasis(&mut self, marker: u8, open: u32, items: &mut ArenaVec<'a, NotaChild<'a>>) {
+    fn parse_emphasis(&mut self, marker: u8, open: u32) {
         if let Some(close) = find_emphasis_close(self.source_text, open, marker) {
-            let mut children = self.ast.vec();
-            self.collect_markup_range(open + 1, close, &mut children);
+            let children = self.collect_markup_range(open + 1, close);
             let marker =
                 if marker == b'*' { NotaEmphasisMarker::Strong } else { NotaEmphasisMarker::Em };
             let span = Span::new(open, close + 1);
             let element = self.ast.nota_emphasis(span, marker, children);
-            items.push(NotaChild::Emphasis(self.ast.alloc(element)));
+            self.push_nota_item(NotaChild::Emphasis(self.ast.alloc(element)));
             self.nota_seek_markup(close + 1);
         } else {
-            self.push_text(items, open, open + 1);
+            self.push_text(open, open + 1);
             self.nota_seek_markup(open + 1);
         }
     }
@@ -991,8 +963,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let (level, body_start, line_end) = heading_at(self.source_text, line_start)?;
         let line_end = line_end.min(self.sugar_line_end(line_start, mode));
         let body_start = body_start.min(line_end);
-        let mut children = self.ast.vec();
-        self.collect_markup_range(body_start, line_end, &mut children);
+        let children = self.collect_markup_range(body_start, line_end);
         let span = Span::new(line_start, line_end);
         Some((self.ast.nota_heading(span, level, children), line_end))
     }
@@ -1001,12 +972,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// each as a child. Markers at the run's indent are siblings; a deeper marker line falls
     /// inside the preceding item's body extent and nests via the recursive body collection; a
     /// shallower one ends the run (it belongs to an enclosing list). Returns the resume offset.
-    fn parse_list(
-        &mut self,
-        line_start: u32,
-        mode: BodyMode,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) -> u32 {
+    fn parse_list(&mut self, line_start: u32, mode: BodyMode) -> u32 {
         let base_indent = list_marker_at(self.source_text, line_start)
             .expect("parse_list: not a marker line")
             .indent;
@@ -1026,18 +992,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 line_end
             } else {
                 let extent = list_item_extent(self.source_text, line_end, marker.indent);
-                match mode {
-                    BodyMode::Bounded { end } => extent.min(end),
-                    BodyMode::Body | BodyMode::Document => extent,
+                match mode.bound() {
+                    Some(end) => extent.min(end),
+                    None => extent,
                 }
             };
 
-            let mut children = self.ast.vec();
-            self.collect_markup_range(body_start, item_end, &mut children);
+            let children = self.collect_markup_range(body_start, item_end);
             let kind = if marker.ordered { NotaListKind::Ordered } else { NotaListKind::Unordered };
             let span = Span::new(marker.offset, item_end);
             let item = self.ast.nota_list_item(span, kind, children);
-            items.push(NotaChild::ListItem(self.ast.alloc(item)));
+            self.push_nota_item(NotaChild::ListItem(self.ast.alloc(item)));
 
             at = item_end;
         }
@@ -1054,18 +1019,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse `@head|{ … }|` — a verbatim-body element. `head.end` points at the `|` of `|{`.
-    fn parse_verbatim_element(
-        &mut self,
-        span_start: u32,
-        head: NotaHead<'a>,
-        in_body: bool,
-    ) -> NotaVerbatim<'a> {
+    fn parse_verbatim_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaVerbatim<'a> {
         let body_start = head.end + 2; // past `|{`
         let (parts, after) = self.collect_verbatim_body(body_start);
         let span = Span::new(span_start, after);
         let tag = self.head_to_tag(head);
         let element = self.ast.nota_verbatim(span, tag, parts);
-        self.resume_at(after, in_body);
+        self.resume_at(after);
         element
     }
 
@@ -1085,10 +1045,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             match boundary {
                 VerbatimBoundary::Close { after } => return (children, after),
                 VerbatimBoundary::ArmedAt { at } => {
-                    // Armed escape: parse one `@`-form, resume the raw scan after it.
+                    // Armed escape: parse one `@`-form under a `Raw` region, so its every exit
+                    // parks (no lex) — the following bytes are the raw scan's, not JS. The scan
+                    // resumes from `prev_token_end` (the park's offset).
                     self.nota_seek_to(at);
                     debug_assert!(self.at(Kind::At), "verbatim `|@` not at `@`");
-                    let form = self.parse_nota_form(false, false);
+                    let form = self.parse_nota_form_in(NotaRegion::Raw);
                     children.push(NotaVerbatimPart::from(form));
                     run_start = self.prev_token_end;
                 }
@@ -1113,16 +1075,16 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Parse a code span at `tick_off`, or — with no valid close — emit the opening backtick run
     /// as literal text. Re-seeks markup at the resume offset either way.
-    fn parse_code_or_literal(&mut self, items: &mut ArenaVec<'a, NotaChild<'a>>, tick_off: u32) {
+    fn parse_code_or_literal(&mut self, tick_off: u32) {
         match lex_code_span(self.source_text, tick_off) {
             CodeScan::Code { span, is_block, lang, content, resume } => {
                 let language = lang.map(|l| self.ast.str(self.ast.allocator.alloc_str(l)));
                 let element = self.ast.nota_code(span, language, content, is_block);
-                items.push(NotaChild::Code(self.ast.alloc(element)));
+                self.push_nota_item(NotaChild::Code(self.ast.alloc(element)));
                 self.nota_seek_markup(resume);
             }
             CodeScan::Literal { resume } => {
-                self.push_text(items, tick_off, resume);
+                self.push_text(tick_off, resume);
                 self.nota_seek_markup(resume);
             }
         }
@@ -1130,12 +1092,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Parse a math span at `dollar_off`, or — if unterminated — emit the opening `$`-run as
     /// literal text. Re-seeks markup at the resume offset either way.
-    fn parse_math_or_literal(&mut self, items: &mut ArenaVec<'a, NotaChild<'a>>, dollar_off: u32) {
-        if let Some(resume) = self.parse_math_span(items, dollar_off) {
+    fn parse_math_or_literal(&mut self, dollar_off: u32) {
+        if let Some(resume) = self.parse_math_span(dollar_off) {
             self.nota_seek_markup(resume);
         } else {
             let run_end = sigil_run_end(self.source_text, dollar_off, b'$');
-            self.push_text(items, dollar_off, run_end);
+            self.push_text(dollar_off, run_end);
             self.nota_seek_markup(run_end);
         }
     }
@@ -1146,11 +1108,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// lexer would swallow the closing math delimiter: `$` is an identifier-continue byte, so
     /// `@i$` would lex as `i$`). Returns the resume offset, or `None` if unterminated (the `$` run
     /// is then literal).
-    fn parse_math_span(
-        &mut self,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-        dollar_off: u32,
-    ) -> Option<u32> {
+    fn parse_math_span(&mut self, dollar_off: u32) -> Option<u32> {
         let display = byte_at(self.source_text, dollar_off + 1) == Some(b'$');
         let delim_len: u32 = if display { 2 } else { 1 };
 
@@ -1173,8 +1131,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.bump_any(); // `@`
                     self.bump_any(); // `(`
                     let expr = self.parse_expr();
-                    self.expect(Kind::RParen);
+                    // Validate `)` WITHOUT advancing, then park: the bytes after it are raw TeX the
+                    // JS lexer must not read. The scan resumes from `prev_token_end` (the park's).
+                    self.expect_without_advance(Kind::RParen);
+                    let close_end = self.cur_token().end();
                     self.push_math_interp(&mut parts, expr);
+                    self.nota_park(close_end);
                     self.prev_token_end
                 }
                 MathBoundary::LiteralAt => {
@@ -1190,7 +1152,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         };
 
         let element = self.ast.nota_math(Span::new(dollar_off, after), display, parts);
-        items.push(NotaChild::Math(self.ast.alloc(element)));
+        self.push_nota_item(NotaChild::Math(self.ast.alloc(element)));
         Some(after)
     }
 
@@ -1219,15 +1181,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse the whole file body: top-level markup siblings interleaved with `%`/`%%%` statements,
     /// all kept as faithful children (the lowering routes statements: hoist / Doc prelude / F1).
     fn parse_document_body(&mut self) -> NotaDocument<'a> {
-        let mut items = self.ast.vec();
-
         // Skip a leading UTF-8 BOM so it is not collected as text (offsets after it are unchanged).
         let start = if self.source_text.starts_with('\u{feff}') { 3u32 } else { 0 };
 
         // A file opening with line-start constructs is handled by `collect_markup`'s entry arming
         // (R9: a body/range start is a line start — the document body included).
         self.nota_seek_markup(start);
-        let _ = self.collect_markup(&mut items, BodyMode::Document);
+
+        let (_, items) = self.enter_markup_body(BodyMode::Document, Self::collect_markup);
 
         let span = Span::new(0, self.source_text.len() as u32);
         self.ast.nota_document(span, items)
@@ -1236,26 +1197,31 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `@head:` colon/block sugar → an element whose body is the rest of the line plus following
     /// lines indented past the `@head:` line. Leading `|` lines of the body supply `[…]` props.
     /// Entered with `:` as the current token.
-    fn parse_colon_body(
-        &mut self,
-        span_start: u32,
-        head: NotaHead<'a>,
-        in_body: bool,
-        brace_significant: bool,
-    ) -> NotaElement<'a> {
+    fn parse_colon_body(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaElement<'a> {
         debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
         let colon_end = self.cur_token().end();
         let head_line_indent = line_indent_of(self.source_text, span_start);
 
-        let (body_src_start, body_src_end) =
-            colon_block_extent(self.source_text, colon_end, head_line_indent, brace_significant);
+        // Colon sugar is line-oriented (body = rest of the line + following indented lines), so it
+        // is only meaningful inside a markup body — never in an embedded-JS position (expression,
+        // prop value, verbatim `|@`), where "rest of the line" would swallow JS. Diagnose, but keep
+        // parsing the body so the recovered element still has a faithful span.
+        if !self.nota_in_markup_body() {
+            let colon = self.cur_token().span();
+            self.error(diagnostics::nota_colon_sugar_outside_body(colon));
+        }
 
-        let mut props = self.ast.vec();
-        let mut items = self.ast.vec();
-        self.collect_colon_body(body_src_start, body_src_end, &mut props, &mut items);
+        // Clip the first line at a depth-0 `}` only inside an element/control body, where that `}`
+        // is the enclosing closer (never in a Document / Bounded / Js / Raw host).
+        let clip_at_brace =
+            matches!(self.nota_top_region(), NotaRegion::Markup { mode: BodyMode::Body, .. });
+        let (body_src_start, body_src_end) =
+            colon_block_extent(self.source_text, colon_end, head_line_indent, clip_at_brace);
+
+        let (props, items) = self.collect_colon_body(body_src_start, body_src_end);
 
         let span = Span::new(span_start, body_src_end);
-        self.resume_at(body_src_end, in_body);
+        self.resume_at(body_src_end);
         let tag = self.head_to_tag(head);
         self.ast.nota_element(span, tag, props, items, /* is_colon */ true)
     }
@@ -1266,9 +1232,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         &mut self,
         start: u32,
         end: u32,
-        props: &mut ArenaVec<'a, NotaProp<'a>>,
-        items: &mut ArenaVec<'a, NotaChild<'a>>,
-    ) {
+    ) -> (ArenaVec<'a, NotaProp<'a>>, NotaChildren<'a>) {
+        let mut props = self.ast.vec();
         let mut body_start = start;
         let first_cont = next_line_start(self.source_text, start);
         let mut scan = first_cont;
@@ -1277,7 +1242,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             };
             let line_end = next_line_start(self.source_text, scan);
-            self.parse_pipe_prop_line(content_start, line_end, props);
+            self.parse_pipe_prop_line(content_start, line_end, &mut props);
             scan = line_end;
             body_start = scan;
         }
@@ -1294,7 +1259,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         } else {
             start
         };
-        self.collect_markup_range(body_range_start, end, items);
+        let items = self.collect_markup_range(body_range_start, end);
+        (props, items)
     }
 }
 
@@ -1317,4 +1283,87 @@ enum HeadKind<'a> {
 /// otherwise it is a *host* element (string tag).
 fn is_component_name(name: &str) -> bool {
     name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+}
+
+type NotaChildren<'a> = ArenaVec<'a, NotaChild<'a>>;
+
+/// The host region an inner `@`-form's tail resumes into (Axis 2 — orthogonal to [`BodyMode`],
+/// which is the *collection* semantics of a markup body, Axis 1). The parser owns a stack of these
+/// in [`NotaParserState`]; the top drives [`ParserImpl::resume_at`] and gates markup-child pushes.
+enum NotaRegion<'a> {
+    /// Collecting a markup body with these semantics; a form's tail resumes by markup-lexing.
+    /// The only region [`ParserImpl::push_nota_item`] may push a child into.
+    Markup { mode: BodyMode, items: NotaChildren<'a> },
+    /// An embedded-JS island (an expression-position form, a `k: @form` prop value): a form's tail
+    /// resumes by JS-lexing.
+    Js,
+    /// A raw scan owns the cursor by offset (the tail after a verbatim `|@` armed form): a form's
+    /// tail is *parked* — no lex — and the scan re-seeks itself from `prev_token_end`.
+    Raw,
+}
+
+#[derive(Default)]
+pub struct NotaParserState<'a> {
+    regions: Vec<NotaRegion<'a>>,
+}
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    /// Collect a markup body of semantics `mode`: push a [`NotaRegion::Markup`], run `f` (which
+    /// appends children via [`Self::push_nota_item`]), then pop and hand back `(f's value, items)`.
+    /// The three markup-body callers (braced / document / bounded) enter through here.
+    fn enter_markup_body<T>(
+        &mut self,
+        mode: BodyMode,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, NotaChildren<'a>) {
+        self.state.nota.regions.push(NotaRegion::Markup { mode, items: self.ast.vec() });
+        let t = f(self);
+        let Some(NotaRegion::Markup { items, .. }) = self.state.nota.regions.pop() else {
+            unreachable!("enter_markup_body popped a non-Markup region")
+        };
+        (t, items)
+    }
+
+    /// Parse one `@`-form whose tail resumes into `region` — [`NotaRegion::Js`] for an embedded-JS
+    /// position (expression / prop value), [`NotaRegion::Raw`] for a verbatim `|@` armed form. The
+    /// region governs how the form's exits [`Self::resume_at`]; it holds no children.
+    fn parse_nota_form_in(&mut self, region: NotaRegion<'a>) -> NotaForm<'a> {
+        debug_assert!(!matches!(region, NotaRegion::Markup { .. }), "use enter_markup_body");
+        self.state.nota.regions.push(region);
+        let form = self.parse_nota_form();
+        self.state.nota.regions.pop().expect("parse_nota_form_in: region underflow");
+        form
+    }
+
+    fn nota_top_region(&self) -> &NotaRegion<'a> {
+        self.state.nota.regions.last().expect("Nota region stack is empty")
+    }
+
+    /// Is the top region a markup body — so an inner form's tail resumes as markup text (vs a `Js`
+    /// island or a `Raw` scan)?
+    fn nota_in_markup_body(&self) -> bool {
+        matches!(self.nota_top_region(), NotaRegion::Markup { .. })
+    }
+
+    /// The collection semantics of the markup body being collected. Only reachable while the top
+    /// region is `Markup` — every `collect_markup` caller pushes one first.
+    fn nota_body_mode(&self) -> BodyMode {
+        match self.nota_top_region() {
+            NotaRegion::Markup { mode, .. } => *mode,
+            NotaRegion::Js | NotaRegion::Raw => {
+                panic!("nota_body_mode called with a non-Markup top region")
+            }
+        }
+    }
+
+    /// Append a markup child to the top region, which MUST be `Markup`. A push under a `Js` / `Raw`
+    /// region is a routing bug (a child produced where none belongs) — fail loudly.
+    fn push_nota_item(&mut self, item: NotaChild<'a>) {
+        match self.state.nota.regions.last_mut() {
+            Some(NotaRegion::Markup { items, .. }) => items.push(item),
+            _ => {
+                panic!("push_nota_item: top region is not Markup — markup child routed into JS/raw")
+            }
+        }
+    }
 }

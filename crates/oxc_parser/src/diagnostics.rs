@@ -1380,6 +1380,16 @@ pub fn nota_unterminated_verbatim(span: Span) -> OxcDiagnostic {
         .with_label(span.label("this `|{` is never closed"))
 }
 
+/// `@head:` colon/block sugar in an embedded-JS position (expression, prop value, verbatim `|@`
+/// escape). Colon sugar is line-oriented — its body is the rest of the line and the following
+/// indented lines — so it is only well-defined inside a markup body. Wrap it in `@{ … }`.
+#[cold]
+pub fn nota_colon_sugar_outside_body(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("`@head:` colon sugar is only valid inside a markup body")
+        .with_label(span.label("this `:` sugar has no enclosing markup body"))
+        .with_help("wrap it in a body — `@{@head: …}` — or use an explicit `@head{ … }`")
+}
+
 /// A `%` statement's JS failed to parse and its region was clipped at a blank line — the likely
 /// cause of the failure (a blank line always ends a `%` statement).
 #[cold]

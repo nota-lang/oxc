@@ -39,8 +39,8 @@ fn assert_js_eq(emitted: &str, expected: &str) {
 #[track_caller]
 fn nota_expr_raw(source: &str) -> String {
     let allocator = Allocator::default();
-    let mut expr = Parser::new(&allocator, source, SourceType::default())
-        .parse_nota_expression()
+    let mut expr = Parser::new(&allocator, source, SourceType::nota())
+        .parse_expression()
         .unwrap_or_else(|errors| panic!("Nota parse failed for {source:?}: {errors:?}"));
     oxc_transformer::NotaLowering::new(&allocator, source, false).lower_expression(&mut expr);
     let mut codegen = Codegen::new();
@@ -61,7 +61,7 @@ fn nota_expr(source: &str, expected: &str) {
 #[track_caller]
 fn nota_doc(source: &str) -> String {
     let allocator = Allocator::default();
-    let mut program = Parser::new(&allocator, source, SourceType::default())
+    let mut program = Parser::new(&allocator, source, SourceType::nota())
         .parse_nota_document()
         .unwrap_or_else(|errors| panic!("Nota document parse failed for {source:?}: {errors:?}"));
     oxc_transformer::NotaLowering::new(&allocator, source, false)
@@ -75,7 +75,7 @@ fn nota_doc(source: &str) -> String {
 #[track_caller]
 fn nota_expr_err(source: &str) {
     let allocator = Allocator::default();
-    let result = Parser::new(&allocator, source, SourceType::default()).parse_nota_expression();
+    let result = Parser::new(&allocator, source, SourceType::nota()).parse_expression();
     assert!(result.is_err(), "expected a diagnostic for {source:?}, but parse succeeded");
 }
 
@@ -83,7 +83,7 @@ fn nota_expr_err(source: &str) {
 #[track_caller]
 fn nota_doc_err(source: &str) {
     let allocator = Allocator::default();
-    let result = Parser::new(&allocator, source, SourceType::default()).parse_nota_document();
+    let result = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document();
     assert!(
         result.is_err(),
         "expected a document-mode diagnostic for {source:?}, but parse succeeded"
@@ -95,7 +95,7 @@ fn nota_doc_err(source: &str) {
 fn assert_valid_js(js: &str) {
     let allocator = Allocator::default();
     // Module source type so `import`/`export` in document-mode output is accepted.
-    let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+    let ret = Parser::new(&allocator, js, SourceType::nota().with_module(true)).parse();
     assert!(!ret.panicked, "stock oxc panicked re-parsing emitted JS: {js:?}");
     assert!(ret.errors.is_empty(), "emitted JS did not re-parse cleanly: {js:?}\n{:?}", ret.errors);
 }
@@ -229,6 +229,49 @@ fn balanced_braces_are_literal() {
 }
 
 // ===============================================================================================
+// Region boundary discipline: the JS lexer's one-token lookahead must never read the raw bytes
+// past a region boundary it does not own. A `[props]` group's `]`, a math `@(…)`'s `)`, and a
+// verbatim body's raw runs each bound a region whose following bytes are raw text — the closer is
+// validated / parked, never advanced past into a JS lex. Each `\`-led run below once mis-lexed as
+// a JS escape ("Invalid Unicode escape sequence") from the lexer eating bytes past the boundary.
+// ===============================================================================================
+
+#[test]
+fn self_closing_props_group_then_raw_markup() {
+    // `@br[]` self-closes; the byte after `]` is peeked raw, so the following `\x` resumes as
+    // markup (the escape yields a literal `x`), not a JS `\u`-style escape.
+    nota_expr(r#"@p{@br[]\x rest}"#, r#"h("p", {}, [h("br", {}, []), "x rest"])"#);
+}
+
+#[test]
+fn math_paren_interp_then_raw_tex() {
+    // `@(x)`'s `)` is validated without advancing, then parked: the trailing `\frac{…}` is raw TeX
+    // in the math span, never JS-lexed.
+    assert_js_eq(
+        &nota_doc(r#"$@(x) \frac{a}{b}$"#),
+        r#"export default function Doc() {
+  return decode(Fragment(h(Math, {}, [String.raw`${x} \frac{a}{b}`])));
+}"#,
+    );
+}
+
+#[test]
+fn verbatim_interp_then_raw_backslash() {
+    // A verbatim `|@x` interpolation resumes the raw scan by parking (Raw region), so the trailing
+    // `\b` stays a raw run, not a JS escape.
+    nota_expr(r#"@pre|{a |@x \b}|"#, r#"h("pre", {}, [String.raw`a `, x, String.raw` \b`])"#);
+}
+
+#[test]
+fn verbatim_element_then_raw_backslash() {
+    // A verbatim `|@em{x}` element exit parks (Raw region); the trailing `\raw` stays a raw run.
+    nota_expr(
+        r#"@pre|{|@em{x} \raw}|"#,
+        r#"h("pre", {}, [h("em", {}, ["x"]), String.raw` \raw`])"#,
+    );
+}
+
+// ===============================================================================================
 // Whitespace table (·=space ⏎=newline). One `"\n"` per interior newline, never coalesced (so a
 // blank line surfaces as the paragraph-break marker — two adjacent newlines).
 // ===============================================================================================
@@ -354,7 +397,8 @@ fn doc_f1_component_hoist_export_name() {
 #[test]
 fn colon_sugar_inline() {
     // `@foo: hello world` → `@foo{hello world}`.
-    nota_expr("@foo: hello world", r#"h("foo", {}, ["hello world"])"#);
+    nota_expr("@{@foo: hello world}", r#"Fragment(h("foo", {}, ["hello world"]))"#);
+    nota_expr_err("@foo: hello world");
 }
 
 #[test]
@@ -937,7 +981,7 @@ const CANONICAL_NOTA: &str = r#"%let Colorized = inlineComponent((children) => {
 #[track_caller]
 fn nota_doc_no_validity(source: &str) -> String {
     let allocator = Allocator::default();
-    let mut program = Parser::new(&allocator, source, SourceType::default())
+    let mut program = Parser::new(&allocator, source, SourceType::nota())
         .parse_nota_document()
         .expect("document parses");
     oxc_transformer::NotaLowering::new(&allocator, source, false)
@@ -1407,7 +1451,7 @@ mod fuzz_findings {
     #[track_caller]
     fn emit_doc_unchecked(source: &str) -> String {
         let allocator = Allocator::default();
-        let mut program = Parser::new(&allocator, source, SourceType::default())
+        let mut program = Parser::new(&allocator, source, SourceType::nota())
             .parse_nota_document()
             .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
         oxc_transformer::NotaLowering::new(&allocator, source, false)
@@ -1425,7 +1469,7 @@ mod fuzz_findings {
     /// Try to parse `source` in document mode; `true` iff it parses without diagnostics.
     fn doc_parses(source: &str) -> bool {
         let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::default()).parse_nota_document().is_ok()
+        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
     }
 
     // --- [HIGH] Hyphenated/quoted prop keys emit valid JS (FIXED) --------------------------------
@@ -1571,7 +1615,7 @@ mod fuzz_findings_2 {
     #[track_caller]
     fn emit_doc_unchecked(source: &str) -> String {
         let allocator = Allocator::default();
-        let mut program = Parser::new(&allocator, source, SourceType::default())
+        let mut program = Parser::new(&allocator, source, SourceType::nota())
             .parse_nota_document()
             .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
         oxc_transformer::NotaLowering::new(&allocator, source, false)
@@ -1590,14 +1634,14 @@ mod fuzz_findings_2 {
     /// reader panics — itself a finding, which fails the test.)
     fn doc_parses(source: &str) -> bool {
         let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::default()).parse_nota_document().is_ok()
+        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
     }
 
     /// Parse + lower a document; `true` iff lowering reported NO diagnostics. A reserved-name
     /// collision (a user `Doc` / runtime-import binding) or a duplicate `export default` → `false`.
     fn doc_lowers_clean(source: &str) -> bool {
         let allocator = Allocator::default();
-        let mut program = Parser::new(&allocator, source, SourceType::default())
+        let mut program = Parser::new(&allocator, source, SourceType::nota())
             .parse_nota_document()
             .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
         oxc_transformer::NotaLowering::new(&allocator, source, false)
@@ -1610,7 +1654,7 @@ mod fuzz_findings_2 {
     /// H2). `true` iff it parses without diagnostics.
     fn doc_parses_tsx(source: &str) -> bool {
         let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::tsx()).parse_nota_document().is_ok()
+        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
     }
 
     /// Compile a Nota expression with the **TS-aware** (`tsx`) parse, asserting the emit re-parses as
@@ -1619,15 +1663,15 @@ mod fuzz_findings_2 {
     #[track_caller]
     fn nota_expr_tsx(source: &str) -> String {
         let allocator = Allocator::default();
-        let mut expr = Parser::new(&allocator, source, SourceType::tsx())
-            .parse_nota_expression()
+        let mut expr = Parser::new(&allocator, source, SourceType::nota())
+            .parse_expression()
             .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
         oxc_transformer::NotaLowering::new(&allocator, source, false).lower_expression(&mut expr);
         let mut codegen = Codegen::new();
         codegen.print_expression(&expr);
         let js = codegen.into_source_text();
         let reparse_allocator = Allocator::default();
-        let reparse = Parser::new(&reparse_allocator, &js, SourceType::tsx()).parse();
+        let reparse = Parser::new(&reparse_allocator, &js, SourceType::nota()).parse();
         assert!(!reparse.panicked && reparse.errors.is_empty(), "emit not valid TSX: {js}");
         js
     }
@@ -1984,7 +2028,7 @@ mod fuzz_findings_2 {
     fn fuzz2_text_node_should_have_a_source_span() {
         use oxc_ast::ast::{Expression, NotaChild, NotaMarkupKind, Statement};
         let allocator = Allocator::default();
-        let program = Parser::new(&allocator, "@p{Hello}", SourceType::default())
+        let program = Parser::new(&allocator, "@p{Hello}", SourceType::nota())
             .parse_nota_document()
             .expect("parses");
         let Some(Statement::ExpressionStatement(stmt)) = program.body.first() else {

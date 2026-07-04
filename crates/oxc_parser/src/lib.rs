@@ -443,35 +443,14 @@ mod parser_parse {
             }
         }
 
-        /// Parse a single Nota `@`-markup expression.
-        ///
-        /// Parses the source as ONE Nota element (e.g. `@p{Hello}`) and returns the lowered oxc
-        /// JS [`Expression`] — a `CallExpression` such as `h("p", {}, ["Hello"])`. This is the
-        /// "markup in expression position" entry; whole-file document mode is
-        /// [`Parser::parse_nota_document`]. Generic over config (monomorphizes per caller).
-        ///
-        /// # Errors
-        /// If the source is not a well-formed Nota expression.
-        pub fn parse_nota_expression(self) -> Result<Expression<'a>, Vec<OxcDiagnostic>> {
-            ParserImpl::<C>::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                self.config,
-                UniquePromise::new(),
-            )
-            .parse_nota_expression()
-        }
-
         /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
         ///
         /// The file is markup at the top level; this returns the lowered module:
         /// `export default function Doc() { …prelude…; return decode(Fragment(...siblings)); }` plus
         /// hoisted `import`/`export` and component bindings. The runtime `import { h, decode,
         /// Fragment, inlineComponent, blockComponent } from "@nota-lang/runtime"` is injected by the
-        /// caller, not here. Use [`Parser::parse_nota_expression`] to parse a single
-        /// expression-position markup element instead.
+        /// caller, not here. To parse a single expression-position markup element instead, use
+        /// [`Parser::parse_expression`] with a [`SourceType::is_nota`] source type.
         ///
         /// # Errors
         /// If the file is not well-formed Nota.
@@ -714,12 +693,6 @@ struct ParserImpl<'a, C: ParserConfig> {
 
     /// Precomputed typescript detection
     is_ts: bool,
-
-    /// `true` while parsing Nota `@`-markup. When set, `Kind::At` in expression position is a
-    /// Nota markup sigil (routed to `parse_nota`), NOT a JS/TS decorator. See `nota/mod.rs` and
-    /// the `@` arm of `parse_primary_expression`. Nota's `@` and the decorator `@` are
-    /// disambiguated purely by this parser-owned flag.
-    nota_markup: bool,
 }
 
 impl<'a, C: ParserConfig> ParserImpl<'a, C> {
@@ -752,7 +725,6 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             ast: AstBuilder::new(allocator),
             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
             is_ts: source_type.is_typescript(),
-            nota_markup: false,
         }
     }
 
