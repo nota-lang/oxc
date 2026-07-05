@@ -1052,14 +1052,16 @@ mod tests {
     }
 
     /// Doc-state sugar (R20a) paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
+    /// Idents are JS IdentifierName (amended 2026-07-05), so a `_`-joined id scans whole (`sec-a`
+    /// would break at the `-`).
     #[test]
     fn docstate_sugar_spans() {
-        let spans = hl("<sec-a> then &sec-a and x[^n1] here\n\n[^n1]: note *body*\n");
-        // `<sec-a>`
+        let spans = hl("<sec_a> then &sec_a and x[^n1] here\n\n[^n1]: note *body*\n");
+        // `<sec_a>`
         assert!(has(&spans, K::Sigil, "<"));
         assert!(has(&spans, K::Sigil, ">"));
-        assert!(has(&spans, K::Interpolation, "sec-a"));
-        // `&sec-a`
+        assert!(has(&spans, K::Interpolation, "sec_a"));
+        // `&sec_a`
         assert!(has(&spans, K::Sigil, "&"));
         // `x[^n1]` (glued mark)
         assert!(has(&spans, K::Sigil, "[^"));

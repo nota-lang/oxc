@@ -193,10 +193,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 };
                 match self.commit_head(&head, colon_live) {
                     MarkupTrigger::Brace | MarkupTrigger::Bracket => {
-                        self.parse_element(span_start, head)
+                        self.parse_element(span_start, head, colon_live)
                     }
                     MarkupTrigger::Colon => NotaForm::Element({
-                        let e = self.parse_colon_body(span_start, head);
+                        let props = self.ast.vec();
+                        let e = self.parse_colon_body(span_start, head, props);
                         self.ast.alloc(e)
                     }),
                     MarkupTrigger::Verbatim => NotaForm::Verbatim({
@@ -306,20 +307,30 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Parse `@head [props]* { body }?` or `@head [props]* |{ body }|`. Entered with the `{`/`[`
-    /// delimiter as the current token.
-    fn parse_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaForm<'a> {
+    /// Parse `@head [props]* { body }?`, `@head [props]* |{ body }|`, or `@head [props]* : body`.
+    /// Entered with the `{`/`[` delimiter as the current token. `colon_live` is the R12 positional
+    /// gate judged at the head's `@` ([`Self::colon_trigger_live`], threaded from
+    /// [`Self::parse_nota_form`]) — the same gate a bare `@head:` uses; a glued `:` after the last
+    /// `]` opens a colon body only when it holds (contract R21).
+    fn parse_element(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        colon_live: bool,
+    ) -> NotaForm<'a> {
         let mut props = self.ast.vec();
 
         // `[props]` groups, then the body-vs-self-closing decision. A group's `]` is validated but
         // NOT advanced past ([`Self::parse_props_group`]): the JS lexer's one-token lookahead must
         // never read the bytes after the `]`, which in a markup / verbatim host are raw text. The
         // continuation is a raw byte peek at the `]`'s end, re-lexed in the deliberate mode: `[` →
-        // another group, `{` → a braced body, `|{` → a verbatim body (props compose with verbatim
-        // exactly as with a braced body — contract R19), anything else → self-closing (a `:`
-        // after `]` does not trigger — it stays literal text).
+        // another group, `{` → a braced body, `|{` → a verbatim body (props compose with verbatim —
+        // contract R19), `:` → a colon body when the positional gate is live (props compose with a
+        // colon body exactly as with a braced/verbatim one — contract R21), anything else →
+        // self-closing (a `:` under a dead gate stays literal text, exactly as for a bare head).
         let mut self_closing_end = None;
         let mut verbatim_start = None;
+        let mut colon_body = false;
         while self.at(Kind::LBrack) {
             self.parse_props_group(&mut props);
             if self.has_fatal_error() {
@@ -339,6 +350,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     verbatim_start = Some(bracket_end + 2);
                     break;
                 }
+                Some(b':') if colon_live => {
+                    // R21: a glued `:` under a live positional gate opens the same colon body a bare
+                    // `@head:` would. Lex the `:` (like the `{` arm) so `parse_colon_body` enters at
+                    // `Kind::Colon`, exactly as `commit_head`'s `MarkupTrigger::Colon` path does; the
+                    // already-collected `props` thread through unchanged.
+                    self.nota_seek_to(bracket_end);
+                    colon_body = true;
+                    break;
+                }
                 _ => {
                     // Self-closing: resume the host region past the `]`, uniformly across hosts —
                     // in a `Js` host, seeking at `bracket_end` re-lexes exactly the token a plain
@@ -353,6 +373,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if let Some(body_start) = verbatim_start {
             let v = self.parse_verbatim_element(span_start, head, props, body_start);
             return NotaForm::Verbatim(self.ast.alloc(v));
+        }
+
+        if colon_body {
+            let e = self.parse_colon_body(span_start, head, props);
+            return NotaForm::Element(self.ast.alloc(e));
         }
 
         let (children, end) = if let Some(end) = self_closing_end {
@@ -1407,8 +1432,15 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// `@head:` colon/block sugar → an element whose body is the rest of the line plus following
     /// lines indented past the `@head:` line. Leading `|` lines of the body supply `[…]` props.
+    /// `props` holds any `[props]` groups threaded from the head (empty for a bare `@head:`; from
+    /// [`Self::parse_element`] for `@head[props]: body` — contract R21); the `|`-line props append.
     /// Entered with `:` as the current token.
-    fn parse_colon_body(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaElement<'a> {
+    fn parse_colon_body(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        mut props: NotaProps<'a>,
+    ) -> NotaElement<'a> {
         debug_assert!(self.at(Kind::Colon), "colon sugar entered not at `:`");
         // The positional gate ([`Self::colon_trigger_live`]) classifies a `:` as `Colon` only under
         // a `Markup` top at a line start, so colon sugar is never entered in a `Js`/`Raw` host — the
@@ -1436,7 +1468,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             body_src_end = body_src_end.min(end);
         }
 
-        let (props, items) = self.collect_colon_body(body_src_start, body_src_end);
+        let items = self.collect_colon_body(body_src_start, body_src_end, &mut props);
 
         let span = Span::new(span_start, body_src_end);
         self.resume_at(body_src_end);
@@ -1445,9 +1477,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Collect the colon-sugar body over `[start, end)`: leading `|` lines (continuation lines
-    /// whose first non-whitespace is `|`) become prop groups; the rest is the markup body.
-    fn collect_colon_body(&mut self, start: u32, end: u32) -> (NotaProps<'a>, NotaChildren<'a>) {
-        let mut props = self.ast.vec();
+    /// whose first non-whitespace is `|`) append prop groups into `props` (which already holds any
+    /// `[props]` groups threaded from the head — contract R21); the rest is the markup body.
+    fn collect_colon_body(
+        &mut self,
+        start: u32,
+        end: u32,
+        props: &mut NotaProps<'a>,
+    ) -> NotaChildren<'a> {
         let mut body_start = start;
         let first_cont = next_line_start(self.source_text, start);
         let mut scan = first_cont;
@@ -1456,7 +1493,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             };
             let line_end = next_line_start(self.source_text, scan);
-            self.parse_pipe_prop_line(content_start, line_end, &mut props);
+            self.parse_pipe_prop_line(content_start, line_end, props);
             scan = line_end;
             body_start = scan;
         }
@@ -1473,8 +1510,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         } else {
             start
         };
-        let items = self.collect_markup_range(body_range_start, end);
-        (props, items)
+        self.collect_markup_range(body_range_start, end)
     }
 }
 

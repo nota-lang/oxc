@@ -435,35 +435,25 @@ pub fn at_line_start_in_frame(source: &str, at: u32, frame_start: u32) -> bool {
 // Doc-state sugar (contract R20a): `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body`
 // ================================================================================================
 
-/// Doc-state ident **start** byte (contract R20a charset `[A-Za-z_][A-Za-z0-9_.:-]*`).
-fn is_docstate_ident_start(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_'
-}
-
-/// Doc-state ident **continuation** byte.
-fn is_docstate_ident_part(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-')
-}
-
-/// Lexer opener check for `<label>`: unescaped and directly followed by an ident-start byte —
-/// the *shape* half only. The left-boundary guard needs the enclosing frame's body start, which
+/// Lexer opener check for `<label>`: unescaped and directly followed by a JS identifier-start char
+/// — the *shape* half only. The left-boundary guard needs the enclosing frame's body start, which
 /// only the parser knows ([`docstate_left_guard`] + the frame-start check there).
 pub fn label_can_open(source: &str, off: u32) -> bool {
-    !is_escaped(source, off) && byte_at(source, off + 1).is_some_and(is_docstate_ident_start)
+    !is_escaped(source, off) && is_ident_start_at(source, off + 1)
 }
 
 /// Lexer opener check for `&ref` (shape half; see [`label_can_open`]).
 pub fn ref_can_open(source: &str, off: u32) -> bool {
-    !is_escaped(source, off) && byte_at(source, off + 1).is_some_and(is_docstate_ident_start)
+    !is_escaped(source, off) && is_ident_start_at(source, off + 1)
 }
 
-/// Lexer opener check for `[^mark]`: unescaped `[^` directly followed by an ident-start byte.
+/// Lexer opener check for `[^mark]`: unescaped `[^` directly followed by a JS identifier-start char.
 /// (`[^` needs no left-boundary guard — the digraph is unambiguous, and `text[^1]` glues,
 /// Markdown-style.)
 pub fn footnote_can_open(source: &str, off: u32) -> bool {
     !is_escaped(source, off)
         && byte_at(source, off + 1) == Some(b'^')
-        && byte_at(source, off + 2).is_some_and(is_docstate_ident_start)
+        && is_ident_start_at(source, off + 2)
 }
 
 /// The left-boundary guard on `<` and `&` (contract R20a): the sigil fires iff preceded by
@@ -479,14 +469,26 @@ pub fn docstate_left_guard(source: &str, off: u32) -> bool {
 
 /// The exclusive end of a doc-state ident starting at `start`, scanning within `limit` (a bounded
 /// frame's clip — a match may not reach past the frame); `None` if `start` is at/past `limit` or
-/// not an ident-start byte.
+/// not a JS identifier-start char. The charset is a JS **IdentifierName** (contract R20a, amended
+/// 2026-07-05 — JS, not Typst): [`is_identifier_start`] then [`is_identifier_part`], so `$` and
+/// Unicode ID chars are legal and `.`/`:`/`-` are NOT ident chars (`&sec.` → `sec` + a literal
+/// `.`). A continuation char joins only if it fits wholly before `limit` (identical to the old byte
+/// rule for ASCII).
 fn docstate_ident_end(source: &str, start: u32, limit: u32) -> Option<u32> {
-    if start >= limit || !byte_at(source, start).is_some_and(is_docstate_ident_start) {
+    if start >= limit {
         return None;
     }
-    let mut end = start + 1;
-    while end < limit && byte_at(source, end).is_some_and(is_docstate_ident_part) {
-        end += 1;
+    let mut chars = source.get(start as usize..)?.chars();
+    let first = chars.next()?;
+    if !is_identifier_start(first) {
+        return None;
+    }
+    let mut end = start + first.len_utf8() as u32;
+    for c in chars {
+        if end + c.len_utf8() as u32 > limit || !is_identifier_part(c) {
+            break;
+        }
+        end += c.len_utf8() as u32;
     }
     Some(end)
 }
@@ -1491,20 +1493,25 @@ mod tests {
         assert_eq!(colon_prop_line_at("  x | y\n", 0), None);
     }
 
-    /// Doc-state sugar scans (contract R20a): opener shapes, the left-boundary guard, ident
-    /// charset/termination, and the bounded-frame `limit` clip.
+    /// Doc-state sugar scans (contract R20a): opener shapes, the left-boundary guard, the JS
+    /// **IdentifierName** charset (amended 2026-07-05 — `$`/Unicode legal, `.`/`:`/`-` not),
+    /// termination, and the bounded-frame `limit` clip.
     #[test]
     fn docstate_sugar_scans() {
         let lim = |s: &str| s.len() as u32;
 
-        // --- lexer opener shapes ---
+        // --- lexer opener shapes (JS ident-start: letter/`_`/`$`/Unicode; not digit/space) ---
         assert!(label_can_open("<sec>", 0));
         assert!(label_can_open("<_x>", 0));
+        assert!(label_can_open("<$x>", 0)); // `$` is a JS identifier start
+        assert!(label_can_open("<café>", 0)); // ASCII start, Unicode continues
+        assert!(label_can_open("<λ>", 0)); // Unicode identifier start
         assert!(!label_can_open("<2x>", 0)); // digit is not an ident start
         assert!(!label_can_open("< b", 0)); // space is not an ident start
         assert!(!label_can_open("<", 0)); // EOF
         assert!(!label_can_open(r"\<sec>", 1)); // escaped
         assert!(ref_can_open("&sec", 0));
+        assert!(ref_can_open("&$x", 0)); // `$` ident start
         assert!(!ref_can_open("&,", 0));
         assert!(!ref_can_open("&1", 0));
         assert!(!ref_can_open(r"\&x", 1));
@@ -1526,18 +1533,28 @@ mod tests {
         assert!(!docstate_left_guard("a.<x>", 2)); // closing/other punct → literal
         assert!(!docstate_left_guard("*<x>", 1)); // emphasis marker: only frame-start saves it
 
-        // --- `<label>`: ident charset, `>` required within limit ---
-        let src = "<sec-intro.2:x_y> t";
-        assert_eq!(label_sugar_at(src, 0, lim(src)), Some(Span::new(1, 16)));
-        assert_eq!(&src[1..16], "sec-intro.2:x_y");
+        // --- `<label>`: JS IdentifierName, `>` required within limit ---
+        // `.`/`:`/`-` are NOT ident chars now: a `-` breaks the ident, so the `>` is not glued and
+        // `<sec-intro>` is literal (no label; the whole `<` stays text).
+        assert_eq!(label_sugar_at("<sec-intro>", 0, 11), None);
+        // A `_`/digit-joined ident closes on its `>`.
+        let src = "<sec_intro_2> t";
+        assert_eq!(label_sugar_at(src, 0, lim(src)), Some(Span::new(1, 12)));
+        assert_eq!(&src[1..12], "sec_intro_2");
+        // Unicode idents scan whole (`é` is 2 bytes, so `>` sits at byte 6).
+        let src = "<café> t";
+        assert_eq!(label_sugar_at(src, 0, lim(src)), Some(Span::new(1, 6)));
+        assert_eq!(&src[1..6], "café");
         assert_eq!(label_sugar_at("<a b>", 0, 5), None); // space breaks the ident
         assert_eq!(label_sugar_at("<ab", 0, 3), None); // no close
         assert_eq!(label_sugar_at("<ab\n>", 0, 5), None); // close not on the opening line
         assert_eq!(label_sugar_at("<ab>", 0, 3), None); // `>` at/past the limit → clipped
         assert_eq!(label_sugar_at("<ab>", 0, 4), Some(Span::new(1, 3)));
 
-        // --- `&ref`: ends at the first non-ident byte; limit clips the run ---
-        assert_eq!(ref_sugar_at("&sec-intro, t", 0, 13), Some(Span::new(1, 10)));
+        // --- `&ref`: ends at the first non-ident char (`.`/`-` DROP now); limit clips the run ---
+        assert_eq!(ref_sugar_at("&sec. rest", 0, 10), Some(Span::new(1, 4))); // `.` drops
+        assert_eq!(ref_sugar_at("&sec-intro", 0, 10), Some(Span::new(1, 4))); // `-` drops
+        assert_eq!(ref_sugar_at("&$x", 0, 3), Some(Span::new(1, 3))); // `$` is an ident char
         assert_eq!(ref_sugar_at("&x", 0, 2), Some(Span::new(1, 2)));
         assert_eq!(ref_sugar_at("&,", 0, 2), None);
         assert_eq!(ref_sugar_at("&abcd", 0, 3), Some(Span::new(1, 3))); // clipped at limit

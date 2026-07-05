@@ -260,6 +260,73 @@ fn self_closing_props_then_bare_pipe_is_literal() {
 }
 
 #[test]
+fn props_then_colon_body() {
+    // Contract R21 §3 row: `[props]` compose with a colon body exactly as with a braced/verbatim
+    // one. `@aside[class: "x"]: body` opens the SAME colon body a bare `@aside:` would (same R12
+    // positional gate, same colon-body extent), threading the bracket props through unchanged.
+    assert_js_eq(
+        &nota_doc("@aside[class: \"x\"]: styled aside\n"),
+        r#"export default function Doc() {
+            return decode(Fragment(h("aside", { class: "x" }, ["styled aside"])));
+        }"#,
+    );
+    // Multiple prop groups accumulate ahead of the colon body (union), like the verbatim form.
+    assert_js_eq(
+        &nota_doc("@aside[class: \"x\"][id: y]: body\n"),
+        r#"export default function Doc() {
+            return decode(Fragment(h("aside", { class: "x", id: y }, ["body"])));
+        }"#,
+    );
+    // The R20b element form is now legal: `@FootnoteText[label: "n2"]: def` — a colon-body footnote
+    // definition (previously the `[^x]:` sugar was the only colon-body definition surface).
+    assert_js_eq(
+        &nota_doc("@FootnoteText[label: \"n2\"]: def two\n"),
+        r#"export default function Doc() {
+            return decode(Fragment(h(FootnoteText, { label: "n2" }, ["def two"])));
+        }"#,
+    );
+}
+
+#[test]
+fn props_colon_body_parity_with_bare_colon() {
+    // Byte-for-byte child parity: adding `[props]` does not perturb the colon body's children — the
+    // extent is measured from the `:` forward, identically to a bare `@head:`. The SAME children
+    // literal fills both expected emits.
+    let doc = |props: &str, children: &str| {
+        format!(
+            "export default function Doc() {{ return decode(Fragment(h(\"aside\", {{{props}}}, [{children}]))); }}"
+        )
+    };
+    let children = r#""one ", h("em", {}, ["two"])"#;
+    assert_js_eq(&nota_doc("@aside: one @em{two}\n"), &doc("", children));
+    assert_js_eq(&nota_doc("@aside[class: \"x\"]: one @em{two}\n"), &doc("class: \"x\"", children));
+}
+
+#[test]
+fn props_colon_dead_gate_is_literal() {
+    // Contract R21: where the R12 positional gate is dead (mid-prose, not a line start), the form
+    // dies exactly as a bare head does — the `[props]` element self-closes and `: y` stays literal
+    // text (the post-`]` `:` is NOT a trigger).
+    nota_expr("@{x @a[p: 1]: y}", r#"Fragment("x ", h("a", { p: 1 }, []), ": y")"#);
+}
+
+#[test]
+fn props_colon_and_verbatim_coexist() {
+    // R19 + R21 in one document: a `[props]` verbatim body and a `[props]` colon body both parse
+    // (the post-`]` peek routes `|{` → verbatim, `:` → colon under the live gate).
+    assert_js_eq(
+        &nota_doc("@CodeBlock[lang: \"python\"]|{f(x)}|\n\n@aside[class: \"x\"]: note\n"),
+        r#"export default function Doc() {
+            return decode(Fragment(
+                h(CodeBlock, { lang: "python" }, [String.raw`f(x)`]),
+                "\n", "\n",
+                h("aside", { class: "x" }, ["note"])
+            ));
+        }"#,
+    );
+}
+
+#[test]
 fn math_armed_paren_then_raw_tex() {
     // The wave-1 park behavior, now armed: `|@(x)`'s `)` is validated without advancing, then
     // parked, so the trailing `\frac{…}` stays raw TeX, never JS-lexed. `|@(x)` is a SIBLING part
@@ -1065,16 +1132,16 @@ fn body_start_is_a_line_start() {
 
 #[test]
 fn docstate_label_row() {
-    // Contract §3 row: `<sec-intro>` ≡ `@Label[id: "sec-intro"]{}`.
-    nota_expr("@{<sec-intro>}", r#"Fragment(h(Label, { id: "sec-intro" }, []))"#);
+    // Contract §3 row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (JS-ident label — R20a amended).
+    nota_expr("@{<sec_intro>}", r#"Fragment(h(Label, { id: "sec_intro" }, []))"#);
 }
 
 #[test]
 fn docstate_ref_row() {
-    // Contract §3 row: `&sec-intro` ≡ `@Ref[id: "sec-intro"]{}`; ends at the first non-ident char.
+    // Contract §3 row: `&sec_intro` ≡ `@Ref[id: "sec_intro"]{}`; ends at the first non-ident char.
     nota_expr(
-        "@{see &sec-intro, ok}",
-        r#"Fragment("see ", h(Ref, { id: "sec-intro" }, []), ", ok")"#,
+        "@{see &sec_intro, ok}",
+        r#"Fragment("see ", h(Ref, { id: "sec_intro" }, []), ", ok")"#,
     );
 }
 
@@ -1159,9 +1226,9 @@ fn docstate_fires_at_body_and_bounded_starts() {
         r#"Fragment(h("strong", {}, [h(Label, { id: "a" }, [])]), " x")"#,
     );
     nota_expr("@p{<b>}", r#"h("p", {}, [h(Label, { id: "b" }, [])])"#);
-    let js = nota_doc("# Intro <sec-intro>\n");
+    let js = nota_doc("# Intro <sec_intro>\n");
     assert!(
-        js.contains(r#"h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec-intro" }, [])])"#),
+        js.contains(r#"h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec_intro" }, [])])"#),
         "{js}"
     );
 }
@@ -1169,10 +1236,12 @@ fn docstate_fires_at_body_and_bounded_starts() {
 #[test]
 fn docstate_clips_at_bounded_frame_end() {
     // A sugar match may not reach past its bounded frame: the `>` after the emphasis close must
-    // not be stolen (`_` is an ident char, so an unclamped scan would run `ab_-x>`).
-    let js = nota_doc("q _<ab_-x>_\n");
+    // not be stolen. `_` is a JS ident char, so an *unclamped* scan of `<abc_>` would run the ident
+    // right across the emphasis-closing `_` and glue the `>` beyond it (→ a bogus `Label`); the
+    // frame clip stops the ident at the close, so the `<abc` stays literal.
+    let js = nota_doc("q _<abc_>_\n");
     assert!(!js.contains("h(Label"), "no label across the frame: {js}");
-    assert!(js.contains(r#"h("em", {}, ["<ab"])"#), "the em body keeps the literal `<ab`: {js}");
+    assert!(js.contains(r#"h("em", {}, ["<abc"])"#), "the em body keeps the literal `<abc`: {js}");
 
     // A footnote definition armed at an emphasis body's start clips its colon body at the frame.
     let js = nota_doc("*[^x]: y* z\n");
@@ -1195,10 +1264,18 @@ fn docstate_escapes_are_literal() {
 
 #[test]
 fn docstate_ident_charset() {
-    // Charset `[A-Za-z_][A-Za-z0-9_.:-]*`: `.`/`:`/`-`/`_` all join the ident (so a directly
-    // trailing `.`/`:` is part of a `&ref`'s id — the contract-pinned Typst-like behavior).
-    nota_expr("@{&sec.intro:x-y_2}", r#"Fragment(h(Ref, { id: "sec.intro:x-y_2" }, []))"#);
-    nota_expr("@{<a.b:c-d_e>}", r#"Fragment(h(Label, { id: "a.b:c-d_e" }, []))"#);
+    // Charset is a JS **IdentifierName** (contract R20a, amended 2026-07-05): `$` and Unicode ID
+    // chars are legal; `_` and digit-continue join; `.`/`:`/`-` do NOT (so trailing punctuation is
+    // never glued).
+    nota_expr("@{&$x}", r#"Fragment(h(Ref, { id: "$x" }, []))"#); // `$` start
+    nota_expr("@{<café>}", r#"Fragment(h(Label, { id: "café" }, []))"#); // Unicode
+    nota_expr("@{<sec_intro_2>}", r#"Fragment(h(Label, { id: "sec_intro_2" }, []))"#);
+    // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."); a `-` breaks a would-be label
+    // so `<sec-intro>` never scans (the whole `<` stays literal text).
+    nota_expr("@{&sec. and}", r#"Fragment(h(Ref, { id: "sec" }, []), ". and")"#);
+    let js = nota_doc("<sec-intro> x\n");
+    assert!(!js.contains("h(Label"), "kebab label does not scan: {js}");
+    assert!(js.contains("<sec-intro> x"), "the whole thing stays literal: {js}");
 }
 
 #[test]
@@ -1222,16 +1299,16 @@ fn docstate_unclosed_label_is_literal() {
 fn docstate_mixed_document() {
     // All four sugars + guarded literals in one document (the §3 mixed-golden, exact emit).
     let js = nota_doc(
-        "# Intro <sec-intro>\n\nSee &sec-intro for Vec<T> and R&D details[^note1].\n\n\
+        "# Intro <sec_intro>\n\nSee &sec_intro for Vec<T> and R&D details[^note1].\n\n\
          [^note1]: The *fine* print.\n",
     );
     assert_js_eq(
         &js,
         r#"export default function Doc() {
             return decode(Fragment(
-                h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec-intro" }, [])]),
+                h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec_intro" }, [])]),
                 "\n", "\n",
-                "See ", h(Ref, { id: "sec-intro" }, []),
+                "See ", h(Ref, { id: "sec_intro" }, []),
                 " for Vec<T> and R&D details", h(FootnoteMark, { label: "note1" }, []), ".",
                 "\n", "\n",
                 h(FootnoteText, { label: "note1" }, ["The ", h("strong", {}, ["fine"]), " print."])
