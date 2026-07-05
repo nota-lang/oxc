@@ -390,7 +390,7 @@ pub struct NotaCode<'a> {
     pub node_id: Cell<NodeId>,
     pub span: Span,
     /// Fence language tag, if any (block code only).
-    pub language: Option<Str<'a>>,
+    pub lang: Option<Str<'a>>,
     /// `true` for a fenced block, `false` for inline.
     pub block: bool,
     /// Raw runs interleaved with `|@`-armed `@`-forms.

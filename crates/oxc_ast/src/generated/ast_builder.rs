@@ -15673,18 +15673,18 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `language`: Fence language tag, if any (block code only).
+    /// * `lang`: Fence language tag, if any (block code only).
     /// * `block`: `true` for a fenced block, `false` for inline.
     /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn nota_form_code(
         self,
         span: Span,
-        language: Option<Str<'a>>,
+        lang: Option<Str<'a>>,
         block: bool,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaForm<'a> {
-        NotaForm::Code(self.alloc_nota_code(span, language, block, parts))
+        NotaForm::Code(self.alloc_nota_code(span, lang, block, parts))
     }
 
     /// Build a [`NotaForm::Math`].
@@ -16504,18 +16504,18 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `language`: Fence language tag, if any (block code only).
+    /// * `lang`: Fence language tag, if any (block code only).
     /// * `block`: `true` for a fenced block, `false` for inline.
     /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn nota_code(
         self,
         span: Span,
-        language: Option<Str<'a>>,
+        lang: Option<Str<'a>>,
         block: bool,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaCode<'a> {
-        NotaCode { node_id: Default::default(), span, language, block, parts }
+        NotaCode { node_id: Default::default(), span, lang, block, parts }
     }
 
     /// Build a [`NotaCode`], and store it in the memory arena.
@@ -16525,18 +16525,18 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `language`: Fence language tag, if any (block code only).
+    /// * `lang`: Fence language tag, if any (block code only).
     /// * `block`: `true` for a fenced block, `false` for inline.
     /// * `parts`: Raw runs interleaved with `|@`-armed `@`-forms.
     #[inline]
     pub fn alloc_nota_code(
         self,
         span: Span,
-        language: Option<Str<'a>>,
+        lang: Option<Str<'a>>,
         block: bool,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> Box<'a, NotaCode<'a>> {
-        Box::new_in(self.nota_code(span, language, block, parts), self.allocator)
+        Box::new_in(self.nota_code(span, lang, block, parts), self.allocator)
     }
 
     /// Build a [`NotaMath`].

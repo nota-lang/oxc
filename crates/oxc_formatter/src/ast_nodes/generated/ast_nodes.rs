@@ -11446,8 +11446,8 @@ impl<'a> AstNode<'a, NotaCode<'a>> {
     }
 
     #[inline]
-    pub fn language(&self) -> Option<Str<'a>> {
-        self.inner.language
+    pub fn lang(&self) -> Option<Str<'a>> {
+        self.inner.lang
     }
 
     #[inline]

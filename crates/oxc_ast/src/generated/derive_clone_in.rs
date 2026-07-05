@@ -9116,7 +9116,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaCode<'_> {
         NotaCode {
             node_id: Default::default(),
             span: CloneIn::clone_in(&self.span, allocator),
-            language: CloneIn::clone_in(&self.language, allocator),
+            lang: CloneIn::clone_in(&self.lang, allocator),
             block: CloneIn::clone_in(&self.block, allocator),
             parts: CloneIn::clone_in(&self.parts, allocator),
         }
@@ -9126,7 +9126,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaCode<'_> {
         NotaCode {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
-            language: CloneIn::clone_in_with_semantic_ids(&self.language, allocator),
+            lang: CloneIn::clone_in_with_semantic_ids(&self.lang, allocator),
             block: CloneIn::clone_in_with_semantic_ids(&self.block, allocator),
             parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
         }

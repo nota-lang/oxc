@@ -2748,7 +2748,7 @@ impl ContentEq for NotaFor<'_> {
 
 impl ContentEq for NotaCode<'_> {
     fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.language, &other.language)
+        ContentEq::content_eq(&self.lang, &other.lang)
             && ContentEq::content_eq(&self.block, &other.block)
             && ContentEq::content_eq(&self.parts, &other.parts)
     }

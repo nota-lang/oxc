@@ -3517,7 +3517,7 @@ impl<'a> Dummy<'a> for NotaCode<'a> {
         Self {
             node_id: Dummy::dummy(allocator),
             span: Dummy::dummy(allocator),
-            language: Dummy::dummy(allocator),
+            lang: Dummy::dummy(allocator),
             block: Dummy::dummy(allocator),
             parts: Dummy::dummy(allocator),
         }

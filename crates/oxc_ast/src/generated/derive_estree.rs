@@ -3518,7 +3518,7 @@ impl ESTree for NotaCode<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaCode"));
-        state.serialize_field("language", &self.language);
+        state.serialize_field("lang", &self.lang);
         state.serialize_field("block", &self.block);
         state.serialize_field("parts", &self.parts);
         state.serialize_span(self.span);

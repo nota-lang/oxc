@@ -1164,9 +1164,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     fn parse_code_or_literal(&mut self, tick_off: u32) {
         match lex_code_span(self.nota_scan_source(), tick_off) {
             CodeScan::Code { span, is_block, lang, content, resume } => {
-                let language = lang.map(|l| self.ast.str(self.ast.allocator.alloc_str(l)));
+                let lang = lang.map(|l| self.ast.str(self.ast.allocator.alloc_str(l)));
                 let parts = self.collect_bounded_armed(content.start, content.end);
-                let element = self.ast.nota_code(span, language, is_block, parts);
+                let element = self.ast.nota_code(span, lang, is_block, parts);
                 self.push_nota_item(NotaChild::Code(self.ast.alloc(element)));
                 // A park (armed form) leaves an `Undetermined` token that `has_fatal_error()` would
                 // report; only a real overrun/inner diagnostic (`fatal_error`) suppresses the resume.

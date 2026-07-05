@@ -19558,7 +19558,7 @@ impl<'a, 't> GetAddress for NotaForWithoutBody<'a, 't> {
 
 pub(crate) const OFFSET_NOTA_CODE_NODE_ID: usize = offset_of!(NotaCode, node_id);
 pub(crate) const OFFSET_NOTA_CODE_SPAN: usize = offset_of!(NotaCode, span);
-pub(crate) const OFFSET_NOTA_CODE_LANGUAGE: usize = offset_of!(NotaCode, language);
+pub(crate) const OFFSET_NOTA_CODE_LANG: usize = offset_of!(NotaCode, lang);
 pub(crate) const OFFSET_NOTA_CODE_BLOCK: usize = offset_of!(NotaCode, block);
 pub(crate) const OFFSET_NOTA_CODE_PARTS: usize = offset_of!(NotaCode, parts);
 
@@ -19581,10 +19581,8 @@ impl<'a, 't> NotaCodeWithoutParts<'a, 't> {
     }
 
     #[inline]
-    pub fn language(self) -> &'t Option<Str<'a>> {
-        unsafe {
-            &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_LANGUAGE) as *const Option<Str<'a>>)
-        }
+    pub fn lang(self) -> &'t Option<Str<'a>> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_CODE_LANG) as *const Option<Str<'a>>) }
     }
 
     #[inline]

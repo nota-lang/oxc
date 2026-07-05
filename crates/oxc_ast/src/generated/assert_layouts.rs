@@ -1964,7 +1964,7 @@ const _: () = {
     assert!(offset_of!(NotaCode, span) == 0);
     assert!(offset_of!(NotaCode, node_id) == 8);
     assert!(offset_of!(NotaCode, block) == 12);
-    assert!(offset_of!(NotaCode, language) == 16);
+    assert!(offset_of!(NotaCode, lang) == 16);
     assert!(offset_of!(NotaCode, parts) == 32);
 
     // Padding: 3 bytes
@@ -3974,7 +3974,7 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaCode, span) == 0);
     assert!(offset_of!(NotaCode, node_id) == 8);
     assert!(offset_of!(NotaCode, block) == 12);
-    assert!(offset_of!(NotaCode, language) == 16);
+    assert!(offset_of!(NotaCode, lang) == 16);
     assert!(offset_of!(NotaCode, parts) == 24);
 
     // Padding: 3 bytes

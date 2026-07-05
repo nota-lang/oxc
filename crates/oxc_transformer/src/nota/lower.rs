@@ -362,11 +362,11 @@ impl<'a> NotaLowering<'a> {
     }
 
     fn lower_code(&mut self, c: NotaCode<'a>) -> Expression<'a> {
-        let NotaCode { span, language, block, parts, .. } = c;
+        let NotaCode { span, lang, block, parts, .. } = c;
         let children = self.lower_raw_parts(parts);
         if block {
             let mut props = self.ast.vec();
-            if let Some(lang) = language {
+            if let Some(lang) = lang {
                 let val = self.ast.expression_string_literal(Span::empty(0), lang.as_str(), None);
                 props.push(self.obj_prop(Span::empty(0), Span::empty(0), "lang", val, false));
             }
