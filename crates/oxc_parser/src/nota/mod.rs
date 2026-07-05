@@ -395,26 +395,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// re-seeks itself from `prev_token_end`). No-op after a fatal error (the collectors bail out;
     /// nothing left to lex).
     fn resume_at(&mut self, offset: u32) {
-        if self.has_fatal_error() {
-            return;
-        }
-        match self.nota_top_region() {
-            NotaRegion::Markup { .. } => self.nota_seek_markup(offset),
-            NotaRegion::Js => self.nota_seek_to(offset),
-            NotaRegion::Raw => self.nota_park(offset),
-        }
-    }
-
-    /// [`Self::resume_at`] for a construct whose body may have ended in a `|@`-armed **park** (an
-    /// `Undetermined` current token, which `has_fatal_error()` also reports): only a *real* inner
-    /// diagnostic (`fatal_error`) suppresses the resume. Without this, an armed form as the last
-    /// body part stranded the outer collector on the parked lexer and everything after the
-    /// construct was silently dropped (`@pre|{x |@name y}|` ate the rest of the document). Same
-    /// guard `parse_code_or_literal` / `parse_math_or_literal` use.
-    fn resume_past_park_at(&mut self, offset: u32) {
-        if self.fatal_error.is_some() {
-            return;
-        }
         match self.nota_top_region() {
             NotaRegion::Markup { .. } => self.nota_seek_markup(offset),
             NotaRegion::Js => self.nota_seek_to(offset),
@@ -1068,10 +1048,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let span = Span::new(span_start, after);
         let tag = self.head_to_tag(head);
         let element = self.ast.nota_verbatim(span, tag, parts);
-        // `resume_past_park_at`, not `resume_at`: an armed (`|@`) final body part leaves the lexer
-        // parked, and `resume_at`'s park-sensitive guard would skip the re-lex — dropping the rest
-        // of the enclosing body.
-        self.resume_past_park_at(after);
+        self.resume_at(after);
         element
     }
 
