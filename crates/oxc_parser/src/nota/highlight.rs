@@ -103,13 +103,16 @@ pub enum NotaHighlightKind {
     JsComment = 21,
     /// Embedded-JS operator/punctuation.
     JsOperator = 22,
+    /// Raw text inside a `@style{…}` element — the editor highlights it as CSS (like a code
+    /// interior). Interpolations / nested forms inside stay their own kinds (holes).
+    StyleText = 23,
 }
 
 impl NotaHighlightKind {
     /// Every kind, in discriminant order (index = discriminant, test-guarded). Clients build
     /// kind→name/style tables from this — the *names* are client-side (the wasm bindings own the
     /// kebab-case table their `highlightKindNames()` serves; this crate only owns the wire enum).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Sigil,
         Self::TagHost,
         Self::TagComponent,
@@ -133,6 +136,7 @@ impl NotaHighlightKind {
         Self::JsNumber,
         Self::JsComment,
         Self::JsOperator,
+        Self::StyleText,
     ];
 }
 
@@ -169,6 +173,9 @@ struct Highlighter<'a> {
     fence_inner_end: u32,
     /// The last single-`%` marker emitted (a `% a(); b();` line yields several statements).
     last_stmt_marker: u32,
+    /// Nesting depth inside a `@style{…}` element — while `> 0`, text children emit
+    /// [`NotaHighlightKind::StyleText`] (the editor tokenizes those runs as CSS).
+    in_style: u32,
 }
 
 /// Walk `program` (a parsed Nota document) → (structural spans, embedded-JS gap ranges).
@@ -184,6 +191,7 @@ pub fn collect_structural(
         fence_done_end: 0,
         fence_inner_end: 0,
         last_stmt_marker: u32::MAX,
+        in_style: 0,
     };
     hl.visit_program(program);
     (hl.spans, hl.js_ranges)
@@ -389,6 +397,12 @@ impl<'a> Visit<'a> for Highlighter<'a> {
             }
             let child = &it[i];
             if let NotaChild::Text(text) = child {
+                // Inside `@style{…}`, this raw text run is CSS (the editor tokenizes it); an escape
+                // overlay still paints over it. Emitted here — the final span list is sorted, so
+                // under-/over-layer order is by extent, not emission.
+                if self.in_style > 0 {
+                    self.emit(text.span.start, text.span.end, NotaHighlightKind::StyleText);
+                }
                 let start = text.span.start;
                 if start > 0
                     && byte_at(self.source, start - 1) == Some(b'\\')
@@ -424,7 +438,15 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         for prop in &it.props {
             self.visit_nota_prop(prop);
         }
+        // A `@style{…}` host element's text children are CSS (contract: the editor tokenizes them).
+        let is_style = matches!(&it.tag, NotaTag::Host(host) if host.name.as_str() == "style");
+        if is_style {
+            self.in_style += 1;
+        }
         self.visit_nota_children(&it.children);
+        if is_style {
+            self.in_style -= 1;
+        }
     }
 
     fn visit_nota_prop_name(&mut self, it: &NotaPropName<'a>) {
@@ -939,6 +961,21 @@ mod tests {
         assert!(has(&spans, K::CodeLang, "python"));
         assert!(spans.iter().any(|(k, t)| *k == K::Code && t.contains("def g(): pass")));
         assert!(spans.iter().filter(|(k, _)| *k == K::CodeDelim).count() >= 4);
+    }
+
+    #[test]
+    fn style_element_body_is_css_text() {
+        // `@style{…}` host body text emits StyleText (the editor tokenizes it as CSS).
+        let spans = hl("@style{ color: red; }\n");
+        assert!(has(&spans, K::TagHost, "style"));
+        assert!(spans.iter().any(|(k, t)| *k == K::StyleText && t.contains("color: red")));
+        // Interpolations inside are holes (their own kind), not CSS text.
+        let interp = hl("@style{ color: @c }\n");
+        assert!(has(&interp, K::Interpolation, "c"));
+        assert!(interp.iter().any(|(k, t)| *k == K::StyleText && t.contains("color")));
+        // A non-`style` element's body is ordinary prose, never StyleText.
+        let plain = hl("@div{ color: red }\n");
+        assert!(!plain.iter().any(|(k, _)| *k == K::StyleText));
     }
 
     #[test]
