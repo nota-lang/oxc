@@ -1051,9 +1051,8 @@ mod tests {
         }
     }
 
-    /// Doc-state sugar (R20a) paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
-    /// Idents are JS IdentifierName (amended 2026-07-05), so a `_`-joined id scans whole (`sec-a`
-    /// would break at the `-`).
+    /// Doc-state sugar (R20) paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
+    /// Labels are Typst-minus-period (re-amended 2026-07-05), so a `_`-joined id scans whole.
     #[test]
     fn docstate_sugar_spans() {
         let spans = hl("<sec_a> then &sec_a and x[^n1] here\n\n[^n1]: note *body*\n");
@@ -1075,7 +1074,7 @@ mod tests {
     /// Boundary-guarded literals paint nothing sugar-ish; raw spans keep sugar-like text raw.
     #[test]
     fn docstate_literals_and_raw_spans_stay_plain() {
-        let spans = hl("Vec<T> and R&D, a<b, a&b, < c, <2x>, &, [^ x]\n");
+        let spans = hl("Vec<T> and R&D, a<b, a&b, < c, <->, &, [^ x]\n");
         assert!(!spans.iter().any(|(k, _)| matches!(k, K::Interpolation)), "{spans:?}");
         assert!(!has(&spans, K::Sigil, "<"));
         assert!(!has(&spans, K::Sigil, "&"));

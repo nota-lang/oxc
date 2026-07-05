@@ -1145,7 +1145,7 @@ fn body_start_is_a_line_start() {
 
 #[test]
 fn docstate_label_row() {
-    // Contract §3 row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (JS-ident label — R20a amended).
+    // Contract §3 row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (Typst-minus-period label — R20).
     nota_expr("@{<sec_intro>}", r#"Fragment(h(Label, { id: "sec_intro" }, []))"#);
 }
 
@@ -1210,13 +1210,14 @@ fn docstate_footnote_text_at_body_start_clips_at_brace() {
 #[test]
 fn docstate_left_boundary_guard_negatives() {
     // The `<`/`&` left guard: ident/closing-punct before the sigil ⇒ literal prose. Non-matching
-    // opens (`< b`, `<2x>`, `&,`, `[^ x]`) are literal everywhere.
-    let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <2x>, &, [^ x]\n");
+    // opens are literal everywhere: `< b` (space), `<->` (start restriction — `-` not a label-start,
+    // so arrow-like prose stays text), `&$x` (`$` is not a label char), `[^ x]` (space).
+    let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x, [^ x]\n");
     for sugar in ["h(Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
     assert!(
-        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <2x>, &, [^ x]"),
+        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x, [^ x]"),
         "prose intact: {js}"
     );
 }
@@ -1249,9 +1250,9 @@ fn docstate_fires_at_body_and_bounded_starts() {
 #[test]
 fn docstate_clips_at_bounded_frame_end() {
     // A sugar match may not reach past its bounded frame: the `>` after the emphasis close must
-    // not be stolen. `_` is a JS ident char, so an *unclamped* scan of `<abc_>` would run the ident
+    // not be stolen. `_` is a label char, so an *unclamped* scan of `<abc_>` would run the label
     // right across the emphasis-closing `_` and glue the `>` beyond it (→ a bogus `Label`); the
-    // frame clip stops the ident at the close, so the `<abc` stays literal.
+    // frame clip stops the label at the close, so the `<abc` stays literal.
     let js = nota_doc("q _<abc_>_\n");
     assert!(!js.contains("h(Label"), "no label across the frame: {js}");
     assert!(js.contains(r#"h("em", {}, ["<abc"])"#), "the em body keeps the literal `<abc`: {js}");
@@ -1277,18 +1278,29 @@ fn docstate_escapes_are_literal() {
 
 #[test]
 fn docstate_ident_charset() {
-    // Charset is a JS **IdentifierName** (contract R20a, amended 2026-07-05): `$` and Unicode ID
-    // chars are legal; `_` and digit-continue join; `.`/`:`/`-` do NOT (so trailing punctuation is
-    // never glued).
-    nota_expr("@{&$x}", r#"Fragment(h(Ref, { id: "$x" }, []))"#); // `$` start
-    nota_expr("@{<café>}", r#"Fragment(h(Label, { id: "café" }, []))"#); // Unicode
+    // Charset is **Typst minus period** (contract R20, re-amended 2026-07-05): start `[A-Za-z0-9_]`,
+    // continue `[A-Za-z0-9_:-]`, ASCII-only. Kebab/namespaced labels work; digits may start; `.`,
+    // `$`, and Unicode are NOT label chars.
     nota_expr("@{<sec_intro_2>}", r#"Fragment(h(Label, { id: "sec_intro_2" }, []))"#);
-    // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."); a `-` breaks a would-be label
-    // so `<sec-intro>` never scans (the whole `<` stays literal text).
+    // Kebab: `-` joins now (`<sec-intro>` / `&sec-intro` fire — the §3 rows).
+    nota_expr("@{<sec-intro>}", r#"Fragment(h(Label, { id: "sec-intro" }, []))"#);
+    nota_expr("@{&sec-intro}", r#"Fragment(h(Ref, { id: "sec-intro" }, []))"#);
+    // `:` joins (namespaced labels) — documented behavior; a trailing `-` also glues.
+    nota_expr("@{&ns:x y}", r#"Fragment(h(Ref, { id: "ns:x" }, []), " y")"#);
+    nota_expr("@{&sec- y}", r#"Fragment(h(Ref, { id: "sec-" }, []), " y")"#);
+    // Digits may start a label (Markdown-style): `<1a>` / `&1x` / `[^1]` fire.
+    nota_expr("@{<1a>}", r#"Fragment(h(Label, { id: "1a" }, []))"#);
+    nota_expr("@{&1x y}", r#"Fragment(h(Ref, { id: "1x" }, []), " y")"#);
+    nota_expr("@{[^1]}", r#"Fragment(h(FootnoteMark, { label: "1" }, []))"#);
+    // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."), so a ref never glues sentence
+    // punctuation.
     nota_expr("@{&sec. and}", r#"Fragment(h(Ref, { id: "sec" }, []), ". and")"#);
-    let js = nota_doc("<sec-intro> x\n");
-    assert!(!js.contains("h(Label"), "kebab label does not scan: {js}");
-    assert!(js.contains("<sec-intro> x"), "the whole thing stays literal: {js}");
+    // `$` and Unicode are NOT label chars: `&$x` stays literal, and a would-be `<café>` label breaks
+    // at `é` (no glued `>`), so the whole `<` stays literal text. (The element forms are
+    // charset-free: `@Label[id: "café"]{}` still accepts any string.)
+    nota_expr("@{&$x}", r#"Fragment("&$x")"#);
+    nota_expr("@{<café>}", r#"Fragment("<café>")"#);
+    nota_expr("@{<λ>}", r#"Fragment("<λ>")"#);
 }
 
 #[test]
