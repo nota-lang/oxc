@@ -858,6 +858,16 @@ mod tests {
     }
 
     #[test]
+    fn content_after_armed_verbatim_still_classifies() {
+        // Regression: an armed final body part parked the lexer and `parse_verbatim_element`'s
+        // exit skipped the resume — the whole rest of the document went unparsed (mega.nota's
+        // `## Colon & block sugar` / `## Nested statements` vanished from the playground paint).
+        let spans = hl("## one\n\n@pre|{\nx |@name y\n}|\n\n## two\n");
+        assert!(has(&spans, K::Heading, "## one"));
+        assert!(has(&spans, K::Heading, "## two"));
+    }
+
+    #[test]
     fn math_inline_armed_and_fence() {
         // `|@` arms a form inside math (a bare `@` would be literal raw text now); a display fence
         // is standalone `$$` lines. Inline delimiters are the `$` runs; the fence opener paints as

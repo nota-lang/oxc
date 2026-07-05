@@ -1216,6 +1216,23 @@ fn verbatim_armed_reentry() {
 }
 
 #[test]
+fn verbatim_armed_then_following_content() {
+    // Regression (found 2026-07-04 via the playground mega-test): an armed (`|@`) body part leaves
+    // the lexer PARKED, and `parse_verbatim_element`'s exit used `resume_at`, whose park-sensitive
+    // `has_fatal_error()` guard skipped the re-lex — silently dropping EVERYTHING after the
+    // verbatim. The exit now resumes via `resume_past_park_at` (guarding on `fatal_error` only,
+    // like code/math spans). All content following the armed verbatim must survive.
+    let js = nota_doc("## one\n\n@pre|{\nx |@name y\n}|\n\n## two\n");
+    assert!(js.contains(r#"h("h2", {}, ["one"])"#), "heading before: {js}");
+    assert!(js.contains("String.raw`x `"), "armed verbatim parts: {js}");
+    assert!(js.contains(r#"h("h2", {}, ["two"])"#), "heading AFTER the armed verbatim: {js}");
+    // Same shape with an armed *element* part and inline (single-line) geometry.
+    let js = nota_doc("@pre|{ |@b{c} }|\ntail text\n");
+    assert!(js.contains(r#"h("b", {}, ["c"])"#), "armed element part: {js}");
+    assert!(js.contains("tail text"), "text after the inline armed verbatim: {js}");
+}
+
+#[test]
 fn verbatim_component_tag() {
     // A verbatim body on a component tag.
     nota_expr(r"@Pre|{x@y}|", r"h(Pre, {}, [String.raw`x@y`])");
