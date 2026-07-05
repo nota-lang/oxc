@@ -2592,6 +2592,7 @@ impl ContentEq for NotaChild<'_> {
             (Self::Emphasis(a), Self::Emphasis(b)) => a.content_eq(b),
             (Self::Heading(a), Self::Heading(b)) => a.content_eq(b),
             (Self::ListItem(a), Self::ListItem(b)) => a.content_eq(b),
+            (Self::DocState(a), Self::DocState(b)) => a.content_eq(b),
             (Self::Element(a), Self::Element(b)) => a.content_eq(b),
             (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
             (Self::Interpolation(a), Self::Interpolation(b)) => a.content_eq(b),
@@ -2814,6 +2815,20 @@ impl ContentEq for NotaListItem<'_> {
 }
 
 impl ContentEq for NotaListKind {
+    fn content_eq(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl ContentEq for NotaDocState<'_> {
+    fn content_eq(&self, other: &Self) -> bool {
+        ContentEq::content_eq(&self.kind, &other.kind)
+            && ContentEq::content_eq(&self.label, &other.label)
+            && ContentEq::content_eq(&self.children, &other.children)
+    }
+}
+
+impl ContentEq for NotaDocStateKind {
     fn content_eq(&self, other: &Self) -> bool {
         self == other
     }

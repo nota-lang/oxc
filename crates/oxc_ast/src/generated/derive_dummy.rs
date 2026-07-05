@@ -3623,3 +3623,29 @@ impl<'a> Dummy<'a> for NotaListKind {
         Self::Unordered
     }
 }
+
+impl<'a> Dummy<'a> for NotaDocState<'a> {
+    /// Create a dummy [`NotaDocState`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            kind: Dummy::dummy(allocator),
+            label: Dummy::dummy(allocator),
+            label_span: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaDocStateKind {
+    /// Create a dummy [`NotaDocStateKind`].
+    ///
+    /// Does not allocate any data into arena.
+    #[inline(always)]
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self::Label
+    }
+}

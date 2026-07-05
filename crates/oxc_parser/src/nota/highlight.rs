@@ -561,6 +561,33 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         self.visit_nota_children(&it.children);
     }
 
+    /// Doc-state sugar (contract R20a). Reuses existing kinds — no new wire discriminants: the
+    /// sigil bytes (`<`/`>`, `&`, `[^`/`]`, the `]:`) paint [`NotaHighlightKind::Sigil`] (the
+    /// element-head `@` / emphasis-marker kind) and the label ident paints
+    /// [`NotaHighlightKind::Interpolation`] (the `@name` ident kind — a name-like reference).
+    fn visit_nota_doc_state(&mut self, it: &NotaDocState<'a>) {
+        let (start, label) = (it.span.start, it.label_span);
+        match it.kind {
+            NotaDocStateKind::Label => {
+                self.emit(start, start + 1, NotaHighlightKind::Sigil); // `<`
+                self.emit(label.end, label.end + 1, NotaHighlightKind::Sigil); // `>`
+            }
+            NotaDocStateKind::Ref => {
+                self.emit(start, start + 1, NotaHighlightKind::Sigil); // `&`
+            }
+            NotaDocStateKind::FootnoteMark => {
+                self.emit(start, start + 2, NotaHighlightKind::Sigil); // `[^`
+                self.emit(label.end, label.end + 1, NotaHighlightKind::Sigil); // `]`
+            }
+            NotaDocStateKind::FootnoteText => {
+                self.emit(start, start + 2, NotaHighlightKind::Sigil); // `[^`
+                self.emit(label.end, label.end + 2, NotaHighlightKind::Sigil); // `]:`
+            }
+        }
+        self.emit(label.start, label.end, NotaHighlightKind::Interpolation);
+        self.visit_nota_children(&it.children);
+    }
+
     fn visit_nota_emphasis(&mut self, it: &NotaEmphasis<'a>) {
         let kind = match it.marker {
             NotaEmphasisMarker::Strong => NotaHighlightKind::EmphasisStrong,
@@ -1022,6 +1049,40 @@ mod tests {
         for (i, kind) in super::NotaHighlightKind::ALL.iter().enumerate() {
             assert_eq!(*kind as usize, i, "ALL[{i}] = {kind:?} out of discriminant order");
         }
+    }
+
+    /// Doc-state sugar (R20a) paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
+    #[test]
+    fn docstate_sugar_spans() {
+        let spans = hl("<sec-a> then &sec-a and x[^n1] here\n\n[^n1]: note *body*\n");
+        // `<sec-a>`
+        assert!(has(&spans, K::Sigil, "<"));
+        assert!(has(&spans, K::Sigil, ">"));
+        assert!(has(&spans, K::Interpolation, "sec-a"));
+        // `&sec-a`
+        assert!(has(&spans, K::Sigil, "&"));
+        // `x[^n1]` (glued mark)
+        assert!(has(&spans, K::Sigil, "[^"));
+        assert!(has(&spans, K::Sigil, "]"));
+        assert!(has(&spans, K::Interpolation, "n1"));
+        // `[^n1]: …` definition: the `]:` sigil, and the body's own paints still fire.
+        assert!(has(&spans, K::Sigil, "]:"));
+        assert!(has(&spans, K::EmphasisStrong, "*body*"));
+    }
+
+    /// Boundary-guarded literals paint nothing sugar-ish; raw spans keep sugar-like text raw.
+    #[test]
+    fn docstate_literals_and_raw_spans_stay_plain() {
+        let spans = hl("Vec<T> and R&D, a<b, a&b, < c, <2x>, &, [^ x]\n");
+        assert!(!spans.iter().any(|(k, _)| matches!(k, K::Interpolation)), "{spans:?}");
+        assert!(!has(&spans, K::Sigil, "<"));
+        assert!(!has(&spans, K::Sigil, "&"));
+        assert!(!has(&spans, K::Sigil, "[^"));
+
+        // Inside code/math raw spans the sugars are raw content, not markup.
+        let spans = hl("`a <x> &y [^z]` and $m <x> &y$\n");
+        assert!(!spans.iter().any(|(k, _)| matches!(k, K::Interpolation)), "{spans:?}");
+        assert!(has(&spans, K::Code, "a <x> &y [^z]"));
     }
 
     #[test]

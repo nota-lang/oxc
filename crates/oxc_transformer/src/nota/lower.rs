@@ -148,6 +148,7 @@ impl<'a> NotaLowering<'a> {
             NotaChild::Emphasis(e) => self.lower_emphasis(e.unbox()),
             NotaChild::Heading(h) => self.lower_heading(h.unbox()),
             NotaChild::ListItem(li) => self.lower_list_item(li.unbox()),
+            NotaChild::DocState(d) => self.lower_doc_state(d.unbox()),
             NotaChild::Text(_) | NotaChild::Statement(_) => {
                 unreachable!("Text/Statement handled by lower_children")
             }
@@ -432,6 +433,33 @@ impl<'a> NotaLowering<'a> {
             false,
         ));
         self.build_raw_element(span, super::HEADING, props, children)
+    }
+
+    /// Doc-state sugar (contract R20a) → `h(<Slot>, { <key>: "<label>" }, [children])`, the R18f
+    /// `Heading` pattern: the slot is an ambient-prelude free identifier (no import emitted), the
+    /// `id`/`label` prop is reader-synthesized boilerplate (empty spans — unmapped, like
+    /// `Heading`/`rank`). Only `FootnoteText` has children (its colon body); the three leaf sugars
+    /// emit an empty child array.
+    fn lower_doc_state(&mut self, d: NotaDocState<'a>) -> Expression<'a> {
+        let NotaDocState { span, kind, label, children, .. } = d;
+        let (slot, key) = match kind {
+            NotaDocStateKind::Label => (super::LABEL, "id"),
+            NotaDocStateKind::Ref => (super::REF, "id"),
+            NotaDocStateKind::FootnoteMark => (super::FOOTNOTE_MARK, "label"),
+            NotaDocStateKind::FootnoteText => (super::FOOTNOTE_TEXT, "label"),
+        };
+        // A footnote-text body is a colon body (non-brace whitespace regime); leaves are empty.
+        let children = self.lower_children(children, false);
+        let value =
+            self.ast.expression_string_literal(Span::empty(span.start), label.as_str(), None);
+        let props = self.ast.vec1(self.obj_prop(
+            Span::empty(span.start),
+            Span::empty(span.start),
+            key,
+            value,
+            false,
+        ));
+        self.build_raw_element(span, slot, props, children)
     }
 
     /// One `nota-ul-li`/`nota-ol-li` sentinel per item — the runtime `struct` pass coalesces runs

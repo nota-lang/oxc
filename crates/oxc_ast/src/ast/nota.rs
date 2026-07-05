@@ -150,6 +150,8 @@ pub enum NotaChild<'a> {
     Heading(Box<'a, NotaHeading<'a>>) = 11,
     /// `-`/`+`/`N.` list item (per-line; the runtime coalesces runs).
     ListItem(Box<'a, NotaListItem<'a>>) = 12,
+    /// `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body` — inline doc-state sugar.
+    DocState(Box<'a, NotaDocState<'a>>) = 13,
     // `NotaForm` variants added here by `inherit_variants!` macro
     @inherit NotaForm
 }
@@ -507,6 +509,47 @@ pub enum NotaListKind {
     Unordered = 0,
     /// `+` or `N.`.
     Ordered = 1,
+}
+
+/// Inline **doc-state sugar** (contract R20a).
+///
+/// Four Markdown/Typst-flavored inline forms, each surface sugar for an element form, lowering to
+/// a free ambient identifier with an `id`/`label` string prop — `<label>` ≡ `@Label[id: "label"]{}`,
+/// `&ref` ≡ `@Ref[id: "ref"]{}`, `[^mark]` ≡ `@FootnoteMark[label: "mark"]{}`, and line-start
+/// `[^label]: body` ≡ `@FootnoteText[label: "label"]: body` (the colon-body extent verbatim). The
+/// label and body are the only surface the node carries; distinct sugar nodes (not desugared to
+/// [`NotaElement`]) keep the tree faithful for a future `.nota` formatter.
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
+pub struct NotaDocState<'a> {
+    pub node_id: Cell<NodeId>,
+    pub span: Span,
+    /// Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    pub kind: NotaDocStateKind,
+    /// The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
+    pub label: Str<'a>,
+    /// Source span of `label` (sans sigils) — for the formatter and the highlight pass.
+    #[estree(skip)]
+    pub label_span: Span,
+    /// The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    /// leaf sugars (`Label`/`Ref`/`FootnoteMark`).
+    pub children: Vec<'a, NotaChild<'a>>,
+}
+
+/// Which of the four R20a inline doc-state sugars a [`NotaDocState`] is.
+#[ast]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
+pub enum NotaDocStateKind {
+    /// `<label>` → `h(Label, { id: "label" }, [])`.
+    Label = 0,
+    /// `&ref` → `h(Ref, { id: "ref" }, [])`.
+    Ref = 1,
+    /// `[^mark]` → `h(FootnoteMark, { label: "mark" }, [])`.
+    FootnoteMark = 2,
+    /// line-start `[^label]: body` → `h(FootnoteText, { label: "label" }, [body…])`.
+    FootnoteText = 3,
 }
 
 #[cfg(test)]

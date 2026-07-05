@@ -2241,6 +2241,7 @@ impl GetSpan for NotaChild<'_> {
             Self::Emphasis(it) => GetSpan::span(&**it),
             Self::Heading(it) => GetSpan::span(&**it),
             Self::ListItem(it) => GetSpan::span(&**it),
+            Self::DocState(it) => GetSpan::span(&**it),
             Self::Element(it) => GetSpan::span(&**it),
             Self::Fragment(it) => GetSpan::span(&**it),
             Self::Interpolation(it) => GetSpan::span(&**it),
@@ -2448,6 +2449,13 @@ impl GetSpan for NotaHeading<'_> {
 }
 
 impl GetSpan for NotaListItem<'_> {
+    #[inline]
+    fn span(&self) -> Span {
+        self.span
+    }
+}
+
+impl GetSpan for NotaDocState<'_> {
     #[inline]
     fn span(&self) -> Span {
         self.span

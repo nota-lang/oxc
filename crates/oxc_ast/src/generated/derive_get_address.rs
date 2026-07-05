@@ -846,6 +846,7 @@ impl GetAddress for NotaChild<'_> {
             Self::Emphasis(it) => GetAddress::address(it),
             Self::Heading(it) => GetAddress::address(it),
             Self::ListItem(it) => GetAddress::address(it),
+            Self::DocState(it) => GetAddress::address(it),
             Self::Element(it) => GetAddress::address(it),
             Self::Fragment(it) => GetAddress::address(it),
             Self::Interpolation(it) => GetAddress::address(it),

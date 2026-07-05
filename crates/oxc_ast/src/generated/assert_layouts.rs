@@ -2016,6 +2016,19 @@ const _: () = {
 
     assert!(size_of::<NotaListKind>() == 1);
     assert!(align_of::<NotaListKind>() == 1);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaDocState>() == 64);
+    assert!(align_of::<NotaDocState>() == 8);
+    assert!(offset_of!(NotaDocState, span) == 0);
+    assert!(offset_of!(NotaDocState, node_id) == 8);
+    assert!(offset_of!(NotaDocState, kind) == 12);
+    assert!(offset_of!(NotaDocState, label) == 16);
+    assert!(offset_of!(NotaDocState, label_span) == 32);
+    assert!(offset_of!(NotaDocState, children) == 40);
+
+    assert!(size_of::<NotaDocStateKind>() == 1);
+    assert!(align_of::<NotaDocStateKind>() == 1);
 };
 
 #[cfg(target_pointer_width = "32")]
@@ -4027,6 +4040,19 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
 
     assert!(size_of::<NotaListKind>() == 1);
     assert!(align_of::<NotaListKind>() == 1);
+
+    // Padding: 3 bytes
+    assert!(size_of::<NotaDocState>() == 48);
+    assert!(align_of::<NotaDocState>() == 4);
+    assert!(offset_of!(NotaDocState, span) == 0);
+    assert!(offset_of!(NotaDocState, node_id) == 8);
+    assert!(offset_of!(NotaDocState, kind) == 12);
+    assert!(offset_of!(NotaDocState, label) == 16);
+    assert!(offset_of!(NotaDocState, label_span) == 24);
+    assert!(offset_of!(NotaDocState, children) == 32);
+
+    assert!(size_of::<NotaDocStateKind>() == 1);
+    assert!(align_of::<NotaDocStateKind>() == 1);
 };
 
 #[cfg(not(any(target_pointer_width = "64", target_pointer_width = "32")))]

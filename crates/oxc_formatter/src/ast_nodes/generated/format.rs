@@ -5930,6 +5930,16 @@ impl<'a> Format<'a> for AstNode<'a, NotaChild<'a>> {
                     })
                     .fmt(f);
             }
+            NotaChild::DocState(inner) => {
+                allocator
+                    .alloc(AstNode::<NotaDocState> {
+                        inner,
+                        parent,
+                        allocator,
+                        following_span_start: self.following_span_start,
+                    })
+                    .fmt(f);
+            }
             it @ match_nota_form!(NotaChild) => {
                 let inner = it.to_nota_form();
                 allocator
@@ -6365,6 +6375,19 @@ impl<'a> Format<'a> for AstNode<'a, NotaHeading<'a>> {
 }
 
 impl<'a> Format<'a> for AstNode<'a, NotaListItem<'a>> {
+    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
+        let is_suppressed = f.comments().is_suppressed(self.span().start);
+        self.format_leading_comments(f);
+        if is_suppressed {
+            FormatSuppressedNode(self.span()).fmt(f);
+        } else {
+            self.write(f);
+        }
+        self.format_trailing_comments(f);
+    }
+}
+
+impl<'a> Format<'a> for AstNode<'a, NotaDocState<'a>> {
     fn fmt(&self, f: &mut Formatter<'_, 'a>) {
         let is_suppressed = f.comments().is_suppressed(self.span().start);
         self.format_leading_comments(f);

@@ -1012,6 +1012,7 @@ nota_format_unreachable!(
     NotaEmphasis,
     NotaHeading,
     NotaListItem,
+    NotaDocState,
 );
 
 impl<'a> FormatWrite<'a> for AstNode<'a, BooleanLiteral> {

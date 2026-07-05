@@ -3309,6 +3309,7 @@ impl ESTree for NotaChild<'_> {
             Self::Emphasis(it) => it.serialize(serializer),
             Self::Heading(it) => it.serialize(serializer),
             Self::ListItem(it) => it.serialize(serializer),
+            Self::DocState(it) => it.serialize(serializer),
             Self::Element(it) => it.serialize(serializer),
             Self::Fragment(it) => it.serialize(serializer),
             Self::Interpolation(it) => it.serialize(serializer),
@@ -3612,6 +3613,29 @@ impl ESTree for NotaListKind {
         match self {
             Self::Unordered => JsonSafeString("unordered").serialize(serializer),
             Self::Ordered => JsonSafeString("ordered").serialize(serializer),
+        }
+    }
+}
+
+impl ESTree for NotaDocState<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaDocState"));
+        state.serialize_field("kind", &self.kind);
+        state.serialize_field("label", &self.label);
+        state.serialize_field("children", &self.children);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for NotaDocStateKind {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        match self {
+            Self::Label => JsonSafeString("label").serialize(serializer),
+            Self::Ref => JsonSafeString("ref").serialize(serializer),
+            Self::FootnoteMark => JsonSafeString("footnoteMark").serialize(serializer),
+            Self::FootnoteText => JsonSafeString("footnoteText").serialize(serializer),
         }
     }
 }

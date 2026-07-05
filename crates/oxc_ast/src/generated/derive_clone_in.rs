@@ -8651,6 +8651,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::Emphasis(it) => NotaChild::Emphasis(CloneIn::clone_in(it, allocator)),
             Self::Heading(it) => NotaChild::Heading(CloneIn::clone_in(it, allocator)),
             Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
+            Self::DocState(it) => NotaChild::DocState(CloneIn::clone_in(it, allocator)),
             Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
             Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
             Self::Interpolation(it) => NotaChild::Interpolation(CloneIn::clone_in(it, allocator)),
@@ -8676,6 +8677,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             }
             Self::ListItem(it) => {
                 NotaChild::ListItem(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::DocState(it) => {
+                NotaChild::DocState(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
             Self::Element(it) => {
                 NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
@@ -9313,6 +9317,46 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaListItem<'_> {
 
 impl<'new_alloc> CloneIn<'new_alloc> for NotaListKind {
     type Cloned = NotaListKind;
+
+    #[inline(always)]
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
+    }
+
+    #[inline(always)]
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        *self
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaDocState<'_> {
+    type Cloned = NotaDocState<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDocState {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            kind: CloneIn::clone_in(&self.kind, allocator),
+            label: CloneIn::clone_in(&self.label, allocator),
+            label_span: CloneIn::clone_in(&self.label_span, allocator),
+            children: CloneIn::clone_in(&self.children, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaDocState {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            kind: CloneIn::clone_in_with_semantic_ids(&self.kind, allocator),
+            label: CloneIn::clone_in_with_semantic_ids(&self.label, allocator),
+            label_span: CloneIn::clone_in_with_semantic_ids(&self.label_span, allocator),
+            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
+        }
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaDocStateKind {
+    type Cloned = NotaDocStateKind;
 
     #[inline(always)]
     fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {

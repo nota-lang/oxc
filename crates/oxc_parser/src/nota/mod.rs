@@ -35,11 +35,11 @@ use crate::{
     lexer::nota::{
         ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
         armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
-        colon_prop_line_at, else_peek, escape_span, find_emphasis_close, find_fence_close,
-        heading_at, is_ident_start_at, is_statement_line, lex_code_span, lex_math_span,
-        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
-        next_line_start, percent_line_is_empty, scan_hyphen_tail, statement_bound, statement_kind,
-        verbatim_boundary,
+        colon_prop_line_at, docstate_left_guard, else_peek, escape_span, find_emphasis_close,
+        find_fence_close, footnote_sugar_at, heading_at, is_ident_start_at, is_statement_line,
+        label_sugar_at, lex_code_span, lex_math_span, line_content_end, line_indent_of,
+        list_item_extent, list_marker_at, markup_trigger, next_line_start, percent_line_is_empty,
+        ref_sugar_at, scan_hyphen_tail, statement_bound, statement_kind, verbatim_boundary,
     },
 };
 
@@ -557,6 +557,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Kind::NotaDollar => {
                     self.parse_math_or_literal(self.cur_token().start());
                 }
+                // Doc-state sugar (contract R20a): the lexer emits these only for a valid *shape*
+                // (`<`/`&` + ident-start, the `[^`+ident digraph); the parser resolves the left
+                // guard (`<`/`&`), the terminator scan, and marker-vs-literal.
+                Kind::LAngle => {
+                    self.parse_label_sugar(self.cur_token().start());
+                }
+                Kind::Amp => {
+                    self.parse_ref_sugar(self.cur_token().start());
+                }
+                Kind::LBrack => {
+                    self.parse_footnote_sugar(self.cur_token().start());
+                }
                 Kind::Pipe => {
                     // A bare `|` in a markup body is literal (`|{`/`|@` are handled at the head
                     // switch / inside verbatim bodies, never here).
@@ -1050,6 +1062,145 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             at = item_end;
         }
         at
+    }
+}
+
+// ===============================================================================================
+// Doc-state sugar (contract R20a): `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body`.
+// Each is surface sugar for an element form (`@Label[id: "…"]{}` / `@Ref[id: "…"]{}` /
+// `@FootnoteMark[label: "…"]{}` / `@FootnoteText[label: "…"]: body`) and inherits the element
+// machinery — the bounded-frame clip, the R9/R12 positional colon gate, the colon-body extent —
+// rather than growing extent rules of its own. A non-matching open is literal text (1-byte sigil).
+// ===============================================================================================
+
+impl<'a, C: Config> ParserImpl<'a, C> {
+    /// The exclusive scan limit for a doc-state sugar: the clamped scan view's end (an armed form
+    /// inside a raw span must not read past its extent), further clipped to a bounded frame's end
+    /// (a match may not reach past the frame — `*<ab_-x>_` must not steal the `>` beyond the
+    /// emphasis close).
+    fn docstate_scan_limit(&self) -> u32 {
+        let src_end = self.lexer.nota_source_end();
+        match self.nota_body_mode().bound() {
+            Some(bound) => bound.min(src_end),
+            None => src_end,
+        }
+    }
+
+    /// The left-boundary guard on `<`/`&` (contract R20a): start-of-body (the enclosing markup
+    /// frame's content start — `*<x>*`, `@a:<x>`), or the byte-level guard (start of source /
+    /// line, whitespace, opening punctuation).
+    fn docstate_guard_ok(&self, at: u32) -> bool {
+        match self.nota_top_region() {
+            NotaRegion::Markup { start, .. } => {
+                at == *start || docstate_left_guard(self.source_text, at)
+            }
+            NotaRegion::Js | NotaRegion::Raw => false,
+        }
+    }
+
+    /// Build + push a [`NotaDocState`] child.
+    fn push_doc_state(
+        &mut self,
+        kind: NotaDocStateKind,
+        span: Span,
+        label_span: Span,
+        children: NotaChildren<'a>,
+    ) {
+        let label = &self.source_text[label_span.start as usize..label_span.end as usize];
+        let node = self.ast.nota_doc_state(span, kind, label, label_span, children);
+        self.push_nota_item(NotaChild::DocState(self.ast.alloc(node)));
+    }
+
+    /// `<label>` at `open` (≡ `@Label[id: "label"]{}`), or a literal `<`.
+    fn parse_label_sugar(&mut self, open: u32) {
+        let limit = self.docstate_scan_limit();
+        if self.docstate_guard_ok(open)
+            && let Some(label_span) = label_sugar_at(self.nota_scan_source(), open, limit)
+        {
+            let end = label_span.end + 1; // past `>`
+            self.push_doc_state(
+                NotaDocStateKind::Label,
+                Span::new(open, end),
+                label_span,
+                self.ast.vec(),
+            );
+            self.nota_seek_markup(end);
+        } else {
+            self.push_text(open, open + 1);
+            self.nota_seek_markup(open + 1);
+        }
+    }
+
+    /// `&ref` at `open` (≡ `@Ref[id: "ref"]{}`), or a literal `&`.
+    fn parse_ref_sugar(&mut self, open: u32) {
+        let limit = self.docstate_scan_limit();
+        if self.docstate_guard_ok(open)
+            && let Some(label_span) = ref_sugar_at(self.nota_scan_source(), open, limit)
+        {
+            self.push_doc_state(
+                NotaDocStateKind::Ref,
+                Span::new(open, label_span.end),
+                label_span,
+                self.ast.vec(),
+            );
+            self.nota_seek_markup(label_span.end);
+        } else {
+            self.push_text(open, open + 1);
+            self.nota_seek_markup(open + 1);
+        }
+    }
+
+    /// `[^mark]` at `open` (≡ `@FootnoteMark[label: "mark"]{}`; unguarded — `text[^1]` glues,
+    /// Markdown-style), or — with a glued `:` under the R9/R12 positional line-start gate
+    /// ([`Self::colon_trigger_live`], the same gate as `@head:`) — a `[^label]: body` footnote
+    /// *text* definition (≡ `@FootnoteText[label: "label"]: body`, the colon-body extent
+    /// machinery verbatim). A non-matching open (`[^ x]`, `[x]`) is a literal `[`.
+    fn parse_footnote_sugar(&mut self, open: u32) {
+        let limit = self.docstate_scan_limit();
+        let Some(label_span) = footnote_sugar_at(self.nota_scan_source(), open, limit) else {
+            self.push_text(open, open + 1);
+            self.nota_seek_markup(open + 1);
+            return;
+        };
+        let after_rbrack = label_span.end + 1; // past `]`
+        let colon_glued =
+            after_rbrack < limit && byte_at(self.source_text, after_rbrack) == Some(b':');
+        if colon_glued && self.colon_trigger_live(open) {
+            self.parse_footnote_text(open, label_span, after_rbrack + 1);
+        } else {
+            self.push_doc_state(
+                NotaDocStateKind::FootnoteMark,
+                Span::new(open, after_rbrack),
+                label_span,
+                self.ast.vec(),
+            );
+            self.nota_seek_markup(after_rbrack);
+        }
+    }
+
+    /// The `[^label]: body` footnote-text body: the colon-body extent machinery verbatim
+    /// (mirrors [`Self::parse_colon_body`] — rest of line + lines indented past the opening
+    /// line, first-line brace clip in a braced body, clamped to a bounded frame's end).
+    fn parse_footnote_text(&mut self, open: u32, label_span: Span, colon_end: u32) {
+        let head_line_indent = line_indent_of(self.source_text, open);
+        let (clip_at_brace, bound) = match self.nota_top_region() {
+            NotaRegion::Markup { mode, .. } => (matches!(mode, BodyMode::Body), mode.bound()),
+            // Unreachable (the positional gate requires a Markup top); clip defensively.
+            NotaRegion::Js | NotaRegion::Raw => (false, None),
+        };
+        let (body_start, mut body_end) =
+            colon_block_extent(self.source_text, colon_end, head_line_indent, clip_at_brace);
+        if let Some(end) = bound {
+            body_end = body_end.min(end);
+        }
+        let children = self.collect_markup_range(body_start.min(body_end), body_end);
+        self.push_doc_state(
+            NotaDocStateKind::FootnoteText,
+            Span::new(open, body_end),
+            label_span,
+            children,
+        );
+        self.nota_seek_markup(body_end);
     }
 }
 

@@ -531,6 +531,7 @@ impl AstKind<'_> {
             Self::NotaEmphasis(_) => "NotaEmphasis".into(),
             Self::NotaHeading(_) => "NotaHeading".into(),
             Self::NotaListItem(_) => "NotaListItem".into(),
+            Self::NotaDocState(_) => "NotaDocState".into(),
             Self::JSXOpeningFragment(_) => "JSXOpeningFragment".into(),
             Self::JSXClosingFragment(_) => "JSXClosingFragment".into(),
             Self::JSXEmptyExpression(_) => "JSXEmptyExpression".into(),

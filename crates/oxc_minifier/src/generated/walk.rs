@@ -5829,6 +5829,7 @@ unsafe fn walk_nota_child<'a, Tr: Traverse<'a>>(
         NotaChild::Emphasis(node) => walk_nota_emphasis(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Heading(node) => walk_nota_heading(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::ListItem(node) => walk_nota_list_item(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::DocState(node) => walk_nota_doc_state(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Element(_)
         | NotaChild::Fragment(_)
         | NotaChild::Interpolation(_)
@@ -6310,6 +6311,24 @@ unsafe fn walk_nota_list_item<'a, Tr: Traverse<'a>>(
     }
     ctx.pop_stack(pop_token);
     traverser.exit_nota_list_item(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_doc_state<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaDocState<'a>,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_doc_state(&mut *node, ctx);
+    let pop_token = ctx.push_stack(Ancestor::NotaDocStateChildren(
+        ancestor::NotaDocStateWithoutChildren(node, PhantomData),
+    ));
+    for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_DOC_STATE_CHILDREN)
+        as *mut Vec<NotaChild>)
+    {
+        walk_nota_child(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_doc_state(&mut *node, ctx);
 }
 
 unsafe fn walk_statements<'a, Tr: Traverse<'a>>(

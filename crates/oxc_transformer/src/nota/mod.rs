@@ -48,6 +48,14 @@ const MATH: &str = "Tex";
 /// `h(Heading, { rank: N }, […])` — a free identifier reference (like `Tex`/`CodeInline`, no import
 /// emitted). Raw `@hN{…}` element forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
 const HEADING: &str = "Heading";
+/// Ambient-prelude doc-state slots (contract R20a): the four inline sugars lower to free
+/// identifier references, exactly the `HEADING` pattern — `<x>` → `h(Label, { id: "x" }, [])`,
+/// `&x` → `h(Ref, { id: "x" }, [])`, `[^x]` → `h(FootnoteMark, { label: "x" }, [])`, line-start
+/// `[^x]: body` → `h(FootnoteText, { label: "x" }, [body…])`.
+const LABEL: &str = "Label";
+const REF: &str = "Ref";
+const FOOTNOTE_MARK: &str = "FootnoteMark";
+const FOOTNOTE_TEXT: &str = "FootnoteText";
 
 /// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
 /// top-level binding gets the name attach (constructor 2nd argument — contract R15/F1: the

@@ -15852,6 +15852,31 @@ impl<'a> AstBuilder<'a> {
         NotaChild::ListItem(self.alloc_nota_list_item(span, kind, children))
     }
 
+    /// Build a [`NotaChild::DocState`].
+    ///
+    /// This node contains a [`NotaDocState`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
+    /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
+    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    #[inline]
+    pub fn nota_child_doc_state<A1>(
+        self,
+        span: Span,
+        kind: NotaDocStateKind,
+        label: A1,
+        label_span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaChild<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaChild::DocState(self.alloc_nota_doc_state(span, kind, label, label_span, children))
+    }
+
     /// Build a [`NotaText`].
     ///
     /// If you want the built node to be allocated in the memory arena,
@@ -16748,6 +16773,65 @@ impl<'a> AstBuilder<'a> {
         children: Vec<'a, NotaChild<'a>>,
     ) -> Box<'a, NotaListItem<'a>> {
         Box::new_in(self.nota_list_item(span, kind, children), self.allocator)
+    }
+
+    /// Build a [`NotaDocState`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_doc_state`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
+    /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
+    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    #[inline]
+    pub fn nota_doc_state<A1>(
+        self,
+        span: Span,
+        kind: NotaDocStateKind,
+        label: A1,
+        label_span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> NotaDocState<'a>
+    where
+        A1: Into<Str<'a>>,
+    {
+        NotaDocState {
+            node_id: Default::default(),
+            span,
+            kind,
+            label: label.into(),
+            label_span,
+            children,
+        }
+    }
+
+    /// Build a [`NotaDocState`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_doc_state`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
+    /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
+    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    #[inline]
+    pub fn alloc_nota_doc_state<A1>(
+        self,
+        span: Span,
+        kind: NotaDocStateKind,
+        label: A1,
+        label_span: Span,
+        children: Vec<'a, NotaChild<'a>>,
+    ) -> Box<'a, NotaDocState<'a>>
+    where
+        A1: Into<Str<'a>>,
+    {
+        Box::new_in(self.nota_doc_state(span, kind, label, label_span, children), self.allocator)
     }
 }
 

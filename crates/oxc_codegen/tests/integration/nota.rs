@@ -1061,6 +1061,185 @@ fn body_start_is_a_line_start() {
     );
 }
 
+// ----- Doc-state sugar (contract R20a): `<label>` / `&ref` / `[^mark]` / `[^label]: body` -----
+
+#[test]
+fn docstate_label_row() {
+    // Contract §3 row: `<sec-intro>` ≡ `@Label[id: "sec-intro"]{}`.
+    nota_expr("@{<sec-intro>}", r#"Fragment(h(Label, { id: "sec-intro" }, []))"#);
+}
+
+#[test]
+fn docstate_ref_row() {
+    // Contract §3 row: `&sec-intro` ≡ `@Ref[id: "sec-intro"]{}`; ends at the first non-ident char.
+    nota_expr(
+        "@{see &sec-intro, ok}",
+        r#"Fragment("see ", h(Ref, { id: "sec-intro" }, []), ", ok")"#,
+    );
+}
+
+#[test]
+fn docstate_footnote_mark_row() {
+    // Contract §3 row: `[^note1]` ≡ `@FootnoteMark[label: "note1"]{}`; glues after a word
+    // (Markdown-style — `[^` needs no left guard).
+    nota_expr("@{text[^note1]}", r#"Fragment("text", h(FootnoteMark, { label: "note1" }, []))"#);
+}
+
+#[test]
+fn docstate_footnote_text_row() {
+    // Contract §3 row: line-start `[^note1]: body` ≡ `@FootnoteText[label: "note1"]: body`.
+    let js = nota_doc("[^note1]: See *also* now\n");
+    assert_js_eq(
+        &js,
+        r#"export default function Doc() {
+            return decode(Fragment(h(FootnoteText, { label: "note1" }, ["See ", h("strong", {}, ["also"]), " now"])));
+        }"#,
+    );
+}
+
+#[test]
+fn docstate_footnote_text_is_line_start_only() {
+    // Mid-line `[^x]:` is a footnote *mark*; the `:` stays literal (R9/R12 positional rule).
+    let js = nota_doc("see [^x]: here\n");
+    assert!(js.contains(r#"h(FootnoteMark, { label: "x" }, [])"#), "{js}");
+    assert!(!js.contains("FootnoteText"), "no definition mid-line: {js}");
+    assert!(js.contains(r#"": here""#), "the colon stays literal text: {js}");
+}
+
+#[test]
+fn docstate_footnote_text_colon_extent() {
+    // The definition body uses the colon-body extent machinery verbatim: rest of line + lines
+    // indented past the opening line (leftover indent joined, per the whitespace algorithm); the
+    // following paragraph stays outside.
+    let js = nota_doc("[^n]: first\n  cont\n\nafter para\n");
+    assert_js_eq(
+        &js,
+        r#"export default function Doc() {
+            return decode(Fragment(h(FootnoteText, { label: "n" }, ["first", "\n", "  cont"]), "after para"));
+        }"#,
+    );
+}
+
+#[test]
+fn docstate_footnote_text_at_body_start_clips_at_brace() {
+    // R9: a braced body's start is a line start, and the colon body clips at the body's `}`.
+    let js = nota_expr_raw("@p{[^n]: note}");
+    assert!(js.contains(r#"h(FootnoteText, { label: "n" }, ["note"])"#), "{js}");
+}
+
+#[test]
+fn docstate_left_boundary_guard_negatives() {
+    // The `<`/`&` left guard: ident/closing-punct before the sigil ⇒ literal prose. Non-matching
+    // opens (`< b`, `<2x>`, `&,`, `[^ x]`) are literal everywhere.
+    let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <2x>, &, [^ x]\n");
+    for sugar in ["h(Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
+        assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
+    }
+    assert!(
+        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <2x>, &, [^ x]"),
+        "prose intact: {js}"
+    );
+}
+
+#[test]
+fn docstate_left_boundary_guard_positives() {
+    // Whitespace / opening punctuation (`(`/`[`/`{`/quotes) before the sigil ⇒ fires.
+    let js = nota_doc("a (<x>) \"<y>\" '&z' [&w]\n");
+    assert!(js.contains(r#"h(Label, { id: "x" }, [])"#), "{js}");
+    assert!(js.contains(r#"h(Label, { id: "y" }, [])"#), "{js}");
+    assert!(js.contains(r#"h(Ref, { id: "z" }, [])"#), "{js}");
+    assert!(js.contains(r#"h(Ref, { id: "w" }, [])"#), "{js}");
+}
+
+#[test]
+fn docstate_fires_at_body_and_bounded_starts() {
+    // A body/range start counts as a line start (R9): emphasis body, braced body, heading body.
+    nota_expr(
+        "@{*<a>* x}",
+        r#"Fragment(h("strong", {}, [h(Label, { id: "a" }, [])]), " x")"#,
+    );
+    nota_expr("@p{<b>}", r#"h("p", {}, [h(Label, { id: "b" }, [])])"#);
+    let js = nota_doc("# Intro <sec-intro>\n");
+    assert!(
+        js.contains(r#"h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec-intro" }, [])])"#),
+        "{js}"
+    );
+}
+
+#[test]
+fn docstate_clips_at_bounded_frame_end() {
+    // A sugar match may not reach past its bounded frame: the `>` after the emphasis close must
+    // not be stolen (`_` is an ident char, so an unclamped scan would run `ab_-x>`).
+    let js = nota_doc("q _<ab_-x>_\n");
+    assert!(!js.contains("h(Label"), "no label across the frame: {js}");
+    assert!(js.contains(r#"h("em", {}, ["<ab"])"#), "the em body keeps the literal `<ab`: {js}");
+
+    // A footnote definition armed at an emphasis body's start clips its colon body at the frame.
+    let js = nota_doc("*[^x]: y* z\n");
+    assert!(
+        js.contains(r#"h("strong", {}, [h(FootnoteText, { label: "x" }, ["y"])])"#),
+        "{js}"
+    );
+    assert!(js.contains(r#"" z""#), "the tail stays outside: {js}");
+}
+
+#[test]
+fn docstate_escapes_are_literal() {
+    // `\<`, `\&`, `\[` yield the literal characters via the standard escape machinery.
+    let js = nota_doc("\\<sec> \\&ref \\[^n]\n");
+    for sugar in ["h(Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
+        assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
+    }
+    assert!(js.contains("<sec> &ref [^n]"), "escapes drop the backslash: {js}");
+}
+
+#[test]
+fn docstate_ident_charset() {
+    // Charset `[A-Za-z_][A-Za-z0-9_.:-]*`: `.`/`:`/`-`/`_` all join the ident (so a directly
+    // trailing `.`/`:` is part of a `&ref`'s id — the contract-pinned Typst-like behavior).
+    nota_expr("@{&sec.intro:x-y_2}", r#"Fragment(h(Ref, { id: "sec.intro:x-y_2" }, []))"#);
+    nota_expr("@{<a.b:c-d_e>}", r#"Fragment(h(Label, { id: "a.b:c-d_e" }, []))"#);
+}
+
+#[test]
+fn docstate_raw_spans_and_embedded_js_stay_raw() {
+    // Inside code/math/verbatim the sugars are raw content (R13); inside embedded JS they are JS.
+    nota_expr("@{`a <x> &y [^z]`}", r"Fragment(h(CodeInline, {}, [String.raw`a <x> &y [^z]`]))");
+    nota_expr("@{$m <x> &y$}", r"Fragment(h(Tex, {}, [String.raw`m <x> &y`]))");
+    nota_expr("@code|{<x> &y}|", r#"h("code", {}, [String.raw`<x> &y`])"#);
+    nota_expr("@a[x: 1 < 2, y: p & q]{}", r#"h("a", { x: 1 < 2, y: p & q }, [])"#);
+}
+
+#[test]
+fn docstate_unclosed_label_is_literal() {
+    // `<ident` with no `>` on the line stays literal (R11-consistent).
+    let js = nota_doc("a <abc\nand b> c\n");
+    assert!(!js.contains("h(Label"), "{js}");
+    assert!(js.contains("a <abc"), "{js}");
+}
+
+#[test]
+fn docstate_mixed_document() {
+    // All four sugars + guarded literals in one document (the §3 mixed-golden, exact emit).
+    let js = nota_doc(
+        "# Intro <sec-intro>\n\nSee &sec-intro for Vec<T> and R&D details[^note1].\n\n\
+         [^note1]: The *fine* print.\n",
+    );
+    assert_js_eq(
+        &js,
+        r#"export default function Doc() {
+            return decode(Fragment(
+                h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec-intro" }, [])]),
+                "\n", "\n",
+                "See ", h(Ref, { id: "sec-intro" }, []),
+                " for Vec<T> and R&D details", h(FootnoteMark, { label: "note1" }, []), ".",
+                "\n", "\n",
+                h(FootnoteText, { label: "note1" }, ["The ", h("strong", {}, ["fine"]), " print."])
+            ));
+        }"#,
+    );
+}
+
 #[test]
 fn percent_statement_region_rules() {
     // TODO.md bug 6 regression — the `%` statement-region contract: the rest of the line is JS
