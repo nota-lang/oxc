@@ -550,18 +550,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Kind::At => {
                     let form = self.parse_nota_form();
                     self.push_nota_item(NotaChild::from(form));
-                    // A colon-sugar body consumes through its final line's `\n` (and any trailing
-                    // blank lines), so the form can resume AT a line start — a position the `\n`
-                    // arm's line-start hook never sees. Run the same hook here: a heading, list,
-                    // or `%` statement directly after a colon block is sugar, not literal text.
-                    let at = self.cur_token().start();
-                    if !self.has_fatal_error()
-                        && at > 0
-                        && byte_at(self.source_text, at - 1) == Some(b'\n')
-                    {
-                        let resume = self.consume_line_start_constructs(at, depth);
-                        self.nota_seek_markup(resume);
-                    }
+                    self.consume_line_start_after_form(depth);
                 }
                 Kind::Star | Kind::NotaUnderscore => {
                     // The lexer emits these only for a valid opener (the Typst word-boundary
@@ -593,6 +582,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
                 Kind::LBrack => {
                     self.parse_footnote_sugar(self.cur_token().start());
+                    // A `[^x]: body` definition reuses the colon-body extent machinery, so it can
+                    // resume at a line start exactly like an `@head:` form — same hook (else a
+                    // heading/list/`%` after the definition lexes as literal text).
+                    self.consume_line_start_after_form(depth);
                 }
                 Kind::Pipe => {
                     // A bare `|` in a markup body is literal (`|{`/`|@` are handled at the head
@@ -608,6 +601,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.advance_for_nota_child();
                 }
             }
+        }
+    }
+
+    /// A colon-sugar body (`@head: …` — or a `[^x]: …` footnote definition, which reuses the same
+    /// extent machinery) consumes through its final line's `\n` and any trailing blank lines, so
+    /// the form can resume AT a line start — a position the `NotaNewline` arm's line-start hook
+    /// never sees. Run the same hook after such a form: a heading, list, or `%` statement directly
+    /// after a colon block is sugar, not literal text. (Forms that resume mid-line fail the
+    /// preceding-`\n` check and fall through — the hook is safe after any form.)
+    fn consume_line_start_after_form(&mut self, depth: u32) {
+        let at = self.cur_token().start();
+        if !self.has_fatal_error() && at > 0 && byte_at(self.source_text, at - 1) == Some(b'\n') {
+            let resume = self.consume_line_start_constructs(at, depth);
+            self.nota_seek_markup(resume);
         }
     }
 

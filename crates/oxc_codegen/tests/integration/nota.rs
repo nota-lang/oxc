@@ -948,6 +948,19 @@ fn heading_sugar_relowers_but_raw_element_stays_host() {
     assert!(!js.contains("rank: 2"), "the raw @h2 carries no rank prop: {js}");
 }
 
+#[test]
+fn line_start_constructs_resume_after_footnote_def_sugar() {
+    // A `[^x]: body` definition reuses the colon-body extent machinery, which consumes through
+    // trailing blank lines — so the parser resumes AT a line start and must re-run line-start
+    // detection there (the `@head:` forms already had the hook; the sugar arm missed it). A
+    // heading and a list directly after the definition are sugar, not literal text.
+    let js = nota_doc("[^a]: A def.\n\n## After\n\n- item\n");
+    assert!(js.contains(r#"h(FootnoteText, { label: "a" }, ["A def."])"#), "def parses: {js}");
+    assert!(js.contains(r#"h(Heading, { rank: 2 }, ["After"])"#), "heading resumes: {js}");
+    assert!(js.contains(r#"h("nota-ul-li""#), "list resumes: {js}");
+    assert!(!js.contains("## After"), "no literal heading text: {js}");
+}
+
 // ----- Lists -----
 
 #[test]
