@@ -4,7 +4,8 @@
 //! * **expression mode** (`nota_expr`) — elides the `Doc` wrapper and injected imports
 //!   (`@p{Hello}` → `h("p", {}, ["Hello"])`); the bulk of fixtures.
 //! * **document mode** (`nota_doc`) — the full module incl. `export default function Doc()`,
-//!   hoisted `import`/`export`, `decode(...)` wrap, inline components.
+//!   hoisted `import`/`export`, the Doc-body `decode(...)` wrap, and document-local inline
+//!   components (contract R15: bindings prepend into Doc, name-attached, no hoist/export).
 //!
 //! Every fixture also asserts the *validity invariant*: the emitted JS re-parses cleanly under the
 //! STOCK oxc parser.
@@ -392,12 +393,33 @@ fn doc_fence_statements() {
 }
 
 #[test]
-fn doc_f1_component_hoist_export_name() {
-    // An inline component (`%const X = inlineComponent(...)`) is hoisted to module scope, exported,
-    // and passed its name "X" as the 2nd arg.
+fn doc_component_binding_stays_document_local_with_name() {
+    // Contract R15: a top-level `%const X = inlineComponent(...)` is an ordinary lexical statement
+    // — it prepends into Doc (document-local, NOT hoisted or exported; replay hydration recovers
+    // its closure client-side) — and is passed its binding name "X" as the 2nd arg (the debug-
+    // manifest name).
     let js = nota_doc("%const Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
-    assert!(js.contains("export let") || js.contains("export const"), "component exported: {js}");
+    assert!(!js.contains("export const Card"), "component NOT exported: {js}");
+    assert!(!js.contains("export let Card"), "component NOT exported: {js}");
+    // The binding sits INSIDE Doc's body (after the default-export function opens).
+    let doc_pos = js.find("export default function Doc()").expect("Doc present");
+    let bind_pos = js.find("const Card = inlineComponent").expect("binding present");
+    assert!(bind_pos > doc_pos, "binding is inside Doc, not module scope: {js}");
     assert!(js.contains(r#", "Card")"#), "component name passed as 2nd arg: {js}");
+}
+
+#[test]
+fn doc_export_component_binding_keeps_export_and_gets_name() {
+    // Contract R15: `%export let C = inlineComponent(...)` is the author's opt-in to module scope
+    // — the export hoists verbatim AND gets the same name attach (previously the `%export` arm got
+    // no name — an R15 fix).
+    let js =
+        nota_doc("%export let Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
+    assert!(js.contains("export let Card = inlineComponent"), "export kept + hoisted: {js}");
+    assert!(js.contains(r#", "Card")"#), "component name passed as 2nd arg: {js}");
+    // No decode wrap is injected into the component body (dead at ▸=true — R15d): the expression-
+    // bodied arrow lowers to bare `h("span", …)`, not `decode(h("span", …))`.
+    assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
 }
 
 #[test]
@@ -1080,25 +1102,27 @@ fn nota_doc_no_validity(source: &str) -> String {
     Codegen::new().build(&program).code
 }
 
-/// THE canonical golden, stage-3: the `@for` is lowered to a *keyed* `.map`
-/// (`(x, _i) => Fragment({ key: _i }, …)`), and the `-` list marker is lowered to the `"nota-ul-li"`
-/// sentinel (the runtime `struct` later coalesces it).
-const CANONICAL_STAGE3: &str = r#"export let Colorized = inlineComponent((children) => {
-  let [color, setColor] = useState("red");
-  return decode(h("span", { onClick: () => setColor("green"), style: { color } }, [children]));
-}, "Colorized");
-
-export default function Doc() {
+/// THE canonical golden, stage-3 (contract §2, revised by R15): the component binding is
+/// **document-local** — it prepends into `Doc` (no hoist, no export), keeps its name 2nd-arg, and
+/// its body has **no** `decode(...)` wrap (dead at `▸ = true`). The `@for` is lowered to a *keyed*
+/// `.map` (`(x, _i) => Fragment({ key: _i }, …)`), and the `-` list marker is lowered to the
+/// `"nota-ul-li"` sentinel (the runtime `struct` later coalesces it). Doc's own body keeps its
+/// `decode(...)` wrap — that is what self-decodes the document at `▸ = false`.
+const CANONICAL_STAGE3: &str = r#"export default function Doc() {
+  let Colorized = inlineComponent((children) => {
+    let [color, setColor] = useState("red");
+    return h("span", { onClick: () => setColor("green"), style: { color } }, [children]);
+  }, "Colorized");
   return decode(Fragment(["a", "b"].map((x, _i) => Fragment({ key: _i }, h("nota-ul-li", {}, [h(Colorized, {}, [x])])))));
 }"#;
 
 #[test]
 fn canonical_golden_matches_stage3() {
     // THE capstone: stage-1 `.nota` compiles to a module equal (modulo formatting) to stage-3 —
-    // incl. the inline component (hoist+export+name, `decode` wrap, `@children` → the bound param),
-    // the keyed `Fragment({ key: _i }, …)`, the `["a", "b"].map((x, _i) => …)` loop lowering, and
-    // the `-` → `h("nota-ul-li", …)` list sentinel. Also valid JS (re-parses under stock oxc — the
-    // validity invariant), now that nothing is un-lowered.
+    // incl. the inline component (document-local binding + name 2nd-arg, no body decode-wrap —
+    // R15), the keyed `Fragment({ key: _i }, …)`, the `["a", "b"].map((x, _i) => …)` loop
+    // lowering, and the `-` → `h("nota-ul-li", …)` list sentinel. Also valid JS (re-parses under
+    // stock oxc — the validity invariant), now that nothing is un-lowered.
     let js = nota_doc(CANONICAL_NOTA);
     assert_js_eq(&js, CANONICAL_STAGE3);
 }
@@ -1115,9 +1139,13 @@ fn canonical_golden_minus_phase_d_is_valid() {
 ";
     let js = nota_doc(src); // asserts validity (re-parses under stock oxc)
     assert!(js.contains(r"inlineComponent((children) => {"), "{js}");
-    assert!(js.contains(r#"return decode(h("span", { style: { color } }, [children]));"#), "{js}");
+    // R15: the component body's return is NOT decode-wrapped (dead at ▸=true).
+    assert!(js.contains(r#"return h("span", { style: { color } }, [children]);"#), "{js}");
+    assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
     assert!(js.contains(r#", "Colorized")"#), "component name: {js}");
     assert!(js.contains(r#"h(Colorized, {}, ["a"])"#), "component use: {js}");
+    // R15: the binding is document-local — not exported, inside Doc.
+    assert!(!js.contains("export let Colorized"), "not exported: {js}");
 }
 
 #[test]
@@ -2225,14 +2253,14 @@ mod fuzz_findings_2 {
         );
     }
 
-    // [F1] the reader keeps a user-supplied component-name arg instead of overriding it with the
-    // binding name, so the island manifest's `comp` can mismatch the exported registry key.
+    // [F1/R15] the reader keeps a user-supplied component-name arg instead of overriding it with
+    // the binding name, so the island debug-manifest's `comp` can mismatch the authored binding.
     #[test]
     fn fuzz2_component_name_should_use_binding_name() {
         let js = emit_doc_unchecked("%let C = inlineComponent((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
         assert!(
             !js.contains("\"ZZZ\""),
-            "F1 should pass the binding name, not the user's name arg: {js}"
+            "name-attach should pass the binding name, not the user's name arg: {js}"
         );
     }
 }

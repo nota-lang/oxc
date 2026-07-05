@@ -1,6 +1,6 @@
-//! Hyperscript emit primitives + document/F1 assembly for [`super::lower::NotaLowering`]: the
+//! Hyperscript emit primitives + document assembly for [`super::lower::NotaLowering`]: the
 //! `h`/`Fragment`/`decode`/`String.raw` `Expression` builders and the document `Program` assembly
-//! (Doc skeleton, `%`-statement routing, F1 component hoist+export, decode-wraps).
+//! (Doc skeleton, `%`-statement routing, component name-attach — contract R15).
 
 use lazy_regex::{Regex, regex};
 use oxc_allocator::Vec as ArenaVec;
@@ -14,7 +14,7 @@ use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
 use super::{
     BLOCK_COMPONENT, DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H,
-    INLINE_COMPONENT, is_f1_constructor, is_markup_call,
+    INLINE_COMPONENT, is_component_constructor,
 };
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
@@ -365,12 +365,15 @@ impl<'a> NotaLowering<'a> {
     }
 
     // ===========================================================================================
-    // Document assembly + `%`-statement routing + F1 component hoisting
+    // Document assembly + `%`-statement routing + component name-attach (contract R15)
     // ===========================================================================================
 
-    /// Route a parsed top-level statement: `import`/`export`/component bindings hoist to module
-    /// scope (component bindings add `export` + the name argument); everything else prepends into
-    /// `Doc`.
+    /// Route a parsed top-level statement: `import`/`export` hoist to module scope; everything
+    /// else — **including component bindings** — prepends into `Doc` (contract R15: a
+    /// `%let C = inlineComponent(...)` is an ordinary lexical statement, document-local, so its
+    /// body may close over document state; replay hydration recovers the closure client-side).
+    /// Component bindings — top-level `%let/%const` and `%export`-wrapped alike — get the binding
+    /// name attached as the constructor's 2nd argument (the debug-manifest name).
     pub(super) fn route_statement(
         &mut self,
         stmt: Statement<'a>,
@@ -384,14 +387,23 @@ impl<'a> NotaLowering<'a> {
         // A `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full capabilities).
         self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
         match stmt {
+            Statement::ExportNamedDeclaration(mut export) => {
+                // `%export let C = inlineComponent(...)` — the author's opt-in to module scope —
+                // gets the same name attach as an unexported binding (previously it got none).
+                if let Some(Declaration::VariableDeclaration(decl)) = &mut export.declaration
+                    && Self::is_component_decl(decl)
+                {
+                    self.attach_component_name(decl);
+                }
+                module_items.push(Statement::ExportNamedDeclaration(export));
+            }
             Statement::ImportDeclaration(_)
-            | Statement::ExportNamedDeclaration(_)
             | Statement::ExportDefaultDeclaration(_)
             | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
-            Statement::VariableDeclaration(mut decl) if Self::is_f1_component_decl(&decl) => {
-                self.attach_f1_name(&mut decl);
-                let export = self.make_export_named_decl(Declaration::VariableDeclaration(decl));
-                module_items.push(export);
+            Statement::VariableDeclaration(mut decl) if Self::is_component_decl(&decl) => {
+                // R15: no hoist, no auto-export — only the name rides along.
+                self.attach_component_name(&mut decl);
+                doc_prelude.push(Statement::VariableDeclaration(decl));
             }
             other => doc_prelude.push(other),
         }
@@ -484,26 +496,24 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding?
-    fn is_f1_component_decl(decl: &VariableDeclaration<'a>) -> bool {
+    fn is_component_decl(decl: &VariableDeclaration<'a>) -> bool {
         decl.declarations.len() == 1
             && decl.declarations[0].id.get_binding_identifier().is_some()
-            && decl.declarations[0].init.as_ref().is_some_and(is_f1_constructor)
+            && decl.declarations[0].init.as_ref().is_some_and(is_component_constructor)
     }
 
-    /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`), and
-    /// wrap the component body's returned markup in `decode(...)`.
-    fn attach_f1_name(&self, decl: &mut VariableDeclaration<'a>) {
+    /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`).
+    /// That is ALL the reader does to a component binding under contract R15 — no hoist, no
+    /// export, and no body `decode(...)` wrap (the wrap was semantically dead: component bodies
+    /// only run at `▸ = true`, where `decode` is the identity). The name feeds the island's
+    /// *debug* manifest (`comp`); it is overridden rather than kept if the author supplied a 2nd
+    /// argument, so the manifest always shows the binding name.
+    fn attach_component_name(&self, decl: &mut VariableDeclaration<'a>) {
         let declarator = &mut decl.declarations[0];
         let Some(name) = declarator.id.get_binding_identifier().map(|id| id.name) else {
             return;
         };
         if let Some(Expression::CallExpression(call)) = declarator.init.as_mut() {
-            if let Some(arg0) = call.arguments.first_mut() {
-                self.wrap_component_returns(arg0);
-            }
-            // F1: the component name passed to the constructor MUST be the binding name (so the
-            // island manifest's `comp` matches the exported registry key) — override any user-
-            // supplied 2nd argument rather than keeping it.
             let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
             if call.arguments.len() >= 2 {
                 call.arguments[1] = Argument::from(name_lit);
@@ -511,66 +521,5 @@ impl<'a> NotaLowering<'a> {
                 call.arguments.push(Argument::from(name_lit));
             }
         }
-    }
-
-    /// Wrap a component-constructor function argument's returned markup in `decode(...)`. The body
-    /// markup is still an un-lowered `Expression::NotaMarkup` here (the walk lowers inside the
-    /// `decode(...)` afterwards), so `is_markup_call` treats `NotaMarkup` as markup.
-    fn wrap_component_returns(&self, arg: &mut Argument<'a>) {
-        let Some(expr) = arg.as_expression_mut() else { return };
-        match expr {
-            Expression::ArrowFunctionExpression(arrow) => {
-                if arrow.expression {
-                    if let Some(Statement::ExpressionStatement(es)) =
-                        arrow.body.statements.first_mut()
-                    {
-                        self.wrap_expr_in_decode(&mut es.expression);
-                    }
-                } else {
-                    self.wrap_return_statements(&mut arrow.body.statements);
-                }
-            }
-            Expression::FunctionExpression(func) => {
-                if let Some(body) = func.body.as_mut() {
-                    self.wrap_return_statements(&mut body.statements);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Wrap the argument of each top-level `return <markup>;` in `decode(...)`.
-    fn wrap_return_statements(&self, stmts: &mut ArenaVec<'a, Statement<'a>>) {
-        for stmt in stmts.iter_mut() {
-            if let Statement::ReturnStatement(ret) = stmt
-                && let Some(arg) = ret.argument.as_mut()
-            {
-                self.wrap_expr_in_decode(arg);
-            }
-        }
-    }
-
-    /// Replace `expr` with `decode(expr)` iff it is unwrapped markup (`h(...)`/`Fragment(...)`/a
-    /// not-yet-lowered `NotaMarkup`).
-    fn wrap_expr_in_decode(&self, expr: &mut Expression<'a>) {
-        if !is_markup_call(expr) {
-            return;
-        }
-        let taken = std::mem::replace(expr, self.ast.expression_null_literal(Span::empty(0)));
-        *expr = self.build_decode(Span::empty(0), taken);
-    }
-
-    /// `export <decl>;` (named export of a declaration).
-    fn make_export_named_decl(&self, decl: Declaration<'a>) -> Statement<'a> {
-        let ast = self.ast;
-        let export = ast.module_declaration_export_named_declaration(
-            Span::empty(0),
-            Some(decl),
-            ast.vec(),
-            None,
-            ImportOrExportKind::Value,
-            NONE,
-        );
-        Statement::from(export)
     }
 }

@@ -7,7 +7,8 @@
 //! `oxc_transformer` lowers JSX to `createElement`.
 //!
 //! Entry: [`NotaLowering`]. The document is rebuilt by [`NotaLowering::lower_document_program`] (Doc
-//! skeleton, `%`-statement routing / F1 hoist+export, decode-wraps); embedded `@`-forms are then
+//! skeleton, `%`-statement routing + component name-attach — contract R15: component bindings are
+//! ordinary lexical statements, document-local, NOT hoisted/exported); embedded `@`-forms are then
 //! replaced by a [`oxc_ast_visit::VisitMut`] walk. Optionally collects Volar [`NotaMappingMark`]s.
 //!
 //! Semantic pin: `Doc` and the nested-`%` IIFE are always emitted **synchronous** — the presence of
@@ -34,7 +35,9 @@ const DYNAMIC_TAG_BINDING: &str = "_Tag";
 const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
 const DOC: &str = "Doc";
-/// The component constructors (their `%const X = inlineComponent(...)` bindings hoist+export).
+/// The component constructors. A top-level `%const X = inlineComponent(...)` binding stays
+/// document-local (contract R15 — no hoist/export; `%export` is the author's opt-in); the reader
+/// only attaches the binding name as the constructor's 2nd argument.
 const INLINE_COMPONENT: &str = "inlineComponent";
 const BLOCK_COMPONENT: &str = "blockComponent";
 /// Ambient-prelude tags for code/math spans (referenced as identifiers — no import emitted).
@@ -63,22 +66,10 @@ fn is_valid_tag_expr(expr: &Expression) -> bool {
     }
 }
 
-/// Is `expr` an *unwrapped* markup call — `h(...)` or `Fragment(...)` (NOT already `decode(...)`)?
-/// Used to decide whether a component body's return value needs a `decode(...)` wrap.
-fn is_markup_call(expr: &Expression) -> bool {
-    // An un-lowered `@`-form (a component body, before the lowering walk reaches it) is markup, as is
-    // a lowered `h(...)`/`Fragment(...)` call.
-    if matches!(expr, Expression::NotaMarkup(_)) {
-        return true;
-    }
-    let Expression::CallExpression(call) = expr else { return false };
-    let Expression::Identifier(callee) = &call.callee else { return false };
-    matches!(callee.name.as_str(), H | FRAGMENT)
-}
-
 /// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
-/// binding is F1-hoistable.
-fn is_f1_constructor(init: &Expression<'_>) -> bool {
+/// top-level binding gets the name attach (constructor 2nd argument — contract R15/F1: the
+/// returned function cannot otherwise recover its authored name for the debug manifest).
+fn is_component_constructor(init: &Expression<'_>) -> bool {
     let Expression::CallExpression(call) = init else { return false };
     let Expression::Identifier(callee) = &call.callee else { return false };
     matches!(callee.name.as_str(), INLINE_COMPONENT | BLOCK_COMPONENT)

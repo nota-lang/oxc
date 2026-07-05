@@ -674,7 +674,7 @@ mod h1_h2 {
         assert_eq!(capsi, MappingCapabilities::full());
 
         // The `%let` binding name `Colorized` (its *declaration*, the 1st occurrence) is part of
-        // the hoisted statement → embedded JS, full caps.
+        // the `%` statement (document-local under R15 — prepended into Doc) → embedded JS, full caps.
         let colorized_decl = offset_of(CANONICAL_NOTA, "Colorized = ") as usize; // unique form
         let (gd, _, capsd) = segment_at(&out.mappings, colorized_decl as u32);
         assert_eq!(&out.code[gd as usize..gd as usize + "Colorized".len()], "Colorized");

@@ -4,7 +4,7 @@
 //! `Expression::NotaMarkup(Document)` statement and every embedded `@`-form in place as
 //! `Expression::NotaMarkup`. This pass lowers those to the hyperscript `h`/`Fragment`/`decode`
 //! `Expression` AST: [`NotaLowering::lower_document_program`] rebuilds the document `Program`
-//! (Doc skeleton, `%` routing / F1 hoist+export, decode-wraps), then a [`VisitMut`] walk replaces
+//! (Doc skeleton, `%` routing + component name-attach — R15), then a [`VisitMut`] walk replaces
 //! each remaining embedded `NotaMarkup` bottom-up (the lowered result is re-walked, so a `@`-form
 //! nested inside embedded JS inside another `@`-form lowers too). Lowering *consumes* owned Nota
 //! nodes via `unbox()`. The emit primitives live in [`super::build`]; the whitespace algorithm in
@@ -438,7 +438,8 @@ impl<'a> NotaLowering<'a> {
     // Document
     // ===========================================================================================
 
-    /// Lower a whole document: route `%`/`%%%` statements (hoist / Doc prelude / F1), Scribble the
+    /// Lower a whole document: route `%`/`%%%` statements (`import`/`export` hoist; everything
+    /// else — component bindings included, R15 — prepends into Doc), Scribble the
     /// markup siblings, and assemble
     /// `export default function Doc() { …prelude…; return decode(Fragment(...)); }`.
     fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {
