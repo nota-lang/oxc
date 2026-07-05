@@ -4648,6 +4648,7 @@ pub mod walk {
         visitor.enter_node(kind);
         visitor.visit_span(&it.span);
         visitor.visit_nota_tag(&it.tag);
+        visitor.visit_nota_props(&it.props);
         visitor.visit_nota_verbatim_parts(&it.parts);
         visitor.leave_node(kind);
     }

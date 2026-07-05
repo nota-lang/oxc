@@ -2764,6 +2764,7 @@ impl ContentEq for NotaMath<'_> {
 impl ContentEq for NotaVerbatim<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.tag, &other.tag)
+            && ContentEq::content_eq(&self.props, &other.props)
             && ContentEq::content_eq(&self.parts, &other.parts)
     }
 }

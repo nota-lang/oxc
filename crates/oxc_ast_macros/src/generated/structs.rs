@@ -92,7 +92,7 @@ pub static STRUCTS: phf::Map<&'static str, StructDetails> = ::phf::Map {
         ("TemplateLiteral", StructDetails { field_order: Some(&[1, 0, 2, 3]) }),
         ("ExportDefaultDeclaration", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("JSXFragment", StructDetails { field_order: Some(&[1, 0, 2, 3, 4]) }),
-        ("NotaVerbatim", StructDetails { field_order: Some(&[1, 0, 2, 3]) }),
+        ("NotaVerbatim", StructDetails { field_order: Some(&[1, 0, 2, 3, 4]) }),
         ("StaticImport", StructDetails { field_order: None }),
         ("Decorator", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("ForStatement", StructDetails { field_order: Some(&[1, 0, 3, 4, 5, 6, 2]) }),

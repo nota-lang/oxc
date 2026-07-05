@@ -414,7 +414,12 @@ pub struct NotaMath<'a> {
     pub parts: Vec<'a, NotaVerbatimPart<'a>>,
 }
 
-/// `@tag|{ raw … |@form… }|` — a verbatim body (raw runs interleaved with re-entered `@`-forms).
+/// `@tag[props]|{ raw … |@form… }|` — a verbatim body (raw runs interleaved with re-entered
+/// `@`-forms).
+///
+/// `[props]` groups compose with the verbatim body exactly as they do with a braced element body
+/// (contract R19): they accumulate the same way, ahead of the same `|{…}|` delimiter that would
+/// otherwise open directly against the head.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
@@ -422,6 +427,7 @@ pub struct NotaVerbatim<'a> {
     pub node_id: Cell<NodeId>,
     pub span: Span,
     pub tag: NotaTag<'a>,
+    pub props: Vec<'a, NotaProp<'a>>,
     pub parts: Vec<'a, NotaVerbatimPart<'a>>,
 }
 

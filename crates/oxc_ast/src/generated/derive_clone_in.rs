@@ -9163,6 +9163,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatim<'_> {
             node_id: Default::default(),
             span: CloneIn::clone_in(&self.span, allocator),
             tag: CloneIn::clone_in(&self.tag, allocator),
+            props: CloneIn::clone_in(&self.props, allocator),
             parts: CloneIn::clone_in(&self.parts, allocator),
         }
     }
@@ -9172,6 +9173,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaVerbatim<'_> {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
             tag: CloneIn::clone_in_with_semantic_ids(&self.tag, allocator),
+            props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
             parts: CloneIn::clone_in_with_semantic_ids(&self.parts, allocator),
         }
     }

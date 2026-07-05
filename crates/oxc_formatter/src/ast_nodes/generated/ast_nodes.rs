@@ -11518,13 +11518,31 @@ impl<'a> AstNode<'a, NotaVerbatim<'a>> {
     pub fn tag(&self) -> &AstNode<'a, NotaTag<'a>> {
         let following_span_start = self
             .inner
+            .props
+            .first()
+            .map(|n| n.span().start)
+            .or_else(|| self.inner.parts.first().map(|n| n.span().start))
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.tag,
+            allocator: self.allocator,
+            parent: AstNodes::NotaVerbatim(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
+    pub fn props(&self) -> &AstNode<'a, Vec<'a, NotaProp<'a>>> {
+        let following_span_start = self
+            .inner
             .parts
             .first()
             .map(|n| n.span().start)
             .or(Some(self.following_span_start))
             .unwrap_or(0);
         self.allocator.alloc(AstNode {
-            inner: &self.inner.tag,
+            inner: &self.inner.props,
             allocator: self.allocator,
             parent: AstNodes::NotaVerbatim(transmute_self(self)),
             following_span_start,

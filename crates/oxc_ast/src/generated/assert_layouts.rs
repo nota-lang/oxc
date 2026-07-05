@@ -1976,12 +1976,13 @@ const _: () = {
     assert!(offset_of!(NotaMath, parts) == 16);
 
     // Padding: 4 bytes
-    assert!(size_of::<NotaVerbatim>() == 56);
+    assert!(size_of::<NotaVerbatim>() == 80);
     assert!(align_of::<NotaVerbatim>() == 8);
     assert!(offset_of!(NotaVerbatim, span) == 0);
     assert!(offset_of!(NotaVerbatim, node_id) == 8);
     assert!(offset_of!(NotaVerbatim, tag) == 16);
-    assert!(offset_of!(NotaVerbatim, parts) == 32);
+    assert!(offset_of!(NotaVerbatim, props) == 32);
+    assert!(offset_of!(NotaVerbatim, parts) == 56);
 
     assert!(size_of::<NotaVerbatimPart>() == 16);
     assert!(align_of::<NotaVerbatimPart>() == 8);
@@ -3986,12 +3987,13 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaMath, parts) == 16);
 
     // Padding: 0 bytes
-    assert!(size_of::<NotaVerbatim>() == 36);
+    assert!(size_of::<NotaVerbatim>() == 52);
     assert!(align_of::<NotaVerbatim>() == 4);
     assert!(offset_of!(NotaVerbatim, span) == 0);
     assert!(offset_of!(NotaVerbatim, node_id) == 8);
     assert!(offset_of!(NotaVerbatim, tag) == 12);
-    assert!(offset_of!(NotaVerbatim, parts) == 20);
+    assert!(offset_of!(NotaVerbatim, props) == 20);
+    assert!(offset_of!(NotaVerbatim, parts) == 36);
 
     assert!(size_of::<NotaVerbatimPart>() == 8);
     assert!(align_of::<NotaVerbatimPart>() == 4);

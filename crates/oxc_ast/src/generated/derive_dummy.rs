@@ -3547,6 +3547,7 @@ impl<'a> Dummy<'a> for NotaVerbatim<'a> {
             node_id: Dummy::dummy(allocator),
             span: Dummy::dummy(allocator),
             tag: Dummy::dummy(allocator),
+            props: Dummy::dummy(allocator),
             parts: Dummy::dummy(allocator),
         }
     }

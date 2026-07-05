@@ -4890,6 +4890,7 @@ pub mod walk_mut {
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
         visitor.visit_nota_tag(&mut it.tag);
+        visitor.visit_nota_props(&mut it.props);
         visitor.visit_nota_verbatim_parts(&mut it.parts);
         visitor.leave_node(kind);
     }

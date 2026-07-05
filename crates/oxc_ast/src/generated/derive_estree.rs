@@ -3542,6 +3542,7 @@ impl ESTree for NotaVerbatim<'_> {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaVerbatim"));
         state.serialize_field("tag", &self.tag);
+        state.serialize_field("props", &self.props);
         state.serialize_field("parts", &self.parts);
         state.serialize_span(self.span);
         state.end();

@@ -15712,15 +15712,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `tag`
+    /// * `props`
     /// * `parts`
     #[inline]
     pub fn nota_form_verbatim(
         self,
         span: Span,
         tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaForm<'a> {
-        NotaForm::Verbatim(self.alloc_nota_verbatim(span, tag, parts))
+        NotaForm::Verbatim(self.alloc_nota_verbatim(span, tag, props, parts))
     }
 
     /// Build a [`NotaMarkupKind::Document`].
@@ -16585,15 +16587,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `tag`
+    /// * `props`
     /// * `parts`
     #[inline]
     pub fn nota_verbatim(
         self,
         span: Span,
         tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> NotaVerbatim<'a> {
-        NotaVerbatim { node_id: Default::default(), span, tag, parts }
+        NotaVerbatim { node_id: Default::default(), span, tag, props, parts }
     }
 
     /// Build a [`NotaVerbatim`], and store it in the memory arena.
@@ -16604,15 +16608,17 @@ impl<'a> AstBuilder<'a> {
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
     /// * `tag`
+    /// * `props`
     /// * `parts`
     #[inline]
     pub fn alloc_nota_verbatim(
         self,
         span: Span,
         tag: NotaTag<'a>,
+        props: Vec<'a, NotaProp<'a>>,
         parts: Vec<'a, NotaVerbatimPart<'a>>,
     ) -> Box<'a, NotaVerbatim<'a>> {
-        Box::new_in(self.nota_verbatim(span, tag, parts), self.allocator)
+        Box::new_in(self.nota_verbatim(span, tag, props, parts), self.allocator)
     }
 
     /// Build a [`NotaVerbatimPart::Raw`].

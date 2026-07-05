@@ -237,6 +237,29 @@ fn self_closing_props_group_then_raw_markup() {
 }
 
 #[test]
+fn props_then_verbatim_body() {
+    // `[props]`'s closing `]` is peeked raw for a continuation (contract R19): `|{` opens a
+    // verbatim body exactly as `{` opens a braced one. This used to fall through the peek's
+    // catch-all as self-closing, silently leaking `|{...}|` out as sibling markup text.
+    nota_expr(
+        r#"@CodeBlock[lang: "hello"]|{some code}|"#,
+        r#"h(CodeBlock, { lang: "hello" }, [String.raw`some code`])"#,
+    );
+    // Multiple prop groups still accumulate ahead of the verbatim body.
+    nota_expr(
+        r#"@CodeBlock[lang: "hello"][foo: 1]|{code}|"#,
+        r#"h(CodeBlock, { lang: "hello", foo: 1 }, [String.raw`code`])"#,
+    );
+}
+
+#[test]
+fn self_closing_props_then_bare_pipe_is_literal() {
+    // A `|` after `]` NOT immediately followed by `{` is not a verbatim trigger — self-closing,
+    // same as any other trailing byte (mirrors `self_closing_props_group_then_raw_markup`).
+    nota_expr(r#"@p{@hr[class:c]|x}"#, r#"h("p", {}, [h("hr", { class: c }, []), "|x"])"#);
+}
+
+#[test]
 fn math_armed_paren_then_raw_tex() {
     // The wave-1 park behavior, now armed: `|@(x)`'s `)` is validated without advancing, then
     // parked, so the trailing `\frac{…}` stays raw TeX, never JS-lexed. `|@(x)` is a SIBLING part

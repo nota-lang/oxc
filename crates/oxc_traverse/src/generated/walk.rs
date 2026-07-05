@@ -6222,6 +6222,12 @@ unsafe fn walk_nota_verbatim<'a, State, Tr: Traverse<'a, State>>(
         (node as *mut u8).add(ancestor::OFFSET_NOTA_VERBATIM_TAG) as *mut NotaTag,
         ctx,
     );
+    ctx.retag_stack(AncestorType::NotaVerbatimProps);
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_VERBATIM_PROPS) as *mut Vec<NotaProp>)
+    {
+        walk_nota_prop(traverser, item as *mut _, ctx);
+    }
     ctx.retag_stack(AncestorType::NotaVerbatimParts);
     for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_VERBATIM_PARTS)
         as *mut Vec<NotaVerbatimPart>)

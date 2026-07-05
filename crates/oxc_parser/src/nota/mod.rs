@@ -192,16 +192,21 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     return NotaForm::Fragment(self.ast.alloc(frag));
                 };
                 match self.commit_head(&head, colon_live) {
-                    MarkupTrigger::Brace | MarkupTrigger::Bracket => NotaForm::Element({
-                        let e = self.parse_element(span_start, head);
-                        self.ast.alloc(e)
-                    }),
+                    MarkupTrigger::Brace | MarkupTrigger::Bracket => {
+                        self.parse_element(span_start, head)
+                    }
                     MarkupTrigger::Colon => NotaForm::Element({
                         let e = self.parse_colon_body(span_start, head);
                         self.ast.alloc(e)
                     }),
                     MarkupTrigger::Verbatim => NotaForm::Verbatim({
-                        let v = self.parse_verbatim_element(span_start, head);
+                        let body_start = head.end + 2;
+                        let v = self.parse_verbatim_element(
+                            span_start,
+                            head,
+                            self.ast.vec(),
+                            body_start,
+                        );
                         self.ast.alloc(v)
                     }),
                     // No trigger glued to the head ⇒ interpolation.
@@ -301,17 +306,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Parse `@head [props]* { body }?`. Entered with the `{`/`[` delimiter as the current token.
-    fn parse_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaElement<'a> {
+    /// Parse `@head [props]* { body }?` or `@head [props]* |{ body }|`. Entered with the `{`/`[`
+    /// delimiter as the current token.
+    fn parse_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaForm<'a> {
         let mut props = self.ast.vec();
 
         // `[props]` groups, then the body-vs-self-closing decision. A group's `]` is validated but
         // NOT advanced past ([`Self::parse_props_group`]): the JS lexer's one-token lookahead must
         // never read the bytes after the `]`, which in a markup / verbatim host are raw text. The
         // continuation is a raw byte peek at the `]`'s end, re-lexed in the deliberate mode: `[` →
-        // another group, `{` → a braced body, anything else → self-closing (a `:`/`|` after `]`
-        // does not trigger — it stays literal text).
+        // another group, `{` → a braced body, `|{` → a verbatim body (props compose with verbatim
+        // exactly as with a braced body — contract R19), anything else → self-closing (a `:`
+        // after `]` does not trigger — it stays literal text).
         let mut self_closing_end = None;
+        let mut verbatim_start = None;
         while self.at(Kind::LBrack) {
             self.parse_props_group(&mut props);
             if self.has_fatal_error() {
@@ -324,6 +332,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.nota_seek_to(bracket_end);
                     break;
                 }
+                Some(b'|') if byte_at(self.source_text, bracket_end + 1) == Some(b'{') => {
+                    // Verbatim body: scanned by absolute offset, like the bare `@head|{…}|` form —
+                    // the boundary token stays current (the JS lexer must not eat the `|`; mirrors
+                    // `commit_head`'s `MarkupTrigger::Verbatim` arm).
+                    verbatim_start = Some(bracket_end + 2);
+                    break;
+                }
                 _ => {
                     // Self-closing: resume the host region past the `]`, uniformly across hosts —
                     // in a `Js` host, seeking at `bracket_end` re-lexes exactly the token a plain
@@ -333,6 +348,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     break;
                 }
             }
+        }
+
+        if let Some(body_start) = verbatim_start {
+            let v = self.parse_verbatim_element(span_start, head, props, body_start);
+            return NotaForm::Verbatim(self.ast.alloc(v));
         }
 
         let (children, end) = if let Some(end) = self_closing_end {
@@ -348,7 +368,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         let span = Span::new(span_start, end);
         let tag = self.head_to_tag(head);
-        self.ast.nota_element(span, tag, props, children, /* is_colon */ false)
+        NotaForm::Element(
+            self.ast.alloc(self.ast.nota_element(span, tag, props, children, /* is_colon */ false)),
+        )
     }
 
     /// `@{ body }` → a fragment node. `@` already consumed.
@@ -1041,13 +1063,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {
-    /// Parse `@head|{ … }|` — a verbatim-body element. `head.end` points at the `|` of `|{`.
-    fn parse_verbatim_element(&mut self, span_start: u32, head: NotaHead<'a>) -> NotaVerbatim<'a> {
-        let body_start = head.end + 2; // past `|{`
+    /// Parse `@head|{ … }|` — a verbatim-body element, with `props` already collected (empty for
+    /// the bare `@head|{…}|` form; from preceding `[props]` groups when reached via
+    /// [`Self::parse_element`]). `body_start` points just past the opening `|{`.
+    fn parse_verbatim_element(
+        &mut self,
+        span_start: u32,
+        head: NotaHead<'a>,
+        props: NotaProps<'a>,
+        body_start: u32,
+    ) -> NotaVerbatim<'a> {
         let (parts, after) = self.collect_verbatim_body(body_start);
         let span = Span::new(span_start, after);
         let tag = self.head_to_tag(head);
-        let element = self.ast.nota_verbatim(span, tag, parts);
+        let element = self.ast.nota_verbatim(span, tag, props, parts);
         self.resume_at(after);
         element
     }

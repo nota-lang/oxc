@@ -204,6 +204,22 @@ fn skip_ws(source: &str, from: u32) -> u32 {
     p as u32
 }
 
+/// From the offset right after a verbatim element's last prop, find the `|{` that opens its body.
+/// One or more further `[props]` groups may still follow (`@tag[a][b]|{…}|`); a well-formed parse
+/// guarantees the gap holds only group/separator bytes (`[`, `]`, `,`, whitespace — never inside a
+/// prop's own span), so skipping those lands exactly on the literal `|{`.
+fn find_verbatim_open(source: &str, mut at: u32) -> u32 {
+    loop {
+        if byte_at(source, at) == Some(b'|') && byte_at(source, at + 1) == Some(b'{') {
+            return at;
+        }
+        match byte_at(source, at) {
+            Some(b'[' | b']' | b',' | b' ' | b'\t' | b'\r' | b'\n') => at += 1,
+            _ => return at, // malformed input — bail at the current position
+        }
+    }
+}
+
 impl<'a> Highlighter<'a> {
     fn emit(&mut self, start: u32, end: u32, kind: NotaHighlightKind) {
         if end > start {
@@ -562,7 +578,16 @@ impl<'a> Visit<'a> for Highlighter<'a> {
 
     fn visit_nota_verbatim(&mut self, it: &NotaVerbatim<'a>) {
         let head_end = self.emit_head(it.span.start, &it.tag);
-        self.emit(head_end, head_end + 2, NotaHighlightKind::Sigil); // `|{`
+        for prop in &it.props {
+            self.visit_nota_prop(prop);
+        }
+        // With no props the `|{` sits right at the head's end; with props it opens right after
+        // the last `[props]` group's close instead (contract R19).
+        let open = match it.props.last() {
+            None => head_end,
+            Some(last) => find_verbatim_open(self.source, last.span().end),
+        };
+        self.emit(open, open + 2, NotaHighlightKind::Sigil); // `|{`
         let end = it.span.end;
         if end >= 2 && &self.source[end as usize - 2..end as usize] == "}|" {
             self.emit(end - 2, end, NotaHighlightKind::Sigil);
@@ -855,6 +880,32 @@ mod tests {
         assert!(has(&spans, K::TagHost, "em"));
         assert!(spans.iter().any(|(k, t)| *k == K::Verbatim && t.contains("raw ")));
         assert!(spans.iter().any(|(k, t)| *k == K::Verbatim && t.contains(" tail")));
+    }
+
+    #[test]
+    fn verbatim_with_props() {
+        let spans = hl("@CodeBlock[lang: \"py\"]|{\nraw |@em{x} tail\n}|\n");
+        assert!(has(&spans, K::TagComponent, "CodeBlock"));
+        assert!(has(&spans, K::PropName, "lang"));
+        assert!(has(&spans, K::JsString, "\"py\""));
+        assert!(has(&spans, K::Sigil, "|{"));
+        assert!(has(&spans, K::Sigil, "}|"));
+        assert!(has(&spans, K::TagHost, "em"));
+        assert!(spans.iter().any(|(k, t)| *k == K::Verbatim && t.contains("raw ")));
+        // The prop's own text must not bleed into the `|{` sigil span.
+        assert!(!spans.iter().any(|(k, t)| *k == K::Sigil && t.contains("py")));
+    }
+
+    #[test]
+    fn verbatim_with_chained_prop_groups() {
+        // Multiple `[props]` groups before the verbatim body: the `|{` search must walk past every
+        // group's `]`/`[`, not just the first.
+        let spans = hl("@CodeBlock[lang: \"py\"][foo: 1]|{raw}|\n");
+        assert!(has(&spans, K::PropName, "lang"));
+        assert!(has(&spans, K::PropName, "foo"));
+        assert!(has(&spans, K::Sigil, "|{"));
+        assert!(has(&spans, K::Sigil, "}|"));
+        assert!(has(&spans, K::Verbatim, "raw"));
     }
 
     #[test]

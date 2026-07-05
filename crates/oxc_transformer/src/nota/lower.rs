@@ -389,9 +389,10 @@ impl<'a> NotaLowering<'a> {
     }
 
     fn lower_verbatim(&mut self, v: NotaVerbatim<'a>) -> Expression<'a> {
-        let NotaVerbatim { span, tag, parts, .. } = v;
+        let NotaVerbatim { span, tag, props, parts, .. } = v;
+        let props = self.lower_props(props);
         let children = self.lower_raw_parts(parts);
-        self.lower_tagged(span, tag, self.ast.vec(), children)
+        self.lower_tagged(span, tag, props, children)
     }
 
     // ===========================================================================================

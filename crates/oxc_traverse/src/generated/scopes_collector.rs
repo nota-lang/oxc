@@ -2173,6 +2173,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline]
     fn visit_nota_verbatim(&mut self, it: &NotaVerbatim<'a>) {
         self.visit_nota_tag(&it.tag);
+        self.visit_nota_props(&it.props);
         self.visit_nota_verbatim_parts(&it.parts);
     }
 

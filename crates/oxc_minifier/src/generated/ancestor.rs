@@ -346,10 +346,11 @@ pub(crate) enum AncestorType {
     NotaCodeParts = 322,
     NotaMathParts = 323,
     NotaVerbatimTag = 324,
-    NotaVerbatimParts = 325,
-    NotaEmphasisChildren = 326,
-    NotaHeadingChildren = 327,
-    NotaListItemChildren = 328,
+    NotaVerbatimProps = 325,
+    NotaVerbatimParts = 326,
+    NotaEmphasisChildren = 327,
+    NotaHeadingChildren = 328,
+    NotaListItemChildren = 329,
 }
 
 /// Ancestor type used in AST traversal.
@@ -965,6 +966,7 @@ pub enum Ancestor<'a, 't> {
     NotaCodeParts(NotaCodeWithoutParts<'a, 't>) = AncestorType::NotaCodeParts as u16,
     NotaMathParts(NotaMathWithoutParts<'a, 't>) = AncestorType::NotaMathParts as u16,
     NotaVerbatimTag(NotaVerbatimWithoutTag<'a, 't>) = AncestorType::NotaVerbatimTag as u16,
+    NotaVerbatimProps(NotaVerbatimWithoutProps<'a, 't>) = AncestorType::NotaVerbatimProps as u16,
     NotaVerbatimParts(NotaVerbatimWithoutParts<'a, 't>) = AncestorType::NotaVerbatimParts as u16,
     NotaEmphasisChildren(NotaEmphasisWithoutChildren<'a, 't>) =
         AncestorType::NotaEmphasisChildren as u16,
@@ -2050,7 +2052,10 @@ impl<'a, 't> Ancestor<'a, 't> {
 
     #[inline]
     pub fn is_nota_verbatim(self) -> bool {
-        matches!(self, Self::NotaVerbatimTag(_) | Self::NotaVerbatimParts(_))
+        matches!(
+            self,
+            Self::NotaVerbatimTag(_) | Self::NotaVerbatimProps(_) | Self::NotaVerbatimParts(_)
+        )
     }
 
     #[inline]
@@ -2446,7 +2451,7 @@ impl<'a, 't> Ancestor<'a, 't> {
 
     #[inline]
     pub fn is_parent_of_nota_prop(self) -> bool {
-        matches!(self, Self::NotaElementProps(_))
+        matches!(self, Self::NotaElementProps(_) | Self::NotaVerbatimProps(_))
     }
 
     #[inline]
@@ -2796,6 +2801,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::NotaCodeParts(a) => a.address(),
             Self::NotaMathParts(a) => a.address(),
             Self::NotaVerbatimTag(a) => a.address(),
+            Self::NotaVerbatimProps(a) => a.address(),
             Self::NotaVerbatimParts(a) => a.address(),
             Self::NotaEmphasisChildren(a) => a.address(),
             Self::NotaHeadingChildren(a) => a.address(),
@@ -19637,6 +19643,7 @@ impl<'a, 't> GetAddress for NotaMathWithoutParts<'a, 't> {
 pub(crate) const OFFSET_NOTA_VERBATIM_NODE_ID: usize = offset_of!(NotaVerbatim, node_id);
 pub(crate) const OFFSET_NOTA_VERBATIM_SPAN: usize = offset_of!(NotaVerbatim, span);
 pub(crate) const OFFSET_NOTA_VERBATIM_TAG: usize = offset_of!(NotaVerbatim, tag);
+pub(crate) const OFFSET_NOTA_VERBATIM_PROPS: usize = offset_of!(NotaVerbatim, props);
 pub(crate) const OFFSET_NOTA_VERBATIM_PARTS: usize = offset_of!(NotaVerbatim, parts);
 
 #[repr(transparent)]
@@ -19660,6 +19667,14 @@ impl<'a, 't> NotaVerbatimWithoutTag<'a, 't> {
     }
 
     #[inline]
+    pub fn props(self) -> &'t Vec<'a, NotaProp<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_PROPS)
+                as *const Vec<'a, NotaProp<'a>>)
+        }
+    }
+
+    #[inline]
     pub fn parts(self) -> &'t Vec<'a, NotaVerbatimPart<'a>> {
         unsafe {
             &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_PARTS)
@@ -19669,6 +19684,47 @@ impl<'a, 't> NotaVerbatimWithoutTag<'a, 't> {
 }
 
 impl<'a, 't> GetAddress for NotaVerbatimWithoutTag<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaVerbatimWithoutProps<'a, 't>(
+    pub(crate) *const NotaVerbatim<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaVerbatimWithoutProps<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn tag(self) -> &'t NotaTag<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_TAG) as *const NotaTag<'a>) }
+    }
+
+    #[inline]
+    pub fn parts(self) -> &'t Vec<'a, NotaVerbatimPart<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_PARTS)
+                as *const Vec<'a, NotaVerbatimPart<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaVerbatimWithoutProps<'a, 't> {
     #[inline]
     fn address(&self) -> Address {
         unsafe { Address::from_ptr(self.0) }
@@ -19698,6 +19754,14 @@ impl<'a, 't> NotaVerbatimWithoutParts<'a, 't> {
     #[inline]
     pub fn tag(self) -> &'t NotaTag<'a> {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_TAG) as *const NotaTag<'a>) }
+    }
+
+    #[inline]
+    pub fn props(self) -> &'t Vec<'a, NotaProp<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_VERBATIM_PROPS)
+                as *const Vec<'a, NotaProp<'a>>)
+        }
     }
 }
 
