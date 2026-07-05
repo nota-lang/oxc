@@ -201,26 +201,18 @@ fn self_closing_with_props_no_body() {
 }
 
 #[test]
-fn dynamic_tag_iife() {
-    nota_expr(
-        "@(getTag()){hi}",
-        r#"(() => { const _Tag = getTag(); return h(_Tag, {}, ["hi"]); })()"#,
-    );
-}
-
-#[test]
 fn dynamic_tag_direct() {
-    // A head already valid as a tag (Capitalized ident / member expr) emits directly.
+    // Every `@(expr)` head emits directly as `h`'s first argument — `h` is a plain function, so
+    // there is no grammatical restriction on what may sit in tag position (unlike JSX, which needs
+    // a bound identifier there). Capitalized ident, static member, and arbitrary expression alike.
     nota_expr("@(Box){hi}", r#"h(Box, {}, ["hi"])"#);
     nota_expr("@(ui.Card){hi}", r#"h(ui.Card, {}, ["hi"])"#);
+    nota_expr("@(getTag()){hi}", r#"h(getTag(), {}, ["hi"])"#);
 }
 
 #[test]
 fn dynamic_tag_with_props() {
-    nota_expr(
-        "@(comps[k])[x:1]{hi}",
-        r#"(() => { const _Tag = comps[k]; return h(_Tag, { x: 1 }, ["hi"]); })()"#,
-    );
+    nota_expr("@(comps[k])[x:1]{hi}", r#"h(comps[k], { x: 1 }, ["hi"])"#);
 }
 
 #[test]
@@ -463,7 +455,7 @@ fn colon_positional_line_start_fires() {
     // The rule is uniform over head shapes: Capitalized (component) and `@(expr)` (dynamic) heads
     // at a line start fire too.
     assert!(nota_doc("@Cap: hi\n").contains(r#"h(Cap, {}, ["hi"])"#), "Capitalized head fires");
-    assert!(nota_doc("@(t): hi\n").contains(r#"h(_Tag, {}, ["hi"])"#), "dynamic head fires");
+    assert!(nota_doc("@(t): hi\n").contains(r#"h(t, {}, ["hi"])"#), "dynamic head fires");
 }
 
 #[test]
@@ -1956,16 +1948,6 @@ mod fuzz_findings_2 {
         assert!(
             doc_lowers_clean("%const { x } = lib\n@p{@(x)}\n"),
             "non-reserved destructure is OK"
-        );
-    }
-
-    // [RUNTIME-BREAK] dynamic-tag `@(_Tag)` whose expr references `_Tag` → `const _Tag = _Tag` (TDZ).
-    #[test]
-    fn fuzz2_dynamic_tag_binding_should_not_self_reference() {
-        let js = nota_expr_raw("@(_Tag){x}");
-        assert!(
-            !js.contains("const _Tag = _Tag"),
-            "dynamic-tag `_Tag` self-references (TDZ): {js}"
         );
     }
 

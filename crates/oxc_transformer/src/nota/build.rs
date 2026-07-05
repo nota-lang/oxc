@@ -13,8 +13,8 @@ use oxc_syntax::identifier::is_identifier_name;
 use super::lower::NotaLowering;
 use super::mapping::NotaMappingKind;
 use super::{
-    BLOCK_COMPONENT, DECODE, DOC, DYNAMIC_TAG_BINDING, FOR_KEY_PARAM, FRAGMENT, H,
-    INLINE_COMPONENT, is_component_constructor,
+    BLOCK_COMPONENT, DECODE, DOC, FOR_KEY_PARAM, FRAGMENT, H, INLINE_COMPONENT,
+    is_component_constructor,
 };
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
@@ -199,11 +199,11 @@ impl<'a> NotaLowering<'a> {
         )
     }
 
-    /// Pick a fresh identifier name for a reader-injected binding (`_i`, `_Tag`) that cannot collide
-    /// with a user identifier in the construct at `span`. Returns `candidate` unless it appears as a
-    /// whole word in the construct's source (`@for(_i of …)`, `@(_Tag)`), in which case a numeric
-    /// suffix is appended until free. (Scanning the source over-approximates — a name in a string or
-    /// comment also bumps — which only ever yields a *more* distinct name, never a colliding one.)
+    /// Pick a fresh identifier name for a reader-injected binding (`_i`) that cannot collide with a
+    /// user identifier in the construct at `span`. Returns `candidate` unless it appears as a whole
+    /// word in the construct's source (`@for(_i of …)`), in which case a numeric suffix is appended
+    /// until free. (Scanning the source over-approximates — a name in a string or comment also
+    /// bumps — which only ever yields a *more* distinct name, never a colliding one.)
     fn fresh_name(&self, candidate: &'static str, span: Span) -> &'a str {
         /// Does `needle` occur in `hay` as a whole word? Boundaries are JS-identifier chars in the
         /// ASCII class `[0-9A-Za-z_$]` — a multibyte char conservatively counts as a boundary
@@ -225,38 +225,6 @@ impl<'a> NotaLowering<'a> {
             }
             n += 1;
         }
-    }
-
-    /// `(() => { const _Tag = <expr>; return h(_Tag, { props }, [children]); })()` — dynamic tag.
-    pub(super) fn build_dynamic_iife(
-        &self,
-        span: Span,
-        tag_expr: Expression<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let empty = Span::empty(span.start);
-        let tag_binding = self.fresh_name(DYNAMIC_TAG_BINDING, span);
-
-        // `const _Tag = <expr>;`
-        let binding = self.ast.binding_pattern_binding_identifier(empty, tag_binding);
-        let declarator = self.ast.variable_declarator(
-            empty,
-            VariableDeclarationKind::Const,
-            binding,
-            NONE,
-            Some(tag_expr),
-            false,
-        );
-        let decl = self.ast.declaration_variable(
-            empty,
-            VariableDeclarationKind::Const,
-            self.ast.vec1(declarator),
-            false,
-        );
-
-        let h_call = self.build_h(span, self.ident(span.start, tag_binding), props, children);
-        self.iife(span, self.ast.vec1(Statement::from(decl)), h_call)
     }
 
     /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))`.

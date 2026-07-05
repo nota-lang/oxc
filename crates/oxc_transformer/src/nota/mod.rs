@@ -29,8 +29,6 @@ pub use mapping::{NotaMappingKind, NotaMappingMark};
 const H: &str = "h";
 const FRAGMENT: &str = "Fragment";
 const DECODE: &str = "decode";
-/// The fresh component-cased binding for a dynamic-tag IIFE (`@(getTag()){…}`).
-const DYNAMIC_TAG_BINDING: &str = "_Tag";
 /// The fresh map-index parameter injected as the `@for` body's `Fragment` key.
 const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
@@ -46,25 +44,6 @@ const CODE_BLOCK: &str = "CodeBlock";
 /// `Tex`, not `Math` (contract R14): the ambient identifier must not capture the JS `Math` global —
 /// the integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
 const MATH: &str = "Tex";
-
-/// A tag name is a *component* (identifier) iff it starts with an uppercase ASCII letter; otherwise
-/// it is a *host* element (string tag).
-fn is_component_name(name: &str) -> bool {
-    name.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
-}
-
-/// A dynamic-tag head expression is "already a valid tag" (emit directly, no `_Tag` binding) iff it
-/// is a Capitalized identifier or a *static* member expression — a name JSX would also accept as a
-/// tag (`@(Box)` → `h(Box,…)`, `@(ui.Card)` → `h(ui.Card,…)`). A *computed* member (`@(comps[k])`) or
-/// any other expression goes through the `_Tag` IIFE.
-fn is_valid_tag_expr(expr: &Expression) -> bool {
-    match expr {
-        Expression::Identifier(id) => is_component_name(&id.name),
-        // Static member chains only (`a.b.c`); the object side may be anything name-like.
-        Expression::StaticMemberExpression(_) => true,
-        _ => false,
-    }
-}
 
 /// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
 /// top-level binding gets the name attach (constructor 2nd argument — contract R15/F1: the

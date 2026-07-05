@@ -18,7 +18,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
 
 use super::mapping::{NotaMappingKind, NotaMappingMark};
-use super::{is_valid_tag_expr, scribble};
+use super::scribble;
 
 /// The result of a Nota lowering pass: Volar mapping marks + lowering diagnostics.
 ///
@@ -228,8 +228,9 @@ impl<'a> NotaLowering<'a> {
         self.lower_tagged(span, tag, props, children)
     }
 
-    /// Shared host/component/dynamic tag dispatch: `h(tag, { props }, [children])`, or the
-    /// `_Tag` IIFE for a non-trivial `@(expr)` head.
+    /// Shared host/component/dynamic tag dispatch: `h(tag, { props }, [children])` — `tag` is a
+    /// string literal, a component identifier, or (dynamic) the head expression verbatim. `h` is a
+    /// plain function, so any expression is valid in argument position; no binding is needed.
     fn lower_tagged(
         &mut self,
         span: Span,
@@ -251,13 +252,8 @@ impl<'a> NotaLowering<'a> {
             }
             NotaTag::Dynamic(d) => {
                 let expr = d.unbox().expression;
-                if is_valid_tag_expr(&expr) {
-                    self.record_nota_mapping(expr.span(), NotaMappingKind::ComponentIdentifier);
-                    self.build_h(span, expr, props, children)
-                } else {
-                    self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
-                    self.build_dynamic_iife(span, expr, props, children)
-                }
+                self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
+                self.build_h(span, expr, props, children)
             }
         }
     }
