@@ -44,6 +44,10 @@ const CODE_BLOCK: &str = "CodeBlock";
 /// `Tex`, not `Math` (contract R14): the ambient identifier must not capture the JS `Math` global —
 /// the integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
 const MATH: &str = "Tex";
+/// Ambient-prelude heading slot (contract R18f): `#` heading *sugar* lowers to
+/// `h(Heading, { rank: N }, […])` — a free identifier reference (like `Tex`/`CodeInline`, no import
+/// emitted). Raw `@hN{…}` element forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
+const HEADING: &str = "Heading";
 
 /// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
 /// top-level binding gets the name attach (constructor 2nd argument — contract R15/F1: the

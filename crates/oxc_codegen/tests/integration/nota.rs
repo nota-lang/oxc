@@ -500,7 +500,7 @@ fn colon_bounded_clip_at_range_end() {
     // A heading's colon child is clipped at the heading's line end; the next line is outer text.
     let js = nota_doc("# @a: t\ncont\n");
     assert!(
-        js.contains(r#"h("h1", {}, [h("a", {}, ["t"])])"#),
+        js.contains(r#"h(Heading, { rank: 1 }, [h("a", {}, ["t"])])"#),
         "heading colon child clipped at the line end: {js}",
     );
     assert!(js.contains(r#""cont""#), "the next line is outer text: {js}");
@@ -806,7 +806,7 @@ fn escaped_emphasis_marker_is_literal() {
 fn escaped_hash_dash_at_line_start_not_construct() {
     // `\#`/`\-` at line start: the first char is `\`, not the marker, so no heading/list fires.
     let js = nota_doc("\\# not a heading\n\\- not a list\n");
-    assert!(!js.contains(r#"h("h1""#), "no heading: {js}");
+    assert!(!js.contains("h(Heading"), "no heading: {js}");
     assert!(!js.contains(r#"h("nota-ul-li""#), "no list: {js}");
 }
 
@@ -833,21 +833,24 @@ fn emphasis_clamps_at_newline() {
 #[test]
 fn heading_h1() {
     let js = nota_doc("# Title\n");
-    assert!(js.contains(r#"h("h1", {}, ["Title"])"#), "{js}");
+    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Title"])"#), "{js}");
 }
 
 #[test]
 fn heading_levels() {
     let js = nota_doc("### Sub *bit*\n");
-    // `### Sub *bit*` → h("h3", {}, ["Sub ", h("strong", {}, ["bit"])]).
-    assert!(js.contains(r#"h("h3", {}, ["Sub ", h("strong", {}, ["bit"])])"#), "{js}");
+    // `### Sub *bit*` → h(Heading, { rank: 3 }, ["Sub ", h("strong", {}, ["bit"])]).
+    assert!(js.contains(r#"h(Heading, { rank: 3 }, ["Sub ", h("strong", {}, ["bit"])])"#), "{js}");
 }
 
 #[test]
 fn heading_all_six_levels() {
     let js = nota_doc("# a\n## b\n### c\n#### d\n##### e\n###### f\n");
     for (n, body) in [(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e"), (6, "f")] {
-        assert!(js.contains(&format!(r#"h("h{n}", {{}}, ["{body}"])"#)), "h{n}: {js}");
+        assert!(
+            js.contains(&format!(r#"h(Heading, {{ rank: {n} }}, ["{body}"])"#)),
+            "rank {n}: {js}"
+        );
     }
 }
 
@@ -855,15 +858,27 @@ fn heading_all_six_levels() {
 fn heading_seven_hashes_is_not_heading() {
     // 7+ `#` is not a heading (1–6 only); it stays literal text.
     let js = nota_doc("####### too many\n");
-    assert!(!js.contains(r#"h("h7""#), "no h7: {js}");
-    assert!(!js.contains(r#"h("h"#), "no heading at all: {js}");
+    assert!(!js.contains("rank: 7"), "no rank-7 heading: {js}");
+    assert!(!js.contains("h(Heading"), "no heading at all: {js}");
 }
 
 #[test]
 fn hash_without_space_is_literal() {
     // `#tag` (no space after the run) is not a heading.
     let js = nota_doc("#tag here\n");
-    assert!(!js.contains(r#"h("h1""#), "{js}");
+    assert!(!js.contains("h(Heading"), "{js}");
+}
+
+#[test]
+fn heading_sugar_relowers_but_raw_element_stays_host() {
+    // R18f: `#` heading *sugar* re-lowers to the ambient `Heading` slot (numbered/Toc'd by the
+    // prelude), but a raw `@hN{…}` element form stays a plain host tag — the unnumbered/un-Toc'd
+    // escape hatch. A document mixing both must emit each form distinctly.
+    let js = nota_doc("# Sugar\n@h2{Raw}\n");
+    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Sugar"])"#), "sugar → Heading slot: {js}");
+    assert!(js.contains(r#"h("h2", {}, ["Raw"])"#), "raw @h2 stays a host tag: {js}");
+    assert!(!js.contains(r#"h("h1""#), "sugar does NOT emit a host h1: {js}");
+    assert!(!js.contains("rank: 2"), "the raw @h2 carries no rank prop: {js}");
 }
 
 // ----- Lists -----
@@ -944,15 +959,16 @@ fn line_start_sugar_chains_after_a_construct() {
     // line-start constructs (each resumes at a line start that may open the next), at the document
     // start and after a `\n` alike.
     assert!(
-        nota_doc("- a\n- b\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        nota_doc("- a\n- b\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
         "heading after a list (at document start)"
     );
     assert!(
-        nota_doc("intro\n- a\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        nota_doc("intro\n- a\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
         "heading after a list (after a paragraph)"
     );
     assert!(
-        nota_doc("%%%\nconst x = 1;\n%%%\n# Title\n").contains(r#"h("h1", {}, ["Title"])"#),
+        nota_doc("%%%\nconst x = 1;\n%%%\n# Title\n")
+            .contains(r#"h(Heading, { rank: 1 }, ["Title"])"#),
         "heading after a %%% fence"
     );
     assert!(
@@ -969,15 +985,16 @@ fn line_start_sugar_after_a_colon_block() {
     // `Kind::At` arm now runs `consume_line_start_constructs` when it resumes at a line start).
     // The mega-test's `## Nested statements` (after the `@section:` block) was the field failure.
     assert!(
-        nota_doc("@section:\n  body\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        nota_doc("@section:\n  body\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
         "heading right after a block colon body (dedent ends the body)"
     );
     assert!(
-        nota_doc("@summary: inline\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        nota_doc("@summary: inline\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
         "heading right after an inline colon body"
     );
     assert!(
-        nota_doc("@section:\n  body\n\n# After\n").contains(r#"h("h1", {}, ["After"])"#),
+        nota_doc("@section:\n  body\n\n# After\n")
+            .contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
         "heading after a colon body with an intervening blank line"
     );
     assert!(
@@ -990,7 +1007,10 @@ fn line_start_sugar_after_a_colon_block() {
     );
     // Blank lines *inside* the indented body still belong to it.
     let js = nota_doc("@section:\n  a\n\n  b\n\n# After\n");
-    assert!(js.contains(r#"h("h1", {}, ["After"])"#), "heading after internal blanks: {js}");
+    assert!(
+        js.contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        "heading after internal blanks: {js}"
+    );
     assert_eq!(js.matches(r#"h("section""#).count(), 1, "one section only: {js}");
     assert!(js.contains("\"a\"") && js.contains("\"b\""), "both body lines kept: {js}");
 }
@@ -1019,7 +1039,10 @@ fn body_start_is_a_line_start() {
         "closer on the last item's line"
     );
     // Headings, colon bodies, emphasis bodies.
-    assert!(nota_doc("@div{# T}\n").contains(r#"h("h1", {}, ["T"])"#), "heading at body start");
+    assert!(
+        nota_doc("@div{# T}\n").contains(r#"h(Heading, { rank: 1 }, ["T"])"#),
+        "heading at body start"
+    );
     assert!(
         nota_doc("@foo: - a\n").contains(r#"h("nota-ul-li", {}, ["a"])"#),
         "list at a colon body's start"
@@ -1052,7 +1075,7 @@ fn percent_statement_region_rules() {
         "list after a `;`-delimited statement"
     );
     assert!(
-        nota_doc("% const x = 1;\n# Head\n").contains(r#"h("h1", {}, ["Head"])"#),
+        nota_doc("% const x = 1;\n# Head\n").contains(r#"h(Heading, { rank: 1 }, ["Head"])"#),
         "heading after a `;`-delimited statement"
     );
 
@@ -1062,7 +1085,7 @@ fn percent_statement_region_rules() {
     assert!(js.contains("const x = 1;"), "statement ends at the blank line: {js}");
     assert!(js.contains(r#"h("nota-ul-li", {}, ["item"])"#), "list after the blank line: {js}");
     assert!(
-        nota_doc("% const x = 1\n\n# Head\n").contains(r#"h("h1", {}, ["Head"])"#),
+        nota_doc("% const x = 1\n\n# Head\n").contains(r#"h(Heading, { rank: 1 }, ["Head"])"#),
         "heading after a blank line"
     );
 
@@ -1266,9 +1289,12 @@ fn verbatim_armed_then_following_content() {
     // verbatim. The exit now resumes via `resume_past_park_at` (guarding on `fatal_error` only,
     // like code/math spans). All content following the armed verbatim must survive.
     let js = nota_doc("## one\n\n@pre|{\nx |@name y\n}|\n\n## two\n");
-    assert!(js.contains(r#"h("h2", {}, ["one"])"#), "heading before: {js}");
+    assert!(js.contains(r#"h(Heading, { rank: 2 }, ["one"])"#), "heading before: {js}");
     assert!(js.contains("String.raw`x `"), "armed verbatim parts: {js}");
-    assert!(js.contains(r#"h("h2", {}, ["two"])"#), "heading AFTER the armed verbatim: {js}");
+    assert!(
+        js.contains(r#"h(Heading, { rank: 2 }, ["two"])"#),
+        "heading AFTER the armed verbatim: {js}"
+    );
     // Same shape with an armed *element* part and inline (single-line) geometry.
     let js = nota_doc("@pre|{ |@b{c} }|\ntail text\n");
     assert!(js.contains(r#"h("b", {}, ["c"])"#), "armed element part: {js}");
@@ -1535,7 +1561,7 @@ fn doc_verbatim_block() {
 fn doc_escape_line_start_percent_and_hash() {
     // `\%`/`\#` at line start: the `\` is dropped, the char is literal (no statement / no heading).
     let js = nota_doc("\\% not a statement\n\\# not a heading\n");
-    assert!(!js.contains("export let") && !js.contains(r#"h("h1""#), "{js}");
+    assert!(!js.contains("export let") && !js.contains("h(Heading"), "{js}");
     assert!(js.contains(r#""% not a statement""#), "literal %: {js}");
     assert!(js.contains(r##""# not a heading""##), "literal #: {js}");
 }
@@ -1630,7 +1656,7 @@ fn id(x: i32) -> i32 { x }
 @figure|{verbatim @keep{raw}}|
 ";
     let js = nota_doc(src);
-    assert!(js.contains(r#"h("h1", {}, ["Demo"])"#), "heading: {js}");
+    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Demo"])"#), "heading: {js}");
     assert!(js.contains(r"h(CodeInline, {}, [String.raw`id`])"), "inline code: {js}");
     // Math `|@i` arms an interpolation as a sibling part (a bare `@` would be literal now).
     assert!(js.contains(r"h(Tex, {}, [String.raw`a_`, i])"), "math armed interp: {js}");
@@ -2094,7 +2120,7 @@ mod fuzz_findings_2 {
     fn fuzz2_colon_block_should_recognize_line_start_sugar() {
         let js = emit_doc_unchecked("@section:\n  # Title\n  body\n");
         assert!(
-            js.contains("h(\"h1\""),
+            js.contains("h(Heading"),
             "line-start sugar not recognized in a colon-block body: {js}"
         );
     }
@@ -2200,7 +2226,7 @@ mod fuzz_findings_2 {
     fn fuzz2_indented_heading_should_be_recognized() {
         let js = emit_doc_unchecked("  # H\n");
         assert!(
-            js.contains("h(\"h1\""),
+            js.contains("h(Heading"),
             "an indented heading is not recognized (indented lists are): {js}"
         );
     }
@@ -2210,7 +2236,7 @@ mod fuzz_findings_2 {
     fn fuzz2_tab_after_hash_should_be_a_heading() {
         let js = emit_doc_unchecked("#\tH\n");
         assert!(
-            js.contains("h(\"h1\""),
+            js.contains("h(Heading"),
             "heading sugar requires a literal space, rejects a tab: {js}"
         );
     }

@@ -410,12 +410,28 @@ impl<'a> NotaLowering<'a> {
         self.build_h(span, tag, self.ast.vec(), children)
     }
 
+    /// `#` heading *sugar* → `h(Heading, { rank: N }, [children])` (contract R18f): `Heading` is an
+    /// ambient-prelude slot referenced as a free identifier (mirroring `Tex`/`CodeInline`), `rank`
+    /// the level as a numeric literal. The default `Heading` marks + queries the concrete `hN` at
+    /// decode time. Raw `@hN{…}` element forms lower via [`Self::lower_element`] and stay plain host
+    /// tags — the unnumbered/un-Toc'd escape hatch.
     fn lower_heading(&mut self, h: NotaHeading<'a>) -> Expression<'a> {
         let NotaHeading { span, level, children, .. } = h;
-        let tag_name = ["h1", "h2", "h3", "h4", "h5", "h6"][usize::from(level - 1)];
         let children = self.lower_children(children, false);
-        let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
-        self.build_h(span, tag, self.ast.vec(), children)
+        let rank = self.ast.expression_numeric_literal(
+            Span::empty(span.start),
+            f64::from(level),
+            None,
+            NumberBase::Decimal,
+        );
+        let props = self.ast.vec1(self.obj_prop(
+            Span::empty(span.start),
+            Span::empty(span.start),
+            "rank",
+            rank,
+            false,
+        ));
+        self.build_raw_element(span, super::HEADING, props, children)
     }
 
     /// One `nota-ul-li`/`nota-ol-li` sentinel per item — the runtime `struct` pass coalesces runs
