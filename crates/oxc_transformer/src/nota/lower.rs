@@ -4,7 +4,7 @@
 //! `Expression::NotaMarkup(Document)` statement and every embedded `@`-form in place as
 //! `Expression::NotaMarkup`. This pass lowers those to the hyperscript `h`/`Fragment`/`decode`
 //! `Expression` AST: [`NotaLowering::lower_document_program`] rebuilds the document `Program`
-//! (Doc skeleton, `%` routing + component name-attach — R15), then a [`VisitMut`] walk replaces
+//! (Doc skeleton, `%` routing + component name-attach), then a [`VisitMut`] walk replaces
 //! each remaining embedded `NotaMarkup` bottom-up (the lowered result is re-walked, so a `@`-form
 //! nested inside embedded JS inside another `@`-form lowers too). Lowering *consumes* owned Nota
 //! nodes via `unbox()`. The emit primitives live in [`super::build`]; the whitespace algorithm in
@@ -33,8 +33,8 @@ pub struct NotaLoweringReturn {
     pub diagnostics: Vec<OxcDiagnostic>,
 }
 
-/// The Nota lowering pass. `collect_mappings` gates H1/H2 mark collection (off for the plain
-/// build path → allocation-free).
+/// The Nota lowering pass. `collect_mappings` gates Volar CodeMapping mark collection (off for the
+/// plain build path → allocation-free).
 pub struct NotaLowering<'a> {
     pub(super) ast: AstBuilder<'a>,
     pub(super) source_text: &'a str,
@@ -341,7 +341,8 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// `@for (bind of iter) {body}` → `iter.map((bind, _i) => Fragment({ key: _i }, ...body))` —
-    /// the reader injects the map index as the wrapping Fragment's key (contract E5).
+    /// the keyed `@for` emit: the reader injects the map index as the wrapping Fragment's fresh
+    /// `_i` key (decode.md §struct, Keyed fragments).
     fn lower_for(&mut self, n: NotaFor<'a>) -> Expression<'a> {
         let NotaFor { span, binding, iterable, body, .. } = n;
         self.record_nota_mapping(binding.span(), NotaMappingKind::EmbeddedJs);
@@ -425,7 +426,7 @@ impl<'a> NotaLowering<'a> {
         self.build_h(span, tag, self.ast.vec(), children, Span::empty(span.start))
     }
 
-    /// `#` heading *sugar* → `h(Heading, { rank: N }, [children])` (contract R18f): `Heading` is an
+    /// `#` heading *sugar* → `h(Heading, { rank: N }, [children])` (decode.md §Doc-state): `Heading` is an
     /// ambient-prelude slot referenced as a free identifier (mirroring `Tex`/`CodeInline`), `rank`
     /// the level as a numeric literal. The default `Heading` marks + queries the concrete `hN` at
     /// decode time. Raw `@hN{…}` element forms lower via [`Self::lower_element`] and stay plain host
@@ -449,8 +450,9 @@ impl<'a> NotaLowering<'a> {
         self.build_raw_element(span, super::HEADING, props, children)
     }
 
-    /// Doc-state sugar (contract R20a) → `h(<Slot>, { <key>: "<label>" }, [children])`, the R18f
-    /// `Heading` pattern: the slot is an ambient-prelude free identifier (no import emitted), the
+    /// Doc-state sugar (notation.md §Doc-state references) → `h(<Slot>, { <key>: "<label>" },
+    /// [children])`, the same ambient-slot pattern as
+    /// `Heading`: the slot is an ambient-prelude free identifier (no import emitted), the
     /// `id`/`label` prop is reader-synthesized boilerplate (empty spans — unmapped, like
     /// `Heading`/`rank`). Only `FootnoteText` has children (its colon body); the three leaf sugars
     /// emit an empty child array.
@@ -477,7 +479,7 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// One `nota-ul-li`/`nota-ol-li` sentinel per item — the runtime `struct` pass coalesces runs
-    /// into `<ul>`/`<ol>` (contract §7).
+    /// into `<ul>`/`<ol>` (decode.md §struct).
     fn lower_list_item(&mut self, li: NotaListItem<'a>) -> Expression<'a> {
         let NotaListItem { span, kind, children, .. } = li;
         let tag_name = match kind {
@@ -494,7 +496,7 @@ impl<'a> NotaLowering<'a> {
     // ===========================================================================================
 
     /// Lower a whole document: route `%`/`%%%` statements (`import`/`export` hoist; everything
-    /// else — component bindings included, R15 — prepends into Doc), Scribble the
+    /// else — component bindings included — prepends into Doc), Scribble the
     /// markup siblings, and assemble
     /// `export default function Doc() { …prelude…; return decode(Fragment(...)); }`.
     fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {

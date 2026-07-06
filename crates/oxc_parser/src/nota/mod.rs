@@ -3,9 +3,9 @@
 //! This module parses `@`-markup into the Nota AST nodes ([`NotaMarkup`] & friends, in
 //! `oxc_ast::ast::nota`): each `@`-form stays in place as `Expression::NotaMarkup`, and a whole
 //! `.nota` file becomes a single `NotaMarkupKind::Document` statement. Lowering to hyperscript
-//! (`h`/`Fragment`/`decode`), the Scribble whitespace pass, `%`-statement routing, and F1 component
-//! hoisting all run *later*, in `oxc_transformer::NotaLowering` — the deferred-pass analog of how
-//! oxc lowers JSX.
+//! (`h`/`Fragment`/`decode`), the Scribble whitespace pass, `%`-statement routing, and component-
+//! binding routing all run *later*, in `oxc_transformer::NotaLowering` — the deferred-pass analog
+//! of how oxc lowers JSX.
 //!
 //! Mechanics: the parser drives the lexer between JS mode and markup mode. Inside a body it pulls
 //! typed markup child tokens (`advance_for_nota_child`, the JSX `advance_for_jsx_child` analog) and
@@ -182,7 +182,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     pub(crate) fn parse_nota_form(&mut self) -> NotaForm<'a> {
         let span_start = self.start_span();
 
-        // The positional colon-sugar gate is fixed by where this form's `@` sits (contract R9):
+        // The positional colon-sugar gate is fixed by where this form's `@` sits
+        // (notation.md §Colon & block sugar):
         // classified once here, from the *entry* region and position, and threaded into both
         // trigger consumers below so a dead colon interpolates consistently.
         let colon_live = self.colon_trigger_live(span_start);
@@ -289,7 +290,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// across named and dynamic heads. (Seeks, not bumps: an *extended* hyphenated head runs past
     /// the lexer's current boundary token, and a seek from `head.end` covers both cases.)
     fn commit_head(&mut self, head: &NotaHead<'a>, colon_live: bool) -> MarkupTrigger {
-        // A dead colon (positional rule R9) is demoted to `None`, so the head interpolates and the
+        // A dead colon (the positional colon trigger) is demoted to `None`, so the head interpolates and the
         // `:` is left un-consumed for the surrounding host to lex as literal text / JS.
         let trigger = self.effective_trigger(head.end, colon_live);
         match trigger {
@@ -338,10 +339,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Parse `@head [props]* { body }?`, `@head [props]* |{ body }|`, or `@head [props]* : body`.
-    /// Entered with the `{`/`[` delimiter as the current token. `colon_live` is the R12 positional
-    /// gate judged at the head's `@` ([`Self::colon_trigger_live`], threaded from
+    /// Entered with the `{`/`[` delimiter as the current token. `colon_live` is the positional
+    /// colon gate judged at the head's `@` ([`Self::colon_trigger_live`], threaded from
     /// [`Self::parse_nota_form`]) — the same gate a bare `@head:` uses; a glued `:` after the last
-    /// `]` opens a colon body only when it holds (contract R21).
+    /// `]` opens a colon body only when it holds (props compose with a colon body —
+    /// notation.md §Colon & block sugar).
     fn parse_element(
         &mut self,
         span_start: u32,
@@ -355,8 +357,9 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // never read the bytes after the `]`, which in a markup / verbatim host are raw text. The
         // continuation is a raw byte peek at the `]`'s end, re-lexed in the deliberate mode: `[` →
         // another group, `{` → a braced body, `|{` → a verbatim body (props compose with verbatim —
-        // contract R19), `:` → a colon body when the positional gate is live (props compose with a
-        // colon body exactly as with a braced/verbatim one — contract R21), anything else →
+        // notation.md §Verbatim), `:` → a colon body when the positional gate is live (props compose
+        // with a colon body exactly as with a braced/verbatim one — notation.md §Colon & block
+        // sugar), anything else →
         // self-closing (a `:` under a dead gate stays literal text, exactly as for a bare head).
         let mut self_closing_end = None;
         let mut verbatim_start = None;
@@ -381,7 +384,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     break;
                 }
                 Some(b':') if colon_live => {
-                    // R21: a glued `:` under a live positional gate opens the same colon body a bare
+                    // A glued `:` under a live positional gate opens the same colon body a bare
                     // `@head:` would. Lex the `:` (like the `{` arm) so `parse_colon_body` enters at
                     // `Kind::Colon`, exactly as `commit_head`'s `MarkupTrigger::Colon` path does; the
                     // already-collected `props` thread through unchanged.
@@ -462,7 +465,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let open = self.cur_token().span();
         self.advance_for_nota_child(); // switch the lexer into markup-body mode
 
-        // The body content starts one past `{` (R9: that offset counts as a line start).
+        // The body content starts one past `{` (a body start counts as a line start).
         let (close, items) = self.collect_markup(BodyMode::Body, open.end);
         let end = match close {
             MarkupClose::Curly { end } => end,
@@ -518,7 +521,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Entered with the current token already lexed as a markup child.x
     fn collect_markup_inner(&mut self) -> MarkupClose {
         let mut depth = 0u32; // balanced-brace depth inside the body
-        // R9: the start of a body/range is a line start. A body opening directly with a marker —
+        // The start of a body/range is a line start (notation.md §Markup sugar). A body opening
+        // directly with a marker —
         // `@{- item}`, `@foo: - item`, `*- item*`, the document's first line — opens the construct
         // exactly as it would after a `\n`. (Literal braces in prose never re-enter here, so a
         // `{- x}` inside a paragraph stays text.)
@@ -609,7 +613,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Kind::NotaDollar => {
                     self.parse_math_or_literal(self.cur_token().start());
                 }
-                // Doc-state sugar (contract R20a): the lexer emits these only for a valid *shape*
+                // Doc-state sugar (notation.md §Doc-state references): the lexer emits these only
+                // for a valid *shape*
                 // (`<`/`&` + ident-start, the `[^`+ident digraph); the parser resolves the left
                 // guard (`<`/`&`), the terminator scan, and marker-vs-literal.
                 Kind::LAngle => {
@@ -1143,10 +1148,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 }
 
 // ===============================================================================================
-// Doc-state sugar (contract R20a): `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body`.
+// Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` /
+// line-start `[^label]: body`.
 // Each is surface sugar for an element form (`@Label[id: "…"]{}` / `@Ref[id: "…"]{}` /
 // `@FootnoteMark[label: "…"]{}` / `@FootnoteText[label: "…"]: body`) and inherits the element
-// machinery — the bounded-frame clip, the R9/R12 positional colon gate, the colon-body extent —
+// machinery — the bounded-frame clip, the positional colon gate, the colon-body extent —
 // rather than growing extent rules of its own. A non-matching open is literal text (1-byte sigil).
 // ===============================================================================================
 
@@ -1163,7 +1169,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// The left-boundary guard on `<`/`&` (contract R20a): start-of-body (the enclosing markup
+    /// The left-boundary guard on `<`/`&`: start-of-body (the enclosing markup
     /// frame's content start — `*<x>*`, `@a:<x>`), or the byte-level guard (start of source /
     /// line, whitespace, opening punctuation).
     fn docstate_guard_ok(&self, at: u32) -> bool {
@@ -1228,7 +1234,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// `[^mark]` at `open` (≡ `@FootnoteMark[label: "mark"]{}`; unguarded — `text[^1]` glues,
-    /// Markdown-style), or — with a glued `:` under the R9/R12 positional line-start gate
+    /// Markdown-style), or — with a glued `:` under the positional line-start gate
     /// ([`Self::colon_trigger_live`], the same gate as `@head:`) — a `[^label]: body` footnote
     /// *text* definition (≡ `@FootnoteText[label: "label"]: body`, the colon-body extent
     /// machinery verbatim). A non-matching open (`[^ x]`, `[x]`) is a literal `[`.
@@ -1467,13 +1473,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// Parse the whole file body: top-level markup siblings interleaved with `%`/`%%%` statements,
-    /// all kept as faithful children (the lowering routes statements: hoist / Doc prelude / F1).
+    /// all kept as faithful children (the lowering routes statements: hoist / Doc prelude /
+    /// document-local component bindings).
     fn parse_document_body(&mut self) -> NotaDocument<'a> {
         // Skip a leading UTF-8 BOM so it is not collected as text (offsets after it are unchanged).
         let start = if self.source_text.starts_with('\u{feff}') { 3u32 } else { 0 };
 
         // A file opening with line-start constructs is handled by `collect_markup`'s entry arming
-        // (R9: a body/range start is a line start — the document body included).
+        // (a body/range start is a line start — the document body included).
         self.nota_seek_markup(start);
 
         let (_, items) = self.collect_markup(BodyMode::Document, start);
@@ -1485,7 +1492,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `@head:` colon/block sugar → an element whose body is the rest of the line plus following
     /// lines indented past the `@head:` line. Leading `|` lines of the body supply `[…]` props.
     /// `props` holds any `[props]` groups threaded from the head (empty for a bare `@head:`; from
-    /// [`Self::parse_element`] for `@head[props]: body` — contract R21); the `|`-line props append.
+    /// [`Self::parse_element`] for `@head[props]: body` — props compose with a colon body); the
+    /// `|`-line props append.
     /// Entered with `:` as the current token.
     fn parse_colon_body(
         &mut self,
@@ -1507,7 +1515,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         // Clip the first line at a depth-0 `}` only inside an element/control body, where that `}`
         // is the enclosing closer (never in a Document / Bounded host). A bounded host additionally
-        // clips the whole body at its end (R9): an emphasis / heading / list-item / colon body that
+        // clips the whole body at its end: an emphasis / heading / list-item / colon body that
         // contains a `@head:` child must not let it escape the range — `*@a: bar* rest`.
         let (clip_at_brace, bound) = match self.nota_top_region() {
             NotaRegion::Markup { mode, .. } => (matches!(mode, BodyMode::Body), mode.bound()),
@@ -1533,7 +1541,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Collect the colon-sugar body over `[start, end)`: leading `|` lines (continuation lines
     /// whose first non-whitespace is `|`) append prop groups into `props` (which already holds any
-    /// `[props]` groups threaded from the head — contract R21); the rest is the markup body.
+    /// `[props]` groups threaded from the head); the rest is the markup body.
     fn collect_colon_body(
         &mut self,
         start: u32,
@@ -1600,8 +1608,8 @@ enum NotaRegion<'a> {
     /// Collecting a markup body with these semantics; a form's tail resumes by markup-lexing.
     /// The only region [`ParserImpl::push_nota_item`] may push a child into. `start` is the body's
     /// content start (one past `{`, the post-BOM document start, or a bounded range's start): it
-    /// exists for the positional colon-sugar check ([`ParserImpl::colon_trigger_live`]) — R9 counts
-    /// a markup body's own start as a line start.
+    /// exists for the positional colon-sugar check ([`ParserImpl::colon_trigger_live`]), which
+    /// counts a markup body's own start as a line start.
     Markup { mode: BodyMode, start: u32, items: NotaChildren<'a> },
     /// An embedded-JS island (an expression-position form, a `k: @form` prop value): a form's tail
     /// resumes by JS-lexing.
@@ -1632,7 +1640,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.state.nota.regions.last().expect("Nota region stack is empty")
     }
 
-    /// The positional colon-sugar gate (contract R9): the `:` glued to an `@head:` at `span_start`
+    /// The positional colon-sugar gate (notation.md §Colon & block sugar): the `:` glued to an
+    /// `@head:` at `span_start`
     /// (the form's `@`) is an element trigger iff BOTH the form is a markup-body child (the top
     /// region is `Markup`, never a `Js` island or a `Raw` scan) AND its `@` sits at a line start
     /// modulo whitespace — walking back over spaces/tabs reaches file offset 0, a `\n`, or the top
@@ -1724,7 +1733,7 @@ mod recover_tests {
 
     #[test]
     fn mid_document_unclosed_bracket_still_recovers() {
-        // Per D4, a mid-document `@a[` swallows to EOF; recovery still yields a diagnostic + a tree.
+        // A mid-document `@a[` swallows to EOF; recovery still yields a diagnostic + a tree.
         let errs = recover_errors("before\n\n@a[");
         assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
     }

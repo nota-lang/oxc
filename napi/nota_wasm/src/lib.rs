@@ -7,8 +7,8 @@
 //!                highlight, highlightKindNames } from "@nota-lang/nota-wasm";
 //! await init();                                  // load + instantiate the .wasm
 //! const { code } = compile(src);                 // build path (JS)            → { code }
-//! const { code, mappings } = compileWithMappings(src); // build + H1 mappings → { code, mappings }
-//! const { code, mappings, errors } = compileVirtual(src); // H2 .tsx + H1 + recovered diagnostics
+//! const { code, mappings } = compileWithMappings(src); // build + Volar CodeMappings → { code, mappings }
+//! const { code, mappings, errors } = compileVirtual(src); // virtual .tsx + mappings + recovered diagnostics
 //! const { ast } = parseAst(src);                 // post-parse Nota AST (ESTree JSON string)
 //! const spans = highlight(src);                  // [start, end, kind] u32 triples (editor spans)
 //! const names = highlightKindNames();            // kind discriminant → kebab-case name
@@ -25,7 +25,7 @@
 //! published `oxc` crate adds no `serde` dependency (see `crates/oxc/examples/nota_compile.rs`, which
 //! hand-rolls the `--virtual` JSON for exactly this reason). To avoid forcing `serde` into `oxc`, this
 //! crate defines its own `#[derive(Serialize)]` mirrors and a cheap `From` conversion. The JS shape is
-//! identical to the `--virtual` binary's (contract §9): `{ sourceOffsets, generatedOffsets, lengths,
+//! identical to the `--virtual` binary's (NOTA_READER.md §Compiler entries): `{ sourceOffsets, generatedOffsets, lengths,
 //! generatedLengths, data: { completion, format, navigation, semantic, structure, verification } }`.
 
 use std::fmt::Write as _;
@@ -44,11 +44,12 @@ use wasm_bindgen::prelude::*;
 // TypeScript surface for the playground. wasm-bindgen types our `JsValue` returns as `any`; this
 // `typescript_custom_section` appends real named interfaces to the generated `.d.ts` so the
 // playground can annotate results (e.g. `compile(src) as NotaCompileResult`). Kept byte-for-byte in
-// sync with the `#[derive(Serialize)]` mirrors below + contract §9.
+// sync with the `#[derive(Serialize)]` mirrors below + the `--virtual` JSON shape
+// (NOTA_READER.md §Compiler entries).
 // ===================================================================================================
 #[wasm_bindgen(typescript_custom_section)]
 const TS_TYPES: &'static str = r#"
-/** The six Volar `CodeInformation` capability flags for a mapped range (contract §4 H1). */
+/** The six Volar `CodeInformation` capability flags for a mapped range. */
 export interface NotaMappingCapabilities {
   completion: boolean;
   format: boolean;
@@ -58,7 +59,7 @@ export interface NotaMappingCapabilities {
   verification: boolean;
 }
 
-/** One Volar `CodeMapping` — parallel source⇄generated offset arrays + capability flags (contract §9). */
+/** One Volar `CodeMapping` — parallel source⇄generated offset arrays + capability flags (the `--virtual` JSON shape). */
 export interface NotaCodeMapping {
   sourceOffsets: number[];
   generatedOffsets: number[];
@@ -73,13 +74,13 @@ export interface NotaCompileResult {
   code: string;
 }
 
-/** Result of `compileWithMappings`: emitted code + Volar CodeMappings (H1). */
+/** Result of `compileWithMappings`: emitted code + Volar CodeMappings. */
 export interface NotaMappedResult {
   code: string;
   mappings: NotaCodeMapping[];
 }
 
-/** One recovered Nota syntax/lowering diagnostic (byte-spanned into the `.nota`) — contract D5. */
+/** One recovered Nota syntax/lowering diagnostic (byte-spanned into the `.nota`). */
 export interface NotaError {
   message: string;
   start: number;
@@ -89,7 +90,7 @@ export interface NotaError {
 /**
  * Result of `compileVirtual`: the type-preserving virtual `.tsx` + CodeMappings **plus** any
  * recovered diagnostics. The virtual path uses EOF error-recovery, so it never throws on malformed
- * markup — the syntax problems come back in `errors` (contract D4/D5).
+ * markup — the syntax problems come back in `errors` for the language server to surface.
  */
 export interface NotaVirtualResult {
   code: string;
@@ -123,13 +124,13 @@ struct ParseAstResult {
     ast: String,
 }
 
-/// `{ code, mappings }` — the H1/H2 result ([`nota::compile_with_mappings`] / [`nota::compile_virtual`]).
+/// `{ code, mappings }` — the mapped result ([`nota::compile_with_mappings`] / [`nota::compile_virtual`]).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MappedResult {
     /// The emitted module source (JS for `compileWithMappings`, virtual `.tsx` for `compileVirtual`).
     code: String,
-    /// The Volar `CodeMapping`s (H1).
+    /// The Volar `CodeMapping`s.
     mappings: Vec<CodeMapping>,
 }
 
@@ -166,7 +167,7 @@ impl NotaErrorJs {
     }
 }
 
-/// Mirror of [`oxc::nota::CodeMapping`] (contract §9 `--virtual` JSON shape).
+/// Mirror of [`oxc::nota::CodeMapping`] (the `--virtual` JSON shape — NOTA_READER.md §Compiler entries).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CodeMapping {
@@ -293,7 +294,7 @@ pub fn parse_ast(source: &str) -> Result<JsValue, JsError> {
     }
 }
 
-/// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s (H1).
+/// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s.
 /// Returns `{ code, mappings }`.
 ///
 /// JS: `compileWithMappings(source: string): { code: string, mappings: CodeMapping[] }`.
@@ -311,8 +312,9 @@ pub fn compile_with_mappings(source: &str) -> Result<JsValue, JsError> {
     }
 }
 
-/// Compile a `.nota` source to the type-preserving **virtual `.tsx`** emit + CodeMappings (H2 + H1).
-/// Returns `{ code, mappings }` (contract §9 — the language-server / playground virtual view).
+/// Compile a `.nota` source to the type-preserving **virtual `.tsx`** emit + CodeMappings.
+/// Returns `{ code, mappings }` — the language-server / playground virtual view
+/// (NOTA_READER.md §Compiler entries).
 ///
 /// JS: `compileVirtual(source: string): { code: string, mappings: CodeMapping[] }`.
 ///

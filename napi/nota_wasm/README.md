@@ -1,8 +1,8 @@
 # `nota_wasm` — the Nota wasm compiler backend
 
 The Nota reader (`oxc::nota`) compiled to WebAssembly via [`wasm-bindgen`], so it runs **in-browser**
-for the Part-4 playground (contract §9: *"A **wasm** backend (wasm-bindgen over the same entries,
-plus `parseAst` and `highlight`/`highlightKindNames`) serves the browser playground (Part 4)"*).
+for the playground: wasm-bindgen over the same compile entries, plus `parseAst` and
+`highlight`/`highlightKindNames` (NOTA_READER.md §Compiler entries).
 
 It wraps the `oxc::nota` entries and returns plain JS objects (via [`serde-wasm-bindgen`]).
 This crate lives under `napi/` only because the workspace `members = [… "napi/*" …]` glob auto-includes
@@ -21,10 +21,10 @@ compile(source: string): { code: string };
 //   the build path — emits the JS module (oxc::nota::compile).
 
 compileWithMappings(source: string): { code: string; mappings: CodeMapping[] };
-//   build + H1 Volar CodeMappings (oxc::nota::compile_with_mappings).
+//   build + Volar CodeMappings (oxc::nota::compile_with_mappings).
 
 compileVirtual(source: string): { code: string; mappings: CodeMapping[] };
-//   H2 type-preserving virtual `.tsx` emit + H1 CodeMappings (oxc::nota::compile_virtual).
+//   type-preserving virtual `.tsx` emit + CodeMappings (oxc::nota::compile_virtual).
 
 parseAst(source: string): { ast: string };
 //   the post-parse Nota AST as ESTree JSON (parser stage only — the playground's AST pane).
@@ -37,7 +37,7 @@ highlight(source: string): Uint32Array;
 highlightKindNames(): string[];
 //   kind discriminant → stable kebab-case name (CSS-class-ready), indexing highlight()'s kinds.
 
-// CodeMapping (contract §9 shape, camelCase):
+// CodeMapping (the `--virtual` JSON shape, camelCase — NOTA_READER.md §Compiler entries):
 //   { sourceOffsets: number[]; generatedOffsets: number[]; lengths: number[];
 //     generatedLengths: number[] | null;
 //     data: { completion, format, navigation, semantic, structure, verification: boolean } }
@@ -59,7 +59,7 @@ wasm-pack build napi/nota_wasm --target web --out-dir pkg --out-name nota_wasm
 Output: `napi/nota_wasm/pkg/` — the package the playground imports
 (`nota_wasm.js`, `nota_wasm_bg.wasm`, `nota_wasm.d.ts`, `package.json`). The generated
 `package.json` `name` is `nota_wasm`; the playground can `pnpm add`/alias it as `@nota-lang/nota-wasm`
-(contract §5 scoped naming), or import the `pkg/` path directly.
+(the `@nota-lang/*` scoped naming), or import the `pkg/` path directly.
 
 Use `--target bundler` instead of `web` if the playground bundler (Vite) prefers the bundler glue.
 

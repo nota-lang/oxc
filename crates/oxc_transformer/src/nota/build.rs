@@ -1,6 +1,6 @@
 //! Hyperscript emit primitives + document assembly for [`super::lower::NotaLowering`]: the
 //! `h`/`Fragment`/`decode`/`String.raw` `Expression` builders and the document `Program` assembly
-//! (Doc skeleton, `%`-statement routing, component name-attach — contract R15).
+//! (Doc skeleton, `%`-statement routing, component name-attach — decode.md §The worked example).
 
 use lazy_regex::{Regex, regex};
 use oxc_allocator::Vec as ArenaVec;
@@ -19,7 +19,8 @@ use super::{
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
 /// module references the default-export component `Doc` and the runtime imports the markup calls
-/// (`h`/`Fragment`/`decode`/`inlineComponent`/`blockComponent`); these are pinned by the contract and
+/// (`h`/`Fragment`/`decode`/`inlineComponent`/`blockComponent`); these are pinned by the emit
+/// surface (notation.md §Emit reference) and
 /// cannot be silently renamed, so a colliding binding is diagnosed rather than emitted.
 fn is_reserved_emit_name(name: &str) -> bool {
     matches!(name, DOC | H | FRAGMENT | DECODE | INLINE_COMPONENT | BLOCK_COMPONENT)
@@ -50,8 +51,8 @@ impl<'a> NotaLowering<'a> {
     // Synthesized-node shorthands
     //
     // Every node the lowering fabricates carries `Span::empty(at)` — *anchored* at the source
-    // construct (sourcemap entries for scaffolding point into it) but *empty* (the H1 offset log
-    // never treats scaffolding as a mapped source range).
+    // construct (sourcemap entries for scaffolding point into it) but *empty* (the CodeMapping
+    // offset log never treats scaffolding as a mapped source range).
     // ===========================================================================================
 
     /// A synthesized identifier reference.
@@ -287,7 +288,7 @@ impl<'a> NotaLowering<'a> {
     /// `\` added to neutralize them leaks into the runtime string. For content with either breaker we
     /// emit a **cooked** string literal instead, whose codegen escaping (`\\`, control chars, the
     /// closing quote) reproduces `raw` exactly. Breaker-free content keeps the readable `String.raw`
-    /// form (contract §3).
+    /// form (notation.md §Emit reference).
     pub(super) fn build_string_raw(&self, span: Span, raw: &'a str) -> Expression<'a> {
         if Self::has_template_breaker(raw) {
             return self.ast.expression_string_literal(span, raw, None);
@@ -339,11 +340,11 @@ impl<'a> NotaLowering<'a> {
     }
 
     // ===========================================================================================
-    // Document assembly + `%`-statement routing + component name-attach (contract R15)
+    // Document assembly + `%`-statement routing + component name-attach (decode.md §The worked example)
     // ===========================================================================================
 
     /// Route a parsed top-level statement: `import`/`export` hoist to module scope; everything
-    /// else — **including component bindings** — prepends into `Doc` (contract R15: a
+    /// else — **including component bindings** — prepends into `Doc` (a
     /// `%let C = inlineComponent(...)` is an ordinary lexical statement, document-local, so its
     /// body may close over document state; replay hydration recovers the closure client-side).
     /// Component bindings — top-level `%let/%const` and `%export`-wrapped alike — get the binding
@@ -375,7 +376,7 @@ impl<'a> NotaLowering<'a> {
             | Statement::ExportDefaultDeclaration(_)
             | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
             Statement::VariableDeclaration(mut decl) if Self::is_component_decl(&decl) => {
-                // R15: no hoist, no auto-export — only the name rides along.
+                // No hoist, no auto-export — only the name rides along.
                 self.attach_component_name(&mut decl);
                 doc_prelude.push(Statement::VariableDeclaration(decl));
             }
@@ -477,7 +478,7 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`).
-    /// That is ALL the reader does to a component binding under contract R15 — no hoist, no
+    /// That is ALL the reader does to a component binding (decode.md §The worked example) — no hoist, no
     /// export, and no body `decode(...)` wrap (the wrap was semantically dead: component bodies
     /// only run at `▸ = true`, where `decode` is the identity). The name feeds the island's
     /// *debug* manifest (`comp`); it is overridden rather than kept if the author supplied a 2nd

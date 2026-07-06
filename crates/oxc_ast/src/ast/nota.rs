@@ -3,8 +3,9 @@
 //! Nota is a document language whose `@`-syntax markup is parsed into these AST nodes and then
 //! *lowered* (in a separate pass) to hyperscript `h`/`Fragment`/`decode` calls — the same
 //! parse-then-lower shape oxc uses for JSX (see [`super::jsx`]). The reader lives in
-//! `crates/oxc_parser/src/nota/`; the cross-team spec is `design/contract.md` and the
-//! implementation memory is `NOTA_READER.md`.
+//! `crates/oxc_parser/src/nota/`; the spec lives in the main repo (`design/notation.md` for
+//! surface syntax → emit, `design/decode.md` for runtime semantics) and the architecture notes
+//! in `NOTA_READER.md`.
 //!
 //! NB: `#[ast]`, `#[generate_derive(...)]`, `#[estree(...)]` and friends are markers consumed by
 //! `tasks/ast_tools`; they do not affect the code directly. Run `just ast` after editing this file.
@@ -115,7 +116,8 @@ pub enum NotaMarkupKind<'a> {
 // ===============================================================================================
 
 /// A whole `.nota` document: a source-ordered run of top-level items (markup + `%`/`%%%` statements).
-/// Lowering builds the `Doc` skeleton, hoists/routes statements (F1, imports), and wraps in `decode`.
+/// Lowering builds the `Doc` skeleton, hoists/routes statements (imports hoist; component bindings
+/// stay document-local), and wraps in `decode`.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
@@ -193,11 +195,11 @@ pub struct NotaElement<'a> {
     pub props: Vec<'a, NotaProp<'a>>,
     pub children: Vec<'a, NotaChild<'a>>,
     /// `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    /// syntaxes carry *different* whitespace contracts — a brace body's surrounding spaces between
+    /// syntaxes carry *different* whitespace regimes — a brace body's surrounding spaces between
     /// `{`/`}` and text are content, while a colon body trims its edges like a document/block — so
     /// the lowering must thread this to the Scribble pass (it cannot be recovered post-parse).
     pub is_colon: bool,
-    /// Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
+    /// Set only by EOF error-recovery (the `--virtual` recover path): the
     /// `Span` of an unclosed `[` whose `[props]` group ran into end-of-file. `None` in any
     /// well-formed parse. The lowering reads it to give the (otherwise empty) props object literal
     /// a real span and record a zero-width *completion anchor* just inside it, so the language
@@ -428,7 +430,7 @@ pub struct NotaMath<'a> {
 /// `@`-forms).
 ///
 /// `[props]` groups compose with the verbatim body exactly as they do with a braced element body
-/// (contract R19): they accumulate the same way, ahead of the same `|{…}|` delimiter that would
+/// (notation.md §Verbatim): they accumulate the same way, ahead of the same `|{…}|` delimiter that would
 /// otherwise open directly against the head.
 #[ast(visit)]
 #[derive(Debug)]
@@ -519,7 +521,7 @@ pub enum NotaListKind {
     Ordered = 1,
 }
 
-/// Inline **doc-state sugar** (contract R20a).
+/// Inline **doc-state sugar** (notation.md §Doc-state references).
 ///
 /// Four Markdown/Typst-flavored inline forms, each surface sugar for an element form, lowering to
 /// a free ambient identifier with an `id`/`label` string prop — `<label>` ≡ `@Label[id: "label"]{}`,
@@ -545,7 +547,7 @@ pub struct NotaDocState<'a> {
     pub children: Vec<'a, NotaChild<'a>>,
 }
 
-/// Which of the four R20a inline doc-state sugars a [`NotaDocState`] is.
+/// Which of the four inline doc-state sugars a [`NotaDocState`] is.
 #[ast]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]

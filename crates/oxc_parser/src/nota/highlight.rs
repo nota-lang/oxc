@@ -438,7 +438,7 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         for prop in &it.props {
             self.visit_nota_prop(prop);
         }
-        // A `@style{…}` host element's text children are CSS (contract: the editor tokenizes them).
+        // A `@style{…}` host element's text children are CSS (the editor tokenizes them).
         let is_style = matches!(&it.tag, NotaTag::Host(host) if host.name.as_str() == "style");
         if is_style {
             self.in_style += 1;
@@ -553,7 +553,8 @@ impl<'a> Visit<'a> for Highlighter<'a> {
 
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
         // The item span starts at its marker; `list_marker_at` treats the given offset as a line
-        // start, which also covers R9's body-start items (`@{- x}` — the marker is mid-line, so
+        // start, which also covers body-start items (a body start is a line start: `@{- x}` — the
+        // marker is mid-line, so
         // deriving from the real line start would miss it).
         if let Some(marker) = list_marker_at(self.source, it.span.start) {
             self.emit(marker.offset, marker.body_col - 1, NotaHighlightKind::ListMarker);
@@ -561,7 +562,7 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         self.visit_nota_children(&it.children);
     }
 
-    /// Doc-state sugar (contract R20a). Reuses existing kinds — no new wire discriminants: the
+    /// Doc-state sugar. Reuses existing kinds — no new wire discriminants: the
     /// sigil bytes (`<`/`>`, `&`, `[^`/`]`, the `]:`) paint [`NotaHighlightKind::Sigil`] (the
     /// element-head `@` / emphasis-marker kind) and the label ident paints
     /// [`NotaHighlightKind::Interpolation`] (the `@name` ident kind — a name-like reference).
@@ -631,7 +632,7 @@ impl<'a> Visit<'a> for Highlighter<'a> {
             self.visit_nota_prop(prop);
         }
         // With no props the `|{` sits right at the head's end; with props it opens right after
-        // the last `[props]` group's close instead (contract R19).
+        // the last `[props]` group's close instead (props compose with a verbatim body).
         let open = match it.props.last() {
             None => head_end,
             Some(last) => find_verbatim_open(self.source, last.span().end),
@@ -896,8 +897,8 @@ mod tests {
 
     #[test]
     fn body_start_list_marker() {
-        // R9: a body opening with a marker (`@{- x}`) — the marker is mid-line and must still
-        // classify.
+        // A body start is a line start: a body opening with a marker (`@{- x}`) — the marker is
+        // mid-line and must still classify.
         let spans = hl("@{- item} and @div{- other}\n");
         assert_eq!(spans.iter().filter(|(k, t)| *k == K::ListMarker && t == "-").count(), 2);
     }
@@ -1051,8 +1052,8 @@ mod tests {
         }
     }
 
-    /// Doc-state sugar (R20) paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
-    /// Labels are Typst-minus-period (re-amended 2026-07-05), so a `_`-joined id scans whole.
+    /// Doc-state sugar paints reused kinds: sigils → `Sigil`, the label → `Interpolation`.
+    /// Labels are Typst-minus-period, so a `_`-joined id scans whole.
     #[test]
     fn docstate_sugar_spans() {
         let spans = hl("<sec_a> then &sec_a and x[^n1] here\n\n[^n1]: note *body*\n");

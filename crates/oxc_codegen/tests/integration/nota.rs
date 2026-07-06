@@ -5,7 +5,8 @@
 //!   (`@p{Hello}` → `h("p", {}, ["Hello"])`); the bulk of fixtures.
 //! * **document mode** (`nota_doc`) — the full module incl. `export default function Doc()`,
 //!   hoisted `import`/`export`, the Doc-body `decode(...)` wrap, and document-local inline
-//!   components (contract R15: bindings prepend into Doc, name-attached, no hoist/export).
+//!   components (bindings prepend into Doc, name-attached, no hoist/export — decode.md §The
+//!   worked example).
 //!
 //! Every fixture also asserts the *validity invariant*: the emitted JS re-parses cleanly under the
 //! STOCK oxc parser.
@@ -238,7 +239,8 @@ fn self_closing_props_group_then_raw_markup() {
 
 #[test]
 fn props_then_verbatim_body() {
-    // `[props]`'s closing `]` is peeked raw for a continuation (contract R19): `|{` opens a
+    // `[props]`'s closing `]` is peeked raw for a continuation (props compose with a verbatim
+    // body — notation.md §Verbatim): `|{` opens a
     // verbatim body exactly as `{` opens a braced one. This used to fall through the peek's
     // catch-all as self-closing, silently leaking `|{...}|` out as sibling markup text.
     nota_expr(
@@ -261,9 +263,9 @@ fn self_closing_props_then_bare_pipe_is_literal() {
 
 #[test]
 fn props_then_colon_body() {
-    // Contract R21 §3 row: `[props]` compose with a colon body exactly as with a braced/verbatim
-    // one. `@aside[class: "x"]: body` opens the SAME colon body a bare `@aside:` would (same R12
-    // positional gate, same colon-body extent), threading the bracket props through unchanged.
+    // Props compose with a colon body exactly as with a braced/verbatim one (notation.md §Colon &
+    // block sugar). `@aside[class: "x"]: body` opens the SAME colon body a bare `@aside:` would
+    // (same positional gate, same colon-body extent), threading the bracket props through unchanged.
     assert_js_eq(
         &nota_doc("@aside[class: \"x\"]: styled aside\n"),
         r#"export default function Doc() {
@@ -277,7 +279,7 @@ fn props_then_colon_body() {
             return decode(Fragment(h("aside", { class: "x", id: y }, ["body"])));
         }"#,
     );
-    // The R20b element form is now legal: `@FootnoteText[label: "n2"]: def` — a colon-body footnote
+    // The doc-state element form is now legal: `@FootnoteText[label: "n2"]: def` — a colon-body footnote
     // definition (previously the `[^x]:` sugar was the only colon-body definition surface).
     assert_js_eq(
         &nota_doc("@FootnoteText[label: \"n2\"]: def two\n"),
@@ -304,7 +306,7 @@ fn props_colon_body_parity_with_bare_colon() {
 
 #[test]
 fn props_colon_dead_gate_is_literal() {
-    // Contract R21: where the R12 positional gate is dead (mid-prose, not a line start), the form
+    // Where the positional gate is dead (mid-prose, not a line start), the form
     // dies exactly as a bare head does — the `[props]` element self-closes and `: y` stays literal
     // text (the post-`]` `:` is NOT a trigger).
     nota_expr("@{x @a[p: 1]: y}", r#"Fragment("x ", h("a", { p: 1 }, []), ": y")"#);
@@ -312,7 +314,8 @@ fn props_colon_dead_gate_is_literal() {
 
 #[test]
 fn props_colon_and_verbatim_coexist() {
-    // R19 + R21 in one document: a `[props]` verbatim body and a `[props]` colon body both parse
+    // Both props compositions in one document: a `[props]` verbatim body and a `[props]` colon
+    // body both parse
     // (the post-`]` peek routes `|{` → verbatim, `:` → colon under the live gate).
     assert_js_eq(
         &nota_doc("@CodeBlock[lang: \"python\"]|{f(x)}|\n\n@aside[class: \"x\"]: note\n"),
@@ -476,7 +479,7 @@ fn doc_fence_statements() {
 
 #[test]
 fn doc_component_binding_stays_document_local_with_name() {
-    // Contract R15: a top-level `%const X = inlineComponent(...)` is an ordinary lexical statement
+    // A top-level `%const X = inlineComponent(...)` is an ordinary lexical statement
     // — it prepends into Doc (document-local, NOT hoisted or exported; replay hydration recovers
     // its closure client-side) — and is passed its binding name "X" as the 2nd arg (the debug-
     // manifest name).
@@ -492,21 +495,21 @@ fn doc_component_binding_stays_document_local_with_name() {
 
 #[test]
 fn doc_export_component_binding_keeps_export_and_gets_name() {
-    // Contract R15: `%export let C = inlineComponent(...)` is the author's opt-in to module scope
+    // `%export let C = inlineComponent(...)` is the author's opt-in to module scope
     // — the export hoists verbatim AND gets the same name attach (previously the `%export` arm got
-    // no name — an R15 fix).
+    // no name; fixed).
     let js =
         nota_doc("%export let Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
     assert!(js.contains("export let Card = inlineComponent"), "export kept + hoisted: {js}");
     assert!(js.contains(r#", "Card")"#), "component name passed as 2nd arg: {js}");
-    // No decode wrap is injected into the component body (dead at ▸=true — R15d): the expression-
+    // No decode wrap is injected into the component body (dead at ▸=true): the expression-
     // bodied arrow lowers to bare `h("span", …)`, not `decode(h("span", …))`.
     assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
 }
 
 #[test]
 fn colon_sugar_inline() {
-    // At a markup-body start (R9 line start) the glued `:` fires: `@foo: …` → `@foo{…}`.
+    // At a markup-body start (a line start) the glued `:` fires: `@foo: …` → `@foo{…}`.
     nota_expr("@{@foo: hello world}", r#"Fragment(h("foo", {}, ["hello world"]))"#);
     // Mid-line (NOT a line start) the colon is now DEAD under the positional rule: `@foo`
     // interpolates and `: …` is literal text. (Previously `nota_expr_err("@foo: hello world")` —
@@ -518,7 +521,7 @@ fn colon_sugar_inline() {
 }
 
 // ===============================================================================================
-// Positional colon sugar (contract R9): `@head:` is an element trigger iff the form is a
+// Positional colon sugar (notation.md §Colon & block sugar): `@head:` is an element trigger iff the form is a
 // markup-body child AND its `@` sits at a line start (modulo whitespace, a body's own start
 // counting as one). Everywhere else the head interpolates and `: …` is literal.
 // ===============================================================================================
@@ -538,7 +541,7 @@ fn colon_positional_mid_body_is_dead() {
 
 #[test]
 fn colon_positional_line_start_fires() {
-    // A braced-body start is a line start (R9): the first child's `:` fires.
+    // A braced-body start is a line start: the first child's `:` fires.
     nota_expr("@p{@a: b}", r#"h("p", {}, [h("a", {}, ["b"])])"#);
     // Colon bodies chain: `@b` sits at `@a`'s colon-body start, itself a line start → `a{b{c}}`.
     nota_expr("@{@a: @b: c}", r#"Fragment(h("a", {}, [h("b", {}, ["c"])]))"#);
@@ -550,7 +553,7 @@ fn colon_positional_line_start_fires() {
 
 #[test]
 fn colon_indented_line_start_in_braced_body_fires() {
-    // R9: an indented literal line start inside a braced body is a line start — the colon fires.
+    // An indented literal line start inside a braced body is a line start — the colon fires.
     assert!(
         nota_doc("@p{\n  @a: b\n}\n").contains(r#"h("p", {}, [h("a", {}, ["b"])])"#),
         "indented line-start colon inside a braced body fires",
@@ -559,7 +562,7 @@ fn colon_indented_line_start_in_braced_body_fires() {
 
 #[test]
 fn colon_bounded_clip_at_range_end() {
-    // R9 clip: a colon body nested in a bounded range ends at the range's own end — it cannot
+    // The bounded clip: a colon body nested in a bounded range ends at the range's own end — it cannot
     // escape it. `*@a: bar* rest`: the emphasis close `*` clips `@a`'s body to "bar", and " rest"
     // is a sibling of the emphasis. (Previously double-collected — "bar* rest" inside AND " rest"
     // outside; this is the second bug fixed by this change.)
@@ -938,7 +941,7 @@ fn hash_without_space_is_literal() {
 
 #[test]
 fn heading_sugar_relowers_but_raw_element_stays_host() {
-    // R18f: `#` heading *sugar* re-lowers to the ambient `Heading` slot (numbered/Toc'd by the
+    // `#` heading *sugar* re-lowers to the ambient `Heading` slot (numbered/Toc'd by the
     // prelude), but a raw `@hN{…}` element form stays a plain host tag — the unnumbered/un-Toc'd
     // escape hatch. A document mixing both must emit each form distinctly.
     let js = nota_doc("# Sugar\n@h2{Raw}\n");
@@ -1097,7 +1100,7 @@ fn line_start_sugar_after_a_colon_block() {
 
 #[test]
 fn body_start_is_a_line_start() {
-    // Contract R9: the start of a markup body counts as a line start (Typst's content-block
+    // The start of a markup body counts as a line start (notation.md §Markup sugar; Typst's content-block
     // rule), so a body opening directly with a marker opens the construct — with the extent
     // clipped at the body's own closer.
 
@@ -1141,17 +1144,17 @@ fn body_start_is_a_line_start() {
     );
 }
 
-// ----- Doc-state sugar (contract R20a): `<label>` / `&ref` / `[^mark]` / `[^label]: body` -----
+// ----- Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` / `[^label]: body` -----
 
 #[test]
 fn docstate_label_row() {
-    // Contract §3 row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (Typst-minus-period label — R20).
+    // Emit-table row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (Typst-minus-period label).
     nota_expr("@{<sec_intro>}", r#"Fragment(h(Label, { id: "sec_intro" }, []))"#);
 }
 
 #[test]
 fn docstate_ref_row() {
-    // Contract §3 row: `&sec_intro` ≡ `@Ref[id: "sec_intro"]{}`; ends at the first non-ident char.
+    // Emit-table row: `&sec_intro` ≡ `@Ref[id: "sec_intro"]{}`; ends at the first non-ident char.
     nota_expr(
         "@{see &sec_intro, ok}",
         r#"Fragment("see ", h(Ref, { id: "sec_intro" }, []), ", ok")"#,
@@ -1160,14 +1163,14 @@ fn docstate_ref_row() {
 
 #[test]
 fn docstate_footnote_mark_row() {
-    // Contract §3 row: `[^note1]` ≡ `@FootnoteMark[label: "note1"]{}`; glues after a word
+    // Emit-table row: `[^note1]` ≡ `@FootnoteMark[label: "note1"]{}`; glues after a word
     // (Markdown-style — `[^` needs no left guard).
     nota_expr("@{text[^note1]}", r#"Fragment("text", h(FootnoteMark, { label: "note1" }, []))"#);
 }
 
 #[test]
 fn docstate_footnote_text_row() {
-    // Contract §3 row: line-start `[^note1]: body` ≡ `@FootnoteText[label: "note1"]: body`.
+    // Emit-table row: line-start `[^note1]: body` ≡ `@FootnoteText[label: "note1"]: body`.
     let js = nota_doc("[^note1]: See *also* now\n");
     assert_js_eq(
         &js,
@@ -1179,7 +1182,7 @@ fn docstate_footnote_text_row() {
 
 #[test]
 fn docstate_footnote_text_is_line_start_only() {
-    // Mid-line `[^x]:` is a footnote *mark*; the `:` stays literal (R9/R12 positional rule).
+    // Mid-line `[^x]:` is a footnote *mark*; the `:` stays literal (the positional rule).
     let js = nota_doc("see [^x]: here\n");
     assert!(js.contains(r#"h(FootnoteMark, { label: "x" }, [])"#), "{js}");
     assert!(!js.contains("FootnoteText"), "no definition mid-line: {js}");
@@ -1202,7 +1205,7 @@ fn docstate_footnote_text_colon_extent() {
 
 #[test]
 fn docstate_footnote_text_at_body_start_clips_at_brace() {
-    // R9: a braced body's start is a line start, and the colon body clips at the body's `}`.
+    // A braced body's start is a line start, and the colon body clips at the body's `}`.
     let js = nota_expr_raw("@p{[^n]: note}");
     assert!(js.contains(r#"h(FootnoteText, { label: "n" }, ["note"])"#), "{js}");
 }
@@ -1234,7 +1237,7 @@ fn docstate_left_boundary_guard_positives() {
 
 #[test]
 fn docstate_fires_at_body_and_bounded_starts() {
-    // A body/range start counts as a line start (R9): emphasis body, braced body, heading body.
+    // A body/range start counts as a line start: emphasis body, braced body, heading body.
     nota_expr(
         "@{*<a>* x}",
         r#"Fragment(h("strong", {}, [h(Label, { id: "a" }, [])]), " x")"#,
@@ -1278,11 +1281,11 @@ fn docstate_escapes_are_literal() {
 
 #[test]
 fn docstate_ident_charset() {
-    // Charset is **Typst minus period** (contract R20, re-amended 2026-07-05): start `[A-Za-z0-9_]`,
+    // Charset is **Typst minus period** (notation.md §Doc-state references): start `[A-Za-z0-9_]`,
     // continue `[A-Za-z0-9_:-]`, ASCII-only. Kebab/namespaced labels work; digits may start; `.`,
     // `$`, and Unicode are NOT label chars.
     nota_expr("@{<sec_intro_2>}", r#"Fragment(h(Label, { id: "sec_intro_2" }, []))"#);
-    // Kebab: `-` joins now (`<sec-intro>` / `&sec-intro` fire — the §3 rows).
+    // Kebab: `-` joins now (`<sec-intro>` / `&sec-intro` fire — the emit-table rows).
     nota_expr("@{<sec-intro>}", r#"Fragment(h(Label, { id: "sec-intro" }, []))"#);
     nota_expr("@{&sec-intro}", r#"Fragment(h(Ref, { id: "sec-intro" }, []))"#);
     // `:` joins (namespaced labels) — documented behavior; a trailing `-` also glues.
@@ -1305,7 +1308,8 @@ fn docstate_ident_charset() {
 
 #[test]
 fn docstate_raw_spans_and_embedded_js_stay_raw() {
-    // Inside code/math/verbatim the sugars are raw content (R13); inside embedded JS they are JS.
+    // Inside code/math/verbatim the sugars are raw content (the unified raw-span model —
+    // notation.md §Verbatim); inside embedded JS they are JS.
     nota_expr("@{`a <x> &y [^z]`}", r"Fragment(h(CodeInline, {}, [String.raw`a <x> &y [^z]`]))");
     nota_expr("@{$m <x> &y$}", r"Fragment(h(Tex, {}, [String.raw`m <x> &y`]))");
     nota_expr("@code|{<x> &y}|", r#"h("code", {}, [String.raw`<x> &y`])"#);
@@ -1314,7 +1318,7 @@ fn docstate_raw_spans_and_embedded_js_stay_raw() {
 
 #[test]
 fn docstate_unclosed_label_is_literal() {
-    // `<ident` with no `>` on the line stays literal (R11-consistent).
+    // `<ident` with no `>` on the line stays literal (matching the inline-span line clamp).
     let js = nota_doc("a <abc\nand b> c\n");
     assert!(!js.contains("h(Label"), "{js}");
     assert!(js.contains("a <abc"), "{js}");
@@ -1322,7 +1326,7 @@ fn docstate_unclosed_label_is_literal() {
 
 #[test]
 fn docstate_mixed_document() {
-    // All four sugars + guarded literals in one document (the §3 mixed-golden, exact emit).
+    // All four sugars + guarded literals in one document (the mixed golden, exact emit).
     let js = nota_doc(
         "# Intro <sec_intro>\n\nSee &sec_intro for Vec<T> and R&D details[^note1].\n\n\
          [^note1]: The *fine* print.\n",
@@ -1344,7 +1348,8 @@ fn docstate_mixed_document() {
 
 #[test]
 fn percent_statement_region_rules() {
-    // TODO.md bug 6 regression — the `%` statement-region contract: the rest of the line is JS
+    // TODO.md bug 6 regression — the `%` statement-region rules (notation.md §Statements): the
+    // rest of the line is JS
     // (arbitrary statements, JS's own `;`/ASI rules, continuing across single newlines exactly
     // where JS grammar allows), transitioning back to markup at end-of-line once a statement
     // completes there, at a blank line (ASI as at end of input), or at the next `%` line.
@@ -1421,7 +1426,7 @@ fn nota_doc_no_validity(source: &str) -> String {
     Codegen::new().build(&program).code
 }
 
-/// THE canonical golden, stage-3 (contract §2, revised by R15): the component binding is
+/// THE canonical golden, stage-3 (decode.md §The worked example): the component binding is
 /// **document-local** — it prepends into `Doc` (no hoist, no export), keeps its name 2nd-arg, and
 /// its body has **no** `decode(...)` wrap (dead at `▸ = true`). The `@for` is lowered to a *keyed*
 /// `.map` (`(x, _i) => Fragment({ key: _i }, …)`), and the `-` list marker is lowered to the
@@ -1438,8 +1443,8 @@ const CANONICAL_STAGE3: &str = r#"export default function Doc() {
 #[test]
 fn canonical_golden_matches_stage3() {
     // THE capstone: stage-1 `.nota` compiles to a module equal (modulo formatting) to stage-3 —
-    // incl. the inline component (document-local binding + name 2nd-arg, no body decode-wrap —
-    // R15), the keyed `Fragment({ key: _i }, …)`, the `["a", "b"].map((x, _i) => …)` loop
+    // incl. the inline component (document-local binding + name 2nd-arg, no body
+    // decode-wrap), the keyed `Fragment({ key: _i }, …)`, the `["a", "b"].map((x, _i) => …)` loop
     // lowering, and the `-` → `h("nota-ul-li", …)` list sentinel. Also valid JS (re-parses under
     // stock oxc — the validity invariant), now that nothing is un-lowered.
     let js = nota_doc(CANONICAL_NOTA);
@@ -1458,12 +1463,12 @@ fn canonical_golden_minus_phase_d_is_valid() {
 ";
     let js = nota_doc(src); // asserts validity (re-parses under stock oxc)
     assert!(js.contains(r"inlineComponent((children) => {"), "{js}");
-    // R15: the component body's return is NOT decode-wrapped (dead at ▸=true).
+    // The component body's return is NOT decode-wrapped (dead at ▸=true).
     assert!(js.contains(r#"return h("span", { style: { color } }, [children]);"#), "{js}");
     assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
     assert!(js.contains(r#", "Colorized")"#), "component name: {js}");
     assert!(js.contains(r#"h(Colorized, {}, ["a"])"#), "component use: {js}");
-    // R15: the binding is document-local — not exported, inside Doc.
+    // The binding is document-local — not exported, inside Doc.
     assert!(!js.contains("export let Colorized"), "not exported: {js}");
 }
 
@@ -1508,7 +1513,8 @@ fn doc_paragraph_break_is_double_newline() {
 // ===============================================================================================
 // Raw spans: verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), and general
 // backslash escapes. All raw spans lower to `String.raw` tagged templates.
-// `CodeInline`/`CodeBlock`/`Tex` are ambient prelude bindings (`Tex`, not `Math` — contract R14).
+// `CodeInline`/`CodeBlock`/`Tex` are ambient prelude bindings (`Tex`, not `Math` — an ambient
+// `Math` would capture the JS global; decode.md §The registry & config).
 // ===============================================================================================
 
 // --- General backslash escape -----------------------------------------------------------------
@@ -2172,8 +2178,8 @@ mod fuzz_findings_2 {
             .is_empty()
     }
 
-    /// Parse `source` in document mode as **TS-aware** (`tsx`) — the canonical Nota parse (contract
-    /// H2). `true` iff it parses without diagnostics.
+    /// Parse `source` in document mode as **TS-aware** (`tsx`) — the canonical Nota parse.
+    /// `true` iff it parses without diagnostics.
     fn doc_parses_tsx(source: &str) -> bool {
         let allocator = Allocator::default();
         Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
@@ -2301,7 +2307,7 @@ mod fuzz_findings_2 {
         );
     }
 
-    // ---- TypeScript in the build path (contract H2: the canonical parse is TS-aware) ------------
+    // ---- TypeScript in the build path (the canonical parse is TS-aware) ------------------------
 
     // The canonical Nota parse is TS-aware (`tsx`), so embedded TS (annotations, `type`/`interface`/
     // `enum`, `as`/`satisfies`/`!`) parses. (The build `compile` then strips the types — covered by
@@ -2565,7 +2571,7 @@ mod fuzz_findings_2 {
         );
     }
 
-    // [F1/R15] the reader keeps a user-supplied component-name arg instead of overriding it with
+    // [name-attach] the reader keeps a user-supplied component-name arg instead of overriding it with
     // the binding name, so the island debug-manifest's `comp` can mismatch the authored binding.
     #[test]
     fn fuzz2_component_name_should_use_binding_name() {

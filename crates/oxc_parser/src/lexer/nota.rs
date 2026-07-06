@@ -44,7 +44,8 @@ static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b 
     || b == b'`'
     || b == b'$'
     || b == b'|'
-    // Doc-state sugar openers (contract R20a): `<label>`, `&ref`, `[^mark]`. Each is validated at
+    // Doc-state sugar openers (notation.md §Doc-state references): `<label>`, `&ref`, `[^mark]`.
+    // Each is validated at
     // the sigil in `next_nota_child` (left-guard / digraph shape); a non-opener stays 1-byte text.
     || b == b'<'
     || b == b'&'
@@ -81,7 +82,7 @@ impl<C: Config> Lexer<'_, C> {
                 self.consume_char();
                 return self.finish_re_lex(kind);
             }
-            // Doc-state sugar openers (contract R20a). A marker token only at a valid opener (the
+            // Doc-state sugar openers. A marker token only at a valid opener (the
             // left-boundary guard for `<`/`&`, the `[^`+ident digraph for `[`); otherwise a 1-byte
             // text token. The parser (`parse_*_sugar`) resolves the terminator and marker-vs-literal.
             Some(b'<') => {
@@ -416,7 +417,7 @@ pub fn markup_trigger(source: &str, after: u32) -> MarkupTrigger {
 }
 
 /// Is `at` a "line start modulo whitespace" inside a markup frame whose body content begins at
-/// `frame_start` (contract R9)? Walk back from `at` over spaces/tabs — never below `frame_start`,
+/// `frame_start` (notation.md §Markup sugar)? Walk back from `at` over spaces/tabs — never below `frame_start`,
 /// which bounds the frame's own body — and report whether the landing sits at the frame's body
 /// start, at file offset 0, or immediately after a `\n`. This is the position half of the
 /// positional colon-sugar gate: `@head:` is an element trigger only where this holds (and the top
@@ -432,19 +433,19 @@ pub fn at_line_start_in_frame(source: &str, at: u32, frame_start: u32) -> bool {
 }
 
 // ================================================================================================
-// Doc-state sugar (contract R20): `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body`
+// Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` /
+// line-start `[^label]: body`
 // ================================================================================================
 
-/// The doc-state sugar **label** charset (contract R20, re-amended 2026-07-05 — **Typst minus
-/// period**, ASCII-only; supersedes both the original Typst-like set and the brief JS-IdentifierName
-/// amendment). Start `[A-Za-z0-9_]`: digits are legal at a label's *start* (`[^1]` fires,
+/// The doc-state sugar **label** charset: **Typst minus period**, ASCII-only
+/// (notation.md §Doc-state references). Start `[A-Za-z0-9_]`: digits are legal at a label's *start* (`[^1]` fires,
 /// Markdown-style), unlike a JS identifier. The element forms remain charset-free (`@Label[id:
 /// "π.α"]{}` takes any string) — only the sugar is restricted.
 fn is_docstate_label_start(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// The doc-state sugar label *continue* charset (contract R20): `[A-Za-z0-9_:-]` — `-` and `:` join
+/// The doc-state sugar label *continue* charset: `[A-Za-z0-9_:-]` — `-` and `:` join
 /// (kebab/namespaced labels: `<sec-intro>`, `<ns:x>`), but `.` does NOT (so `&sec.` never glues the
 /// trailing dot). `$` and non-ASCII are not label chars (a Unicode-letter label stays literal).
 fn is_docstate_label_part(b: u8) -> bool {
@@ -479,7 +480,7 @@ pub fn footnote_can_open(source: &str, off: u32) -> bool {
         && is_docstate_start_at(source, off + 2)
 }
 
-/// The left-boundary guard on `<` and `&` (contract R20a): the sigil fires iff preceded by
+/// The left-boundary guard on `<` and `&` (notation.md §Doc-state references): the sigil fires iff preceded by
 /// start of source, whitespace, or opening punctuation (`(`/`[`/`{`/double/single quote) — so
 /// `Vec<T>`, `R&D`, `a<b`, `a&b` stay literal prose. Start-of-*body* also fires, but that is the
 /// parser's frame-start check (raw bytes cannot see a body boundary — `*<x>*`).
@@ -492,8 +493,8 @@ pub fn docstate_left_guard(source: &str, off: u32) -> bool {
 
 /// The exclusive end of a doc-state label starting at `start`, scanning within `limit` (a bounded
 /// frame's clip — a match may not reach past the frame); `None` if `start` is at/past `limit` or
-/// not a label-start char. The charset is **Typst minus period** (contract R20, re-amended
-/// 2026-07-05): [`is_docstate_label_start`] then [`is_docstate_label_part`], so `-`/`:` join but `.`
+/// not a label-start char. The charset is **Typst minus period**
+/// (notation.md §Doc-state references): [`is_docstate_label_start`] then [`is_docstate_label_part`], so `-`/`:` join but `.`
 /// does not (`&sec.` → `sec` + a literal `.`) and `$`/non-ASCII are not label chars (a
 /// Unicode-letter label is literal). ASCII-only ⇒ every char is one byte, so a continuation byte
 /// joins iff it sits strictly before `limit`.
@@ -509,7 +510,8 @@ fn docstate_ident_end(source: &str, start: u32, limit: u32) -> Option<u32> {
 }
 
 /// `<label>` at `lt_off`: the label's span, requiring the `>` close within `limit`. The ident
-/// charset excludes `\n`, so "closes on its opening line" (R11-consistent) holds by construction.
+/// charset excludes `\n`, so "closes on its opening line" (matching the inline-span line clamp)
+/// holds by construction.
 /// `None` → the `<` is literal text.
 pub fn label_sugar_at(source: &str, lt_off: u32, limit: u32) -> Option<Span> {
     let start = lt_off + 1;
@@ -524,8 +526,8 @@ pub fn ref_sugar_at(source: &str, amp_off: u32, limit: u32) -> Option<Span> {
 }
 
 /// `[^mark]` at `lbrack_off`: the mark's span, requiring the `]` within `limit`. `None` → the `[`
-/// is literal text. (The `[^ident]:` footnote-*text* split is the parser's: it needs the R9/R12
-/// positional line-start gate.)
+/// is literal text. (The `[^ident]:` footnote-*text* split is the parser's: it needs the
+/// positional line-start gate — notation.md §Colon & block sugar.)
 pub fn footnote_sugar_at(source: &str, lbrack_off: u32, limit: u32) -> Option<Span> {
     let start = lbrack_off + 2;
     let end = docstate_ident_end(source, start, limit)?;
@@ -1461,7 +1463,7 @@ mod tests {
     fn at_line_start_in_frame_predicate() {
         // File offset 0 is a line start (frame_start irrelevant when it is 0).
         assert!(at_line_start_in_frame("@a: b", 0, 0));
-        // The frame's own body start counts as a line start (R9), even mid-line: `@{@a: b}` — the
+        // The frame's own body start counts as a line start, even mid-line: `@{@a: b}` — the
         // inner `@a` sits at the fragment body start (offset 2).
         assert!(at_line_start_in_frame("@{@a: b}", 2, 2));
         // Walking back over spaces/tabs to the frame start still qualifies.
@@ -1508,8 +1510,8 @@ mod tests {
         assert_eq!(colon_prop_line_at("  x | y\n", 0), None);
     }
 
-    /// Doc-state sugar scans (contract R20): opener shapes, the left-boundary guard, the **Typst
-    /// minus period** label charset (re-amended 2026-07-05 — start `[A-Za-z0-9_]`, continue
+    /// Doc-state sugar scans: opener shapes, the left-boundary guard, the **Typst
+    /// minus period** label charset (start `[A-Za-z0-9_]`, continue
     /// `[A-Za-z0-9_:-]`, ASCII-only; digit-start legal, `-`/`:` join, `.`/`$`/Unicode do not),
     /// termination, and the bounded-frame `limit` clip.
     #[test]

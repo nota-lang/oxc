@@ -161,7 +161,7 @@ pub struct NotaCompiledWithMappings {
 /// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + code mappings +
 /// recovered diagnostics. The virtual path uses EOF error-recovery, so it never fails: an
 /// unterminated construct still yields `code` + `mappings`, and the syntax/lowering problems come
-/// back in `errors` for the language server to surface as LSP diagnostics (contract D5).
+/// back in `errors` for the language server to surface as LSP diagnostics.
 pub struct NotaVirtualCompiled {
     /// The emitted **virtual TypeScript** (`.tsx`) module source — TS types preserved, for the
     /// language server's TS service.
@@ -175,7 +175,7 @@ pub struct NotaVirtualCompiled {
 /// Per-call configuration for the one shared Nota compile pipeline ([`compile_internal`]). The three
 /// public entries are thin wrappers that differ only in these knobs.
 struct CompileConfig {
-    /// Strip embedded TypeScript to plain JS (the build path, contract H2). Mutually exclusive with
+    /// Strip embedded TypeScript to plain JS (the build path). Mutually exclusive with
     /// `collect_mappings` — stripping shifts codegen offsets, so it never runs on a mapping path.
     strip_ts: bool,
     /// Collect Volar `CodeMapping`s (the mapping / virtual paths) — also enables codegen's offset log.
@@ -207,7 +207,8 @@ struct CompileOutput {
 /// [`compile_with_mappings`], and [`compile_virtual`] are wrappers over this with different
 /// [`CompileConfig`]s — keeping the parse mode, the lowering, and the mapping assembly in one place.
 ///
-/// The canonical Nota parse is `SourceType::tsx` (contract H2): embedded TypeScript in `%`/`[props]`/
+/// The canonical Nota parse is `SourceType::tsx` (NOTA_READER.md §Compiler entries): embedded
+/// TypeScript in `%`/`[props]`/
 /// `@(expr)`/`@for` heads is admitted into the AST. The build path then *strips* the types (plain-JS
 /// emit); the mapping/virtual paths *preserve* them (the language server's TS service types them).
 fn compile_internal(
@@ -231,7 +232,7 @@ fn compile_internal(
         .lower_document_program(&mut program);
     if !lowered.diagnostics.is_empty() {
         if config.recover {
-            // Surface reserved-name-collision diagnostics as editor diagnostics too (D5).
+            // Surface reserved-name-collision diagnostics as editor diagnostics too.
             errors.extend(lowered.diagnostics);
         } else if !config.lenient_diagnostics {
             return Err(lowered.diagnostics);
@@ -281,7 +282,7 @@ fn strip_typescript<'a>(
 /// Compile a `.nota` source string to a JS module (+ optional source map).
 ///
 /// The build path: parses the whole file in Nota *document mode* (markup at the top level → `Doc`),
-/// lowers, **strips embedded TypeScript** to plain JS (contract H2), and runs `oxc_codegen`. On a
+/// lowers, **strips embedded TypeScript** to plain JS, and runs `oxc_codegen`. On a
 /// parse error or a name-collision diagnostic, returns the collected diagnostics (`Err`).
 ///
 /// `source_map_path` controls whether a source map is generated (it names the source in the map);
@@ -338,7 +339,7 @@ pub fn compile_with_mappings(
 /// the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
 ///
 /// **For the Volar `LanguagePlugin`:** like the build path, the runtime `import { h, decode,
-/// Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Math`
+/// Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Tex`
 /// declarations are *not* emitted here — the plugin prepends that typing preamble to the virtual
 /// `.tsx` so `h`/`decode`/component refs type-check. When it does, it must shift every mapping's
 /// `generated_offsets` by the prepended prefix length (the `source_offsets` are unchanged — they
@@ -347,7 +348,7 @@ pub fn compile_with_mappings(
 /// Uses **EOF error-recovery**, so it does not fail on unterminated markup: an unclosed `[props]`
 /// group, `{ … }` body, or bare `@`-head still yields a virtual `.tsx` (with mappings, incl. a
 /// prop-completion anchor at `@tag[|`), and the syntax/lowering problems come back in
-/// [`NotaVirtualCompiled::errors`] for the language server to surface as diagnostics (contract D5).
+/// [`NotaVirtualCompiled::errors`] for the language server to surface as diagnostics.
 /// The only `Err` is the internal invariant break in `strip_typescript` — never reached here, since
 /// the virtual path does not strip.
 ///
@@ -508,7 +509,7 @@ mod tests {
 
     #[test]
     fn compile_accepts_and_strips_embedded_typescript() {
-        // The build path parses TS-aware (contract H2) and strips the types → plain, runnable JS.
+        // The build path parses TS-aware and strips the types → plain, runnable JS.
         let out = compile("% const n: number = 1\n@p{@(n)}\n", None).expect("compiles");
         assert!(
             !out.code.contains(": number"),
@@ -749,7 +750,8 @@ mod h1_h2 {
         assert_eq!(capsi, MappingCapabilities::full());
 
         // The `%let` binding name `Colorized` (its *declaration*, the 1st occurrence) is part of
-        // the `%` statement (document-local under R15 — prepended into Doc) → embedded JS, full caps.
+        // the `%` statement (a document-local component binding, prepended into Doc) → embedded JS,
+        // full caps.
         let colorized_decl = offset_of(CANONICAL_NOTA, "Colorized = ") as usize; // unique form
         let (gd, _, capsd) = segment_at(&out.mappings, colorized_decl as u32);
         assert_eq!(&out.code[gd as usize..gd as usize + "Colorized".len()], "Colorized");
@@ -758,7 +760,7 @@ mod h1_h2 {
 }
 
 // ===============================================================================================
-// EOF error-recovery (`--virtual`, contract D4/D5): the reader keeps the partial AST + reports
+// EOF error-recovery (the `--virtual` recover path): the reader keeps the partial AST + reports
 // diagnostics on an unterminated construct, and materialises a prop-completion anchor at `@tag[|`.
 // ===============================================================================================
 #[cfg(test)]
@@ -774,7 +776,7 @@ mod recover {
         // The virtual contains the props object literal (recovered `h("a", {}, …)`).
         assert!(out.code.contains("h(\"a\", {"), "props object literal present:\n{}", out.code);
 
-        // A syntax diagnostic is reported (D5), not swallowed.
+        // A syntax diagnostic is reported, not swallowed.
         assert_eq!(out.errors.len(), 1, "one recovered diagnostic: {:?}", out.errors);
 
         // The completion anchor: source offset 3 (just after `[`, where the cursor sits) maps to a
@@ -821,7 +823,7 @@ mod recover {
         assert!(out.code.contains("Fragment()"), "empty fragment recovery:\n{}", out.code);
     }
 
-    /// Recovery surfaces a reserved-name collision (`%let h = …`) as a diagnostic too (D5), rather
+    /// Recovery surfaces a reserved-name collision (`%let h = …`) as a diagnostic too, rather
     /// than silently dropping it the way the lenient (non-recover) virtual path used to.
     #[test]
     fn reserved_name_collision_surfaces_as_diagnostic() {

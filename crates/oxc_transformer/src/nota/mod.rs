@@ -7,8 +7,9 @@
 //! `oxc_transformer` lowers JSX to `createElement`.
 //!
 //! Entry: [`NotaLowering`]. The document is rebuilt by [`NotaLowering::lower_document_program`] (Doc
-//! skeleton, `%`-statement routing + component name-attach — contract R15: component bindings are
-//! ordinary lexical statements, document-local, NOT hoisted/exported); embedded `@`-forms are then
+//! skeleton, `%`-statement routing + component name-attach — component bindings are
+//! ordinary lexical statements, document-local, NOT hoisted/exported — decode.md §The worked
+//! example); embedded `@`-forms are then
 //! replaced by a [`oxc_ast_visit::VisitMut`] walk. Optionally collects Volar [`NotaMappingMark`]s.
 //!
 //! Semantic pin: `Doc` and the nested-`%` IIFE are always emitted **synchronous** — the presence of
@@ -34,21 +35,22 @@ const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
 const DOC: &str = "Doc";
 /// The component constructors. A top-level `%const X = inlineComponent(...)` binding stays
-/// document-local (contract R15 — no hoist/export; `%export` is the author's opt-in); the reader
+/// document-local (no hoist/export; `%export` is the author's opt-in); the reader
 /// only attaches the binding name as the constructor's 2nd argument.
 const INLINE_COMPONENT: &str = "inlineComponent";
 const BLOCK_COMPONENT: &str = "blockComponent";
 /// Ambient-prelude tags for code/math spans (referenced as identifiers — no import emitted).
 const CODE_INLINE: &str = "CodeInline";
 const CODE_BLOCK: &str = "CodeBlock";
-/// `Tex`, not `Math` (contract R14): the ambient identifier must not capture the JS `Math` global —
+/// `Tex`, not `Math` (decode.md §The registry & config): the ambient identifier must not capture
+/// the JS `Math` global —
 /// the integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
 const MATH: &str = "Tex";
-/// Ambient-prelude heading slot (contract R18f): `#` heading *sugar* lowers to
+/// Ambient-prelude heading slot (decode.md §Doc-state): `#` heading *sugar* lowers to
 /// `h(Heading, { rank: N }, […])` — a free identifier reference (like `Tex`/`CodeInline`, no import
 /// emitted). Raw `@hN{…}` element forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
 const HEADING: &str = "Heading";
-/// Ambient-prelude doc-state slots (contract R20a): the four inline sugars lower to free
+/// Ambient-prelude doc-state slots (notation.md §Doc-state references): the four inline sugars lower to free
 /// identifier references, exactly the `HEADING` pattern — `<x>` → `h(Label, { id: "x" }, [])`,
 /// `&x` → `h(Ref, { id: "x" }, [])`, `[^x]` → `h(FootnoteMark, { label: "x" }, [])`, line-start
 /// `[^x]: body` → `h(FootnoteText, { label: "x" }, [body…])`.
@@ -58,8 +60,9 @@ const FOOTNOTE_MARK: &str = "FootnoteMark";
 const FOOTNOTE_TEXT: &str = "FootnoteText";
 
 /// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
-/// top-level binding gets the name attach (constructor 2nd argument — contract R15/F1: the
-/// returned function cannot otherwise recover its authored name for the debug manifest).
+/// top-level binding gets the name attach (constructor 2nd argument — decode.md §The worked
+/// example: the returned function cannot otherwise recover its authored name for the debug
+/// manifest).
 fn is_component_constructor(init: &Expression<'_>) -> bool {
     let Expression::CallExpression(call) = init else { return false };
     let Expression::Identifier(callee) = &call.callee else { return false };

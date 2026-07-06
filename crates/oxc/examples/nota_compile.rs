@@ -14,7 +14,7 @@
 //!
 //! With `--virtual <file>` it instead calls [`oxc::nota::compile_virtual`] (the type-preserving
 //! `.tsx` emit + [`CodeMapping`](oxc::nota::CodeMapping)s) and prints a single JSON object to
-//! stdout. The virtual path uses **EOF error-recovery** (contract D4/D5): an unterminated
+//! stdout. The virtual path uses **EOF error-recovery**: an unterminated
 //! construct still yields `code` + `mappings`, and the syntax/lowering problems come back in
 //! `errors` — so `--virtual` **exits 0** even on a malformed document:
 //!

@@ -15585,7 +15585,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path): the
     #[inline]
     pub fn nota_form_element(
         self,
@@ -15959,7 +15959,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path): the
     #[inline]
     pub fn nota_element(
         self,
@@ -15992,7 +15992,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
-    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path): the
     #[inline]
     pub fn alloc_nota_element(
         self,
