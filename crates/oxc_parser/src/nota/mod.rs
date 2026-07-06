@@ -118,6 +118,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         )
     }
 
+    /// Parse a whole `.nota` file in document mode with EOF error-recovery (the `--virtual`
+    /// language-server path). Returns the partial [`Program`] **and** all diagnostics — the tree is
+    /// never discarded (see [`crate::Parser::parse_nota_document_recover`]).
+    pub(crate) fn parse_nota_document_recover(mut self) -> crate::NotaDocumentRecover<'a> {
+        self.nota_recover = true;
+        let document = self.parse_document_body();
+        let program = self.wrap_document_program(document);
+        let errors = self.finish_nota_recover();
+        crate::NotaDocumentRecover { program, errors }
+    }
+
     /// Shared finalize for the Nota entries: collect fatal/lexer/parser diagnostics.
     fn finish_nota<T>(mut self, value: T) -> Result<T, Vec<OxcDiagnostic>> {
         if let Some(FatalError { error, .. }) = self.fatal_error.take() {
@@ -129,6 +140,25 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             return Err(errors);
         }
         Ok(value)
+    }
+
+    /// Recover-path finalize: collect **all** diagnostics (fatal + lexer + parser) without
+    /// discarding the partial AST. Mirrors `parse()`'s post-fatal cleanup — truncate the parser
+    /// errors accumulated *after* the fatal was recorded (they are downstream noise from the
+    /// aborted construct) — but keeps the fatal itself as a real diagnostic rather than swallowing
+    /// the whole parse.
+    fn finish_nota_recover(mut self) -> Vec<OxcDiagnostic> {
+        let fatal = self.fatal_error.take();
+        if let Some(FatalError { errors_len, .. }) = &fatal {
+            self.errors.truncate(*errors_len);
+        }
+        self.check_unfinished_errors();
+        let mut errors: Vec<OxcDiagnostic> =
+            self.lexer.errors.into_iter().chain(self.errors).collect();
+        if let Some(FatalError { error, .. }) = fatal {
+            errors.push(error);
+        }
+        errors
     }
 
     // ===========================================================================================
@@ -393,9 +423,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
         let span = Span::new(span_start, end);
         let tag = self.head_to_tag(head);
-        NotaForm::Element(
-            self.ast.alloc(self.ast.nota_element(span, tag, props, children, /* is_colon */ false)),
-        )
+        // In recovery, an unclosed `[props]` group left a completion anchor (the `[` span) — thread
+        // it onto the element so the lowering can map a prop-completion cursor into the props object.
+        let props_recovery = self.nota_prop_anchor.take();
+        NotaForm::Element(self.ast.alloc(self.ast.nota_element(
+            span,
+            tag,
+            props,
+            children,
+            /* is_colon */ false,
+            props_recovery,
+        )))
     }
 
     /// `@{ body }` → a fragment node. `@` already consumed.
@@ -832,6 +870,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             if !self.eat(Kind::Comma) {
                 break;
             }
+        }
+        // EOF error-recovery (`--virtual`): a `[props]` group that ran into end of file records a
+        // completion anchor at its `[` so the lowering can offer prop completions at `@tag[|`. The
+        // `expect_closing` diagnostic below still fires (demoted from fatal to recoverable by the
+        // recover entry), so the editor also shows "expected `]`".
+        if self.nota_recover && self.at(Kind::Eof) {
+            self.nota_prop_anchor = Some(open);
         }
         self.expect_closing_without_advance(Kind::RBrack, open);
     }
@@ -1480,7 +1525,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         let span = Span::new(span_start, body_src_end);
         self.resume_at(body_src_end);
         let tag = self.head_to_tag(head);
-        self.ast.nota_element(span, tag, props, items, /* is_colon */ true)
+        // A colon body cannot leave an unclosed `[props]` group (it clips to the line/block), so no
+        // recovery anchor applies here — but consume any pending one to keep the field in step.
+        let props_recovery = self.nota_prop_anchor.take();
+        self.ast.nota_element(span, tag, props, items, /* is_colon */ true, props_recovery)
     }
 
     /// Collect the colon-sugar body over `[start, end)`: leading `|` lines (continuation lines
@@ -1631,5 +1679,53 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 panic!("push_nota_item: top region is not Markup — markup child routed into JS/raw")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recover_tests {
+    use oxc_allocator::Allocator;
+    use oxc_span::SourceType;
+
+    use crate::Parser;
+
+    /// Recover-parse `source`; return the diagnostic messages (source-ordered as collected).
+    fn recover_errors(source: &str) -> Vec<String> {
+        let allocator = Allocator::default();
+        let r = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document_recover();
+        r.errors.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    #[test]
+    fn well_formed_input_recovers_without_errors() {
+        assert!(recover_errors("@p{hi}\n").is_empty());
+        assert!(recover_errors("Hi @em{x} and @Aside[k: 1]{y}.\n").is_empty());
+    }
+
+    #[test]
+    fn unclosed_props_group_reports_expected_bracket() {
+        let errs = recover_errors("@a[");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+        assert!(errs[0].contains('`') && errs[0].contains(']'), "mentions `]`: {errs:?}");
+    }
+
+    #[test]
+    fn unclosed_body_reports_expected_brace() {
+        let errs = recover_errors("@p{unterminated");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+        assert!(errs[0].contains('}'), "mentions `}}`: {errs:?}");
+    }
+
+    #[test]
+    fn bare_at_reports_unexpected() {
+        let errs = recover_errors("@");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+    }
+
+    #[test]
+    fn mid_document_unclosed_bracket_still_recovers() {
+        // Per D4, a mid-document `@a[` swallows to EOF; recovery still yields a diagnostic + a tree.
+        let errs = recover_errors("before\n\n@a[");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
     }
 }

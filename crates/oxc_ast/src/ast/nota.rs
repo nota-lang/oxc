@@ -197,6 +197,14 @@ pub struct NotaElement<'a> {
     /// `{`/`}` and text are content, while a colon body trims its edges like a document/block — so
     /// the lowering must thread this to the Scribble pass (it cannot be recovered post-parse).
     pub is_colon: bool,
+    /// Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
+    /// `Span` of an unclosed `[` whose `[props]` group ran into end-of-file. `None` in any
+    /// well-formed parse. The lowering reads it to give the (otherwise empty) props object literal
+    /// a real span and record a zero-width *completion anchor* just inside it, so the language
+    /// server can offer prop completions at `@tag[|`. A recovery artifact, not a source construct
+    /// — `#[estree(skip)]`, so the playground AST view is unchanged.
+    #[estree(skip)]
+    pub props_recovery: Option<Span>,
 }
 
 /// An element's tag: a host string, a component identifier, or a dynamic `@(expr)` head.
@@ -573,6 +581,7 @@ mod tests {
             ast.vec(),
             ast.vec1(ast.nota_child_text(Span::new(3, 8), "Hello")),
             false,
+            None,
         );
         let expr = ast.expression_nota_markup(outer, NotaMarkupKind::Element(ast.alloc(element)));
 

@@ -18927,6 +18927,8 @@ pub(crate) const OFFSET_NOTA_ELEMENT_TAG: usize = offset_of!(NotaElement, tag);
 pub(crate) const OFFSET_NOTA_ELEMENT_PROPS: usize = offset_of!(NotaElement, props);
 pub(crate) const OFFSET_NOTA_ELEMENT_CHILDREN: usize = offset_of!(NotaElement, children);
 pub(crate) const OFFSET_NOTA_ELEMENT_IS_COLON: usize = offset_of!(NotaElement, is_colon);
+pub(crate) const OFFSET_NOTA_ELEMENT_PROPS_RECOVERY: usize =
+    offset_of!(NotaElement, props_recovery);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
@@ -18964,6 +18966,13 @@ impl<'a, 't> NotaElementWithoutTag<'a, 't> {
     #[inline]
     pub fn is_colon(self) -> &'t bool {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
+    }
+
+    #[inline]
+    pub fn props_recovery(self) -> &'t Option<Span> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS_RECOVERY) as *const Option<Span>)
+        }
     }
 }
 
@@ -19009,6 +19018,13 @@ impl<'a, 't> NotaElementWithoutProps<'a, 't> {
     pub fn is_colon(self) -> &'t bool {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
     }
+
+    #[inline]
+    pub fn props_recovery(self) -> &'t Option<Span> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS_RECOVERY) as *const Option<Span>)
+        }
+    }
 }
 
 impl<'a, 't> GetAddress for NotaElementWithoutProps<'a, 't> {
@@ -19051,6 +19067,13 @@ impl<'a, 't> NotaElementWithoutChildren<'a, 't> {
     #[inline]
     pub fn is_colon(self) -> &'t bool {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_IS_COLON) as *const bool) }
+    }
+
+    #[inline]
+    pub fn props_recovery(self) -> &'t Option<Span> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_ELEMENT_PROPS_RECOVERY) as *const Option<Span>)
+        }
     }
 }
 

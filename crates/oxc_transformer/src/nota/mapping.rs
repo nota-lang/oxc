@@ -33,6 +33,12 @@ pub enum NotaMappingKind {
     /// `@Unknown{}` "Cannot find name" scope error), but it is not a completion/format/structure
     /// region — navigation + hover (semantic) only.
     ComponentIdentifier,
+    /// A **props-completion anchor** synthesised by EOF error-recovery for an unclosed `[props]`
+    /// group (`@tag[|` at end of file). The mark's `span` is the source `[` (whose object the
+    /// lowering gave a real span so codegen logs its position); the join emits a zero-width segment
+    /// just inside the props object literal `{ | }` with `completion: true`, so the language server
+    /// offers prop names there. Not a byte-exact leaf mapping — resolved specially by the join.
+    PropsAnchor,
 }
 
 /// One recorded Nota source→generated mapping mark.

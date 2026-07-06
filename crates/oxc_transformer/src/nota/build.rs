@@ -160,14 +160,20 @@ impl<'a> NotaLowering<'a> {
     // ===========================================================================================
 
     /// `h(tag, { props }, [children])`.
+    ///
+    /// `props_span` is the source span for the emitted props object literal. It is `Span::empty`
+    /// (unmapped boilerplate) in the normal case, but EOF error-recovery passes the real span of an
+    /// unclosed `[` so codegen logs the object's position and the join can anchor prop completions
+    /// inside `{ | }` (see [`super::mapping::NotaMappingKind::PropsAnchor`]).
     pub(super) fn build_h(
         &self,
         span: Span,
         tag: Expression<'a>,
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
+        props_span: Span,
     ) -> Expression<'a> {
-        let props_obj = self.ast.expression_object(Span::empty(span.start), props);
+        let props_obj = self.ast.expression_object(props_span, props);
         let children_arr = self.ast.expression_array(
             Span::empty(span.end),
             self.ast.vec_from_iter(children.into_iter().map(ArrayExpressionElement::from)),
@@ -329,7 +335,7 @@ impl<'a> NotaLowering<'a> {
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        self.build_h(span, self.ident(span.start, name), props, children)
+        self.build_h(span, self.ident(span.start, name), props, children, Span::empty(span.start))
     }
 
     // ===========================================================================================

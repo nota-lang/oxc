@@ -4715,6 +4715,9 @@ pub mod walk_mut {
         visitor.visit_nota_tag(&mut it.tag);
         visitor.visit_nota_props(&mut it.props);
         visitor.visit_nota_children(&mut it.children);
+        if let Some(props_recovery) = &mut it.props_recovery {
+            visitor.visit_span(props_recovery);
+        }
         visitor.leave_node(kind);
     }
 

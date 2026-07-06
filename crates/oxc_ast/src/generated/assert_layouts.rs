@@ -1855,7 +1855,7 @@ const _: () = {
     assert!(offset_of!(NotaStatement, statement) == 16);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaElement>() == 80);
+    assert!(size_of::<NotaElement>() == 96);
     assert!(align_of::<NotaElement>() == 8);
     assert!(offset_of!(NotaElement, span) == 0);
     assert!(offset_of!(NotaElement, node_id) == 8);
@@ -1863,6 +1863,7 @@ const _: () = {
     assert!(offset_of!(NotaElement, tag) == 16);
     assert!(offset_of!(NotaElement, props) == 32);
     assert!(offset_of!(NotaElement, children) == 56);
+    assert!(offset_of!(NotaElement, props_recovery) == 80);
 
     assert!(size_of::<NotaTag>() == 16);
     assert!(align_of::<NotaTag>() == 8);
@@ -3879,7 +3880,7 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaStatement, statement) == 12);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaElement>() == 56);
+    assert!(size_of::<NotaElement>() == 68);
     assert!(align_of::<NotaElement>() == 4);
     assert!(offset_of!(NotaElement, span) == 0);
     assert!(offset_of!(NotaElement, node_id) == 8);
@@ -3887,6 +3888,7 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaElement, tag) == 16);
     assert!(offset_of!(NotaElement, props) == 24);
     assert!(offset_of!(NotaElement, children) == 40);
+    assert!(offset_of!(NotaElement, props_recovery) == 56);
 
     assert!(size_of::<NotaTag>() == 8);
     assert!(align_of::<NotaTag>() == 4);

@@ -83,7 +83,7 @@ pub static STRUCTS: phf::Map<&'static str, StructDetails> = ::phf::Map {
         ("ComputedMemberExpression", StructDetails { field_order: Some(&[1, 0, 3, 4, 2]) }),
         ("ExportEntry", StructDetails { field_order: Some(&[1, 0, 2, 3, 4, 5, 6]) }),
         ("ObjectAssignmentTarget", StructDetails { field_order: Some(&[1, 0, 2, 3]) }),
-        ("NotaElement", StructDetails { field_order: Some(&[1, 0, 3, 4, 5, 2]) }),
+        ("NotaElement", StructDetails { field_order: Some(&[1, 0, 3, 4, 5, 2, 6]) }),
         ("JSXEmptyExpression", StructDetails { field_order: Some(&[1, 0]) }),
         ("TSNamedTupleMember", StructDetails { field_order: Some(&[1, 0, 3, 4, 2]) }),
         ("VariableDeclaration", StructDetails { field_order: Some(&[1, 0, 2, 4, 3]) }),

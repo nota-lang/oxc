@@ -221,40 +221,53 @@ impl<'a> NotaLowering<'a> {
     // ===========================================================================================
 
     fn lower_element(&mut self, el: NotaElement<'a>) -> Expression<'a> {
-        let NotaElement { span, tag, props, children, is_colon, .. } = el;
+        let NotaElement { span, tag, props, children, is_colon, props_recovery, .. } = el;
         let props = self.lower_props(props);
         // The whitespace regime follows the body syntax: a brace body keeps the spaces between
         // `{`/`}` and text as content; a colon body trims its edges like a document/block.
         let children = self.lower_children(children, !is_colon);
-        self.lower_tagged(span, tag, props, children)
+        // EOF error-recovery completion anchor: for an unclosed `[props]` group, give the props
+        // object a *real* span (the source `[`) so codegen logs its position, and record a
+        // `PropsAnchor` mark the join turns into a zero-width prop-completion anchor just inside
+        // `{ | }`. Well-formed elements keep the unmapped `Span::empty` object.
+        let props_span = match props_recovery {
+            Some(bracket) => {
+                self.record_nota_mapping(bracket, NotaMappingKind::PropsAnchor);
+                bracket
+            }
+            None => Span::empty(span.start),
+        };
+        self.lower_tagged(span, tag, props, children, props_span)
     }
 
     /// Shared host/component/dynamic tag dispatch: `h(tag, { props }, [children])` — `tag` is a
     /// string literal, a component identifier, or (dynamic) the head expression verbatim. `h` is a
     /// plain function, so any expression is valid in argument position; no binding is needed.
+    /// `props_span` spans the emitted props object (`Span::empty` except for a recovery anchor).
     fn lower_tagged(
         &mut self,
         span: Span,
         tag: NotaTag<'a>,
         props: ArenaVec<'a, ObjectPropertyKind<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
+        props_span: Span,
     ) -> Expression<'a> {
         match tag {
             NotaTag::Host(h) => {
                 let h = h.unbox();
                 let tag = self.ast.expression_string_literal(h.span, h.name.as_str(), None);
-                self.build_h(span, tag, props, children)
+                self.build_h(span, tag, props, children, props_span)
             }
             NotaTag::Component(id) => {
                 let id = id.unbox();
                 self.record_nota_mapping(id.span, NotaMappingKind::ComponentIdentifier);
                 let tag = Expression::Identifier(self.ast.alloc(id));
-                self.build_h(span, tag, props, children)
+                self.build_h(span, tag, props, children, props_span)
             }
             NotaTag::Dynamic(d) => {
                 let expr = d.unbox().expression;
                 self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
-                self.build_h(span, expr, props, children)
+                self.build_h(span, expr, props, children, props_span)
             }
         }
     }
@@ -393,7 +406,8 @@ impl<'a> NotaLowering<'a> {
         let NotaVerbatim { span, tag, props, parts, .. } = v;
         let props = self.lower_props(props);
         let children = self.lower_raw_parts(parts);
-        self.lower_tagged(span, tag, props, children)
+        // A verbatim body cannot leave an unclosed `[props]` group, so no anchor: unmapped object.
+        self.lower_tagged(span, tag, props, children, Span::empty(span.start))
     }
 
     // ===========================================================================================
@@ -408,7 +422,7 @@ impl<'a> NotaLowering<'a> {
         };
         let children = self.lower_children(children, true);
         let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
-        self.build_h(span, tag, self.ast.vec(), children)
+        self.build_h(span, tag, self.ast.vec(), children, Span::empty(span.start))
     }
 
     /// `#` heading *sugar* → `h(Heading, { rank: N }, [children])` (contract R18f): `Heading` is an
@@ -472,7 +486,7 @@ impl<'a> NotaLowering<'a> {
         };
         let children = self.lower_children(children, false);
         let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
-        self.build_h(span, tag, self.ast.vec(), children)
+        self.build_h(span, tag, self.ast.vec(), children, Span::empty(span.start))
     }
 
     // ===========================================================================================

@@ -15585,6 +15585,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
     #[inline]
     pub fn nota_form_element(
         self,
@@ -15593,8 +15594,16 @@ impl<'a> AstBuilder<'a> {
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
         is_colon: bool,
+        props_recovery: Option<Span>,
     ) -> NotaForm<'a> {
-        NotaForm::Element(self.alloc_nota_element(span, tag, props, children, is_colon))
+        NotaForm::Element(self.alloc_nota_element(
+            span,
+            tag,
+            props,
+            children,
+            is_colon,
+            props_recovery,
+        ))
     }
 
     /// Build a [`NotaForm::Fragment`].
@@ -15950,6 +15959,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
     #[inline]
     pub fn nota_element(
         self,
@@ -15958,8 +15968,17 @@ impl<'a> AstBuilder<'a> {
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
         is_colon: bool,
+        props_recovery: Option<Span>,
     ) -> NotaElement<'a> {
-        NotaElement { node_id: Default::default(), span, tag, props, children, is_colon }
+        NotaElement {
+            node_id: Default::default(),
+            span,
+            tag,
+            props,
+            children,
+            is_colon,
+            props_recovery,
+        }
     }
 
     /// Build a [`NotaElement`], and store it in the memory arena.
@@ -15973,6 +15992,7 @@ impl<'a> AstBuilder<'a> {
     /// * `props`
     /// * `children`
     /// * `is_colon`: `true` when the body came from `@tag:` colon/block sugar (vs `@tag{…}` braces). The two
+    /// * `props_recovery`: Set only by EOF error-recovery (the `--virtual` recover path, contract R-recover): the
     #[inline]
     pub fn alloc_nota_element(
         self,
@@ -15981,8 +16001,12 @@ impl<'a> AstBuilder<'a> {
         props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
         is_colon: bool,
+        props_recovery: Option<Span>,
     ) -> Box<'a, NotaElement<'a>> {
-        Box::new_in(self.nota_element(span, tag, props, children, is_colon), self.allocator)
+        Box::new_in(
+            self.nota_element(span, tag, props, children, is_colon, props_recovery),
+            self.allocator,
+        )
     }
 
     /// Build a [`NotaTag::Host`].

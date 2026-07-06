@@ -8752,6 +8752,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaElement<'_> {
             props: CloneIn::clone_in(&self.props, allocator),
             children: CloneIn::clone_in(&self.children, allocator),
             is_colon: CloneIn::clone_in(&self.is_colon, allocator),
+            props_recovery: CloneIn::clone_in(&self.props_recovery, allocator),
         }
     }
 
@@ -8763,6 +8764,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaElement<'_> {
             props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
             children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
             is_colon: CloneIn::clone_in_with_semantic_ids(&self.is_colon, allocator),
+            props_recovery: CloneIn::clone_in_with_semantic_ids(&self.props_recovery, allocator),
         }
     }
 }

@@ -99,10 +99,27 @@ impl MappingCapabilities {
         }
     }
 
+    /// Completion only — for the zero-width **props-completion anchor** an EOF-recovered `@tag[|`
+    /// leaves just inside the props object literal. It exists purely to route a completion request
+    /// into the object type (so the TS service proposes prop names); it must not carry
+    /// verification/semantic (there is no real text to diagnose or hover at a zero-width point).
+    #[must_use]
+    pub const fn props_anchor() -> Self {
+        Self {
+            completion: true,
+            format: false,
+            navigation: false,
+            semantic: false,
+            structure: false,
+            verification: false,
+        }
+    }
+
     fn from_kind(kind: NotaMappingKind) -> Self {
         match kind {
             NotaMappingKind::EmbeddedJs => Self::full(),
             NotaMappingKind::ComponentIdentifier => Self::navigation_hover(),
+            NotaMappingKind::PropsAnchor => Self::props_anchor(),
         }
     }
 }
@@ -141,13 +158,18 @@ pub struct NotaCompiledWithMappings {
     pub mappings: Vec<CodeMapping>,
 }
 
-/// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + code mappings.
+/// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + code mappings +
+/// recovered diagnostics. The virtual path uses EOF error-recovery, so it never fails: an
+/// unterminated construct still yields `code` + `mappings`, and the syntax/lowering problems come
+/// back in `errors` for the language server to surface as LSP diagnostics (contract D5).
 pub struct NotaVirtualCompiled {
     /// The emitted **virtual TypeScript** (`.tsx`) module source — TS types preserved, for the
     /// language server's TS service.
     pub code: String,
     /// The Volar `CodeMapping`s for the virtual `.tsx`.
     pub mappings: Vec<CodeMapping>,
+    /// Recovered Nota parse + lowering diagnostics (byte-spanned). Empty for a well-formed file.
+    pub errors: Vec<OxcDiagnostic>,
 }
 
 /// Per-call configuration for the one shared Nota compile pipeline ([`compile_internal`]). The three
@@ -162,6 +184,11 @@ struct CompileConfig {
     /// server's virtual `.tsx` path still emits a best-effort file so the editor degrades gracefully
     /// (it surfaces the collision through its own diagnostic channel). The build paths stay strict.
     lenient_diagnostics: bool,
+    /// EOF error-recovery: parse with [`Parser::parse_nota_document_recover`] so an unterminated
+    /// construct still yields a virtual `.tsx` + mappings, and collect the parse/lowering
+    /// diagnostics into [`CompileOutput::errors`] instead of returning `Err`. The language-server
+    /// `--virtual` path only; the build paths stay strict (`false`).
+    recover: bool,
     /// Source-map path (names the source in the emitted map); `None` skips map generation.
     source_map_path: Option<PathBuf>,
 }
@@ -171,6 +198,8 @@ struct CompileOutput {
     code: String,
     map: Option<oxc_sourcemap::SourceMap>,
     mappings: Vec<CodeMapping>,
+    /// Recovered diagnostics (parse + lowering) — non-empty only on the `recover` path.
+    errors: Vec<OxcDiagnostic>,
 }
 
 /// The one Nota compile pipeline: parse (TS-aware) → Nota-lower → optionally strip TS → codegen,
@@ -186,13 +215,27 @@ fn compile_internal(
     config: CompileConfig,
 ) -> Result<CompileOutput, Vec<OxcDiagnostic>> {
     let allocator = Allocator::default();
-    let mut program =
-        Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document()?;
+    // The recover path (`--virtual`) keeps the partial AST + its diagnostics; the build/mapping
+    // paths discard the tree on the first fatal error.
+    let (mut program, mut errors) = if config.recover {
+        let recovered =
+            Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document_recover();
+        (recovered.program, recovered.errors)
+    } else {
+        let program =
+            Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document()?;
+        (program, Vec::new())
+    };
 
     let lowered = NotaLowering::new(&allocator, source_text, config.collect_mappings)
         .lower_document_program(&mut program);
-    if !config.lenient_diagnostics && !lowered.diagnostics.is_empty() {
-        return Err(lowered.diagnostics);
+    if !lowered.diagnostics.is_empty() {
+        if config.recover {
+            // Surface reserved-name-collision diagnostics as editor diagnostics too (D5).
+            errors.extend(lowered.diagnostics);
+        } else if !config.lenient_diagnostics {
+            return Err(lowered.diagnostics);
+        }
     }
 
     if config.strip_ts {
@@ -211,7 +254,7 @@ fn compile_internal(
     } else {
         Vec::new()
     };
-    Ok(CompileOutput { code, map, mappings })
+    Ok(CompileOutput { code, map, mappings, errors })
 }
 
 /// Strip embedded TypeScript from the (already Nota-lowered) plain-JS/TS `program` in place, leaving
@@ -256,6 +299,7 @@ pub fn compile(
             strip_ts: true,
             collect_mappings: false,
             lenient_diagnostics: false,
+            recover: false,
             source_map_path,
         },
     )?;
@@ -280,6 +324,7 @@ pub fn compile_with_mappings(
             strip_ts: false,
             collect_mappings: true,
             lenient_diagnostics: false,
+            recover: false,
             source_map_path,
         },
     )?;
@@ -299,8 +344,16 @@ pub fn compile_with_mappings(
 /// `generated_offsets` by the prepended prefix length (the `source_offsets` are unchanged — they
 /// index the `.nota`).
 ///
+/// Uses **EOF error-recovery**, so it does not fail on unterminated markup: an unclosed `[props]`
+/// group, `{ … }` body, or bare `@`-head still yields a virtual `.tsx` (with mappings, incl. a
+/// prop-completion anchor at `@tag[|`), and the syntax/lowering problems come back in
+/// [`NotaVirtualCompiled::errors`] for the language server to surface as diagnostics (contract D5).
+/// The only `Err` is the internal invariant break in `strip_typescript` — never reached here, since
+/// the virtual path does not strip.
+///
 /// # Errors
-/// If the source is not well-formed Nota, or a `%` binding collides with a reserved emit name.
+/// Practically infallible on the virtual path (recovery + no TS strip); the signature keeps `Result`
+/// only to share [`compile_internal`] with the strict build paths.
 pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<OxcDiagnostic>> {
     let out = compile_internal(
         source_text,
@@ -308,10 +361,11 @@ pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<Oxc
             strip_ts: false,
             collect_mappings: true,
             lenient_diagnostics: true,
+            recover: true,
             source_map_path: None,
         },
     )?;
-    Ok(NotaVirtualCompiled { code: out.code, mappings: out.mappings })
+    Ok(NotaVirtualCompiled { code: out.code, mappings: out.mappings, errors: out.errors })
 }
 
 /// Join the reader's [`NotaMappingMark`]s (source ranges + kinds) with codegen's offset log into
@@ -370,6 +424,27 @@ fn build_code_mappings(
 
     let mut mappings = Vec::with_capacity(marks.len());
     for mark in marks {
+        // A props-completion anchor (EOF-recovered `@tag[|`) is resolved specially: it is *not* a
+        // byte-exact leaf. The lowering gave the props object literal the mark's `[` span, so the
+        // raw offset log has an entry `(bracket_start, bracket_end, gen_of_open_brace)`. Emit a
+        // single **zero-width** segment mapping the source position just after `[` to the generated
+        // position just after `{`, so a completion request there lands inside the object type.
+        if mark.kind == NotaMappingKind::PropsAnchor {
+            if let Some(&(_, _, gen_brace)) = offset_log
+                .iter()
+                .find(|&&(gs, ge, _)| gs == mark.span.start && ge == mark.span.end)
+            {
+                mappings.push(CodeMapping {
+                    source_offsets: vec![mark.span.end],
+                    generated_offsets: vec![gen_brace + 1],
+                    lengths: vec![0],
+                    generated_lengths: Some(vec![0]),
+                    data: MappingCapabilities::props_anchor(),
+                });
+            }
+            continue;
+        }
+
         let (s, e) = (mark.span.start, mark.span.end);
         let data = MappingCapabilities::from_kind(mark.kind);
 
@@ -679,5 +754,78 @@ mod h1_h2 {
         let (gd, _, capsd) = segment_at(&out.mappings, colorized_decl as u32);
         assert_eq!(&out.code[gd as usize..gd as usize + "Colorized".len()], "Colorized");
         assert_eq!(capsd, MappingCapabilities::full());
+    }
+}
+
+// ===============================================================================================
+// EOF error-recovery (`--virtual`, contract D4/D5): the reader keeps the partial AST + reports
+// diagnostics on an unterminated construct, and materialises a prop-completion anchor at `@tag[|`.
+// ===============================================================================================
+#[cfg(test)]
+mod recover {
+    use super::compile_virtual;
+
+    /// The load-bearing P5 case: `@a[` at EOF still emits the props object literal, and a mapping
+    /// anchors a completion cursor (the position just after `[`) into it (just inside `{`).
+    #[test]
+    fn unclosed_props_group_yields_object_literal_with_completion_anchor() {
+        let out = compile_virtual("@a[").expect("recovers");
+
+        // The virtual contains the props object literal (recovered `h("a", {}, …)`).
+        assert!(out.code.contains("h(\"a\", {"), "props object literal present:\n{}", out.code);
+
+        // A syntax diagnostic is reported (D5), not swallowed.
+        assert_eq!(out.errors.len(), 1, "one recovered diagnostic: {:?}", out.errors);
+
+        // The completion anchor: source offset 3 (just after `[`, where the cursor sits) maps to a
+        // zero-width generated point *inside* the object literal, with `completion` capability.
+        let anchor = out
+            .mappings
+            .iter()
+            .find(|m| m.source_offsets == vec![3] && m.lengths == vec![0])
+            .expect("props-completion anchor mapping present");
+        assert!(anchor.data.completion, "anchor carries completion capability");
+        let g = anchor.generated_offsets[0] as usize;
+        // The generated byte just before the anchor is the object's `{` (or a space inside it).
+        let before = &out.code[..g];
+        assert!(before.ends_with('{') || before.ends_with("{ "), "anchor is inside `{{`: {before:?}");
+    }
+
+    /// A well-formed file recovers to *exactly* the strict result: no phantom errors, no anchor.
+    #[test]
+    fn well_formed_input_recovers_identically() {
+        let out = compile_virtual("@a[id: x]{ok}\n").expect("compiles");
+        assert!(out.errors.is_empty(), "no diagnostics on well-formed input: {:?}", out.errors);
+        // No zero-width completion anchor is synthesised (props closed normally).
+        assert!(
+            !out.mappings.iter().any(|m| m.lengths == vec![0]),
+            "no recovery anchor on well-formed input",
+        );
+    }
+
+    /// An unterminated `{ … }` body keeps its already-collected children and reports the missing
+    /// `}` — the body text survives into the virtual for the TS service.
+    #[test]
+    fn unclosed_body_keeps_children_and_reports() {
+        let out = compile_virtual("@p{unterminated").expect("recovers");
+        assert!(out.code.contains("\"unterminated\""), "body text preserved:\n{}", out.code);
+        assert_eq!(out.errors.len(), 1, "missing-`}}` diagnostic: {:?}", out.errors);
+    }
+
+    /// A bare `@` at EOF drops to an empty fragment (no phantom identifier binding) + diagnostic.
+    #[test]
+    fn bare_at_drops_to_empty_fragment() {
+        let out = compile_virtual("@").expect("recovers");
+        assert_eq!(out.errors.len(), 1, "bare-`@` diagnostic: {:?}", out.errors);
+        // Recovered as `Fragment()` — no dangling identifier reference.
+        assert!(out.code.contains("Fragment()"), "empty fragment recovery:\n{}", out.code);
+    }
+
+    /// Recovery surfaces a reserved-name collision (`%let h = …`) as a diagnostic too (D5), rather
+    /// than silently dropping it the way the lenient (non-recover) virtual path used to.
+    #[test]
+    fn reserved_name_collision_surfaces_as_diagnostic() {
+        let out = compile_virtual("%let h = 1\n@p{x}\n").expect("recovers");
+        assert!(!out.errors.is_empty(), "collision surfaced as a diagnostic");
     }
 }

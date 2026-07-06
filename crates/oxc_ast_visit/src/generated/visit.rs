@@ -4485,6 +4485,9 @@ pub mod walk {
         visitor.visit_nota_tag(&it.tag);
         visitor.visit_nota_props(&it.props);
         visitor.visit_nota_children(&it.children);
+        if let Some(props_recovery) = &it.props_recovery {
+            visitor.visit_span(props_recovery);
+        }
         visitor.leave_node(kind);
     }
 

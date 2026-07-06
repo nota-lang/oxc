@@ -14,28 +14,32 @@
 //!
 //! With `--virtual <file>` it instead calls [`oxc::nota::compile_virtual`] (the type-preserving
 //! `.tsx` emit + [`CodeMapping`](oxc::nota::CodeMapping)s) and prints a single JSON object to
-//! stdout:
+//! stdout. The virtual path uses **EOF error-recovery** (contract D4/D5): an unterminated
+//! construct still yields `code` + `mappings`, and the syntax/lowering problems come back in
+//! `errors` — so `--virtual` **exits 0** even on a malformed document:
 //!
 //! ```json
 //! { "code": "<virtual .tsx>",
 //!   "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
 //!                   "generatedLengths": [u32]|null,
 //!                   "data": {"completion":bool,"format":bool,"navigation":bool,
-//!                            "semantic":bool,"structure":bool,"verification":bool} } ] }
+//!                            "semantic":bool,"structure":bool,"verification":bool} } ],
+//!   "errors": [ { "message": string, "start": u32, "len": u32 } ] }
 //! ```
 //!
 //! ```sh
 //! cargo run -q -p oxc --example nota_compile --features codegen -- --virtual path/to/doc.nota
 //! ```
 //!
-//! The `@nota-lang/compiler` wrapper's `compileVirtual(source) → { code, mappings }` parses this;
-//! the language server's Volar `LanguagePlugin` prepends its runtime+ambient typing preamble to
-//! `code` and shifts every `generatedOffsets` by the preamble length (`sourceOffsets` index the
-//! `.nota`, unchanged). The JSON is hand-rolled (no `serde` dependency added to the published `oxc`
-//! crate); the only value needing escaping is `code` — everything else is integers, booleans, or
-//! `null`.
+//! The `@nota-lang/compiler` wrapper's `compileVirtual(source) → { code, mappings, errors }` parses
+//! this; the language server's Volar `LanguagePlugin` prepends its runtime+ambient typing preamble
+//! to `code` and shifts every `generatedOffsets` by the preamble length (`sourceOffsets` index the
+//! `.nota`, unchanged), and surfaces `errors` as LSP diagnostics at the given `.nota` spans. The
+//! JSON is hand-rolled (no `serde` dependency added to the published `oxc` crate); the only values
+//! needing escaping are `code` and each error `message`.
 #![expect(clippy::print_stdout, clippy::print_stderr)]
 
+use oxc::diagnostics::OxcDiagnostic;
 use oxc::nota::{CodeMapping, MappingCapabilities};
 
 fn main() {
@@ -61,14 +65,17 @@ fn main() {
     }
 }
 
-/// `--virtual` path: compile to the virtual `.tsx` + code mappings and print the JSON.
+/// `--virtual` path: compile to the virtual `.tsx` + code mappings + recovered diagnostics and
+/// print the JSON. EOF error-recovery means this **exits 0** even on a malformed document — the
+/// syntax problems are reported in the `errors` array, not via a non-zero exit.
 fn run_virtual(source: &str) {
     match oxc::nota::compile_virtual(source) {
         Ok(compiled) => {
             let mut out = String::new();
-            write_virtual_json(&mut out, &compiled.code, &compiled.mappings);
+            write_virtual_json(&mut out, &compiled.code, &compiled.mappings, &compiled.errors);
             print!("{out}");
         }
+        // Practically unreachable on the virtual path (recovery + no TS strip); keep it total.
         Err(errors) => {
             for error in errors {
                 eprintln!("{error:?}");
@@ -78,8 +85,13 @@ fn run_virtual(source: &str) {
     }
 }
 
-/// Serialize `{ code, mappings }` as JSON into `out`.
-fn write_virtual_json(out: &mut String, code: &str, mappings: &[CodeMapping]) {
+/// Serialize `{ code, mappings, errors }` as JSON into `out`.
+fn write_virtual_json(
+    out: &mut String,
+    code: &str,
+    mappings: &[CodeMapping],
+    errors: &[OxcDiagnostic],
+) {
     out.push_str("{\"code\":");
     push_json_string(out, code);
     out.push_str(",\"mappings\":[");
@@ -89,7 +101,32 @@ fn write_virtual_json(out: &mut String, code: &str, mappings: &[CodeMapping]) {
         }
         write_mapping_json(out, m);
     }
+    out.push_str("],\"errors\":[");
+    for (i, e) in errors.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        write_error_json(out, e);
+    }
     out.push_str("]}");
+}
+
+/// Serialize one diagnostic as `{ "message": string, "start": u32, "len": u32 }`. The span is the
+/// first label's offset/length (byte offsets into the `.nota`); a label-less diagnostic reports
+/// `start: 0, len: 0`.
+fn write_error_json(out: &mut String, error: &OxcDiagnostic) {
+    let (start, len) = error
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.first())
+        .map_or((0u32, 0u32), |label| (label.offset() as u32, label.len() as u32));
+    out.push_str("{\"message\":");
+    push_json_string(out, &error.message);
+    out.push_str(",\"start\":");
+    out.push_str(itoa_u32(start).as_str());
+    out.push_str(",\"len\":");
+    out.push_str(itoa_u32(len).as_str());
+    out.push('}');
 }
 
 /// Serialize one [`CodeMapping`] as JSON (camelCase keys, parallel u32 arrays).

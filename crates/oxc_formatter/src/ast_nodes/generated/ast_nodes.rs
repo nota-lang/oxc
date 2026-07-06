@@ -10943,6 +10943,7 @@ impl<'a> AstNode<'a, NotaElement<'a>> {
             .first()
             .map(|n| n.span().start)
             .or_else(|| self.inner.children.first().map(|n| n.span().start))
+            .or_else(|| self.inner.props_recovery.as_ref().map(|n| n.span().start))
             .or(Some(self.following_span_start))
             .unwrap_or(0);
         self.allocator.alloc(AstNode {
@@ -10960,6 +10961,7 @@ impl<'a> AstNode<'a, NotaElement<'a>> {
             .children
             .first()
             .map(|n| n.span().start)
+            .or_else(|| self.inner.props_recovery.as_ref().map(|n| n.span().start))
             .or(Some(self.following_span_start))
             .unwrap_or(0);
         self.allocator.alloc(AstNode {
@@ -10972,7 +10974,13 @@ impl<'a> AstNode<'a, NotaElement<'a>> {
 
     #[inline]
     pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
-        let following_span_start = self.following_span_start;
+        let following_span_start = self
+            .inner
+            .props_recovery
+            .as_ref()
+            .map(|n| n.span().start)
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
         self.allocator.alloc(AstNode {
             inner: &self.inner.children,
             allocator: self.allocator,
@@ -10984,6 +10992,11 @@ impl<'a> AstNode<'a, NotaElement<'a>> {
     #[inline]
     pub fn is_colon(&self) -> bool {
         self.inner.is_colon
+    }
+
+    #[inline]
+    pub fn props_recovery(&self) -> Option<Span> {
+        self.inner.props_recovery
     }
 
     pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
