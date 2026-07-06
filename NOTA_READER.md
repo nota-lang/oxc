@@ -1,8 +1,21 @@
 # Nota reader — architecture notes (lives with the code)
 
 The Nota *reader* built into this oxc fork (branch `nota`): parser, AST, lowering, and compiler
-entries. The cross-team spec is `design/contract.md` (authoritative), with surface syntax in
-`design/notation.md`. This file describes the **current architecture** — history lives in git.
+entries. The spec lives in the main repo: `design/notation.md` (surface syntax → emit, including
+the authoritative emit table) and `design/decode.md` (runtime semantics). This file describes the
+**current architecture** — history lives in git.
+
+## Why a fork
+
+Nota is **markup-outer, JS-embedded, mutually recursive** — the inverse of JSX: a `.nota` file is
+markup at the top level; JS is embedded inside it (`%` statements, `[props]` values, `@(expr)`,
+`@if`/`@for` heads); and markup re-embeds in that JS (`inlineComponent((c) => @span{…})`) because
+an `@`-form *is* an expression. Three capabilities are therefore required simultaneously: a
+document mode (a whole file parses as markup), markup parseable in JS expression position, and
+embedded JS parseable from markup. Component bodies are JS-containing-markup — you cannot locate
+the markup sub-spans inside a JS body without parsing the JS, so oxc's *own* expression parser
+must recognize `@`. A separate front-end layered on top (Scribble-style) can't do this. Hence the
+fork — kept shallow (see the fork seam below).
 
 ## Pipeline & file map
 
@@ -22,10 +35,10 @@ entries. The cross-team spec is `design/contract.md` (authoritative), with surfa
 | Parser (markup → Nota AST) | `crates/oxc_parser/src/nota/mod.rs` |
 | Highlight pass (AST walk + embedded-JS re-lex → spans) | `crates/oxc_parser/src/nota/highlight.rs` |
 | Nota AST nodes (`Expression::NotaMarkup` umbrella) | `crates/oxc_ast/src/ast/nota.rs` |
-| Lowering pass (AST → hyperscript, `%` routing, F1) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
+| Lowering pass (AST → hyperscript, `%` routing, name-attach) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
 | Scribble whitespace algorithm (pure + unit tests) | `crates/oxc_transformer/src/nota/scribble.rs` |
 | Volar mapping marks | `crates/oxc_transformer/src/nota/mapping.rs` |
-| Compile entries + CodeMapping join (+ H1/H2 tests) | `crates/oxc/src/nota.rs` |
+| Compile entries + CodeMapping join (+ mapping/virtual-emit tests) | `crates/oxc/src/nota.rs` |
 | Dev tools | `crates/oxc/examples/nota_compile.rs`, `nota_inspect.rs` |
 | wasm bindings (playground) | `napi/nota_wasm/src/lib.rs` |
 | E2E fixtures (parse→lower→codegen, exact-emit) | `crates/oxc_codegen/tests/integration/nota.rs` |
@@ -36,10 +49,10 @@ entries. The cross-team spec is `design/contract.md` (authoritative), with surfa
 `Statement`/`Declaration` pattern) by every position that can hold a form — `NotaMarkupKind`,
 `NotaChild`, `NotaPropValue`, `NotaVerbatimPart` — so `parse_nota_form` returns one `NotaForm`
 that converts by zero-cost `From`, and the lowering has a single `lower_form` dispatch;
-`NotaLowering` (a `VisitMut` + document rebuild) produces the emitted module. This supersedes
-`design/implementation.md` D1/D2 (parse-time lowering, zero new AST nodes) — the faithful AST buys
+`NotaLowering` (a `VisitMut` + document rebuild) produces the emitted module. This reverses the
+original plan (parse-time lowering, zero new AST nodes) — the faithful AST buys
 the playground's `parseAst` ESTree view, testable stages, and the groundwork for a `.nota`
-formatter, at the cost of the generated-code churn D2 warned about (paid once; regenerate with
+formatter, at the cost of a one-time generated-code churn (regenerate with
 `just ast`, which panics at the end on a missing `oxfmt` — exit 101 is expected; verify with
 `cargo build -p oxc_ast`).
 
@@ -54,7 +67,8 @@ formatter, at the cost of the generated-code churn D2 warned about (paid once; r
    source-end clamp (`set_end_offset`) for bounding statement parses.
 2. **Parser hook** — `js/expression.rs`: `Kind::At if self.nota_markup => parse_nota_form(...)`.
    The `nota_markup` bool on `ParserImpl` is the *entire* `@`-vs-decorator disambiguation
-   (decorators are unavailable inside `.nota`, contract R7). Do NOT try to move markup state into
+   (decorators are unavailable inside `.nota`, v1 — sound: they only appear in class/statement
+   position, never in a Nota expression context). Do NOT try to move markup state into
    `Context` — its `u8` is bit-saturated.
 3. **The `nota` parser module** — `nota/mod.rs` + entries in `lib.rs`
    (`parse_nota_expression` / `parse_nota_document`), cursor seams in `cursor.rs`
@@ -86,12 +100,12 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   routing bug and panics.
 - **Line-start constructs chain**: the `\n` arm consumes a *run* of `%`/`%%%` statements, list
   runs, then a heading — each resumes at a line start that may open the next. **A body/range start
-  is a line start too** (contract R9): `collect_markup`'s entry runs the same hook, so the
+  is a line start too** (notation.md §Markup sugar): `collect_markup`'s entry runs the same hook, so the
   document opener, `@{- item}`, `@foo: - item`, and `*- item*` all arm — with first-line extents
   clipped at the enclosing body's depth-0 `}` (`brace_clip_on_line`, string/`@`-form-aware) or the
   bounded range's end. Literal braces in prose never re-enter `collect_markup`, so `a {- b} c`
   stays text.
-- **Raw spans share ONE content model (contract R13)** — verbatim `|{…}|`, inline/block code, and
+- **Raw spans share ONE content model (notation.md §Verbatim)** — verbatim `|{…}|`, inline/block code, and
   inline/fence math are all *raw runs interleaved with `|@`-armed `@`-forms*. Extents are **pure
   pre-scans** first (`lex_code_span` / `lex_math_span` / `verbatim_boundary`); then a **second
   bounded scan** (`armed_boundary`) walks the fixed extent for `|@`, each of which re-enters Nota via
@@ -119,7 +133,8 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   the raw scan's — each once mis-lexed a trailing `\`-run as a JS escape. The lone exception is a `%`/`%%%`
   statement region, whose boundary is discoverable only *after* the JS parse: it is **bounded** by
   temporarily clamping the lexer's source end (`with_source_end_bound`) to `statement_bound` — the
-  next line-leading `%` or the first **blank line** (contract R8: ASI applies as at end of input) —
+  next line-leading `%` or the first **blank line** (ASI applies as at end of input —
+  notation.md §Statements) —
   / the closing fence; otherwise the JS lexer reads the delimiter as `%` (modulo) or `%%%` as three
   operators. Within the bound a `%` line is a JS statement *list* (`% a(); b();`), transitioning to
   markup at end-of-line; stale lexer diagnostics from the trailing one-token lookahead (markup bytes
@@ -130,7 +145,7 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   left as lookahead until `commit_head` classifies the glued trigger (`{` `[` `:` `|{` or none)
   and consumes it in the lexer mode that trigger implies. This is the single
   whitespace-sensitive byte peek at the head→body boundary (`@foo{` element vs `@foo ` interp).
-- **The glued `:` is *positional* (contract R9)**: `@head:` sugars only where the form is a
+- **The glued `:` is *positional* (notation.md §Colon & block sugar)**: `@head:` sugars only where the form is a
   markup-body child (the top `NotaRegion` is `Markup`, never a `Js` island or a `Raw` scan) **and**
   its `@` sits at a line start modulo whitespace — walking back over spaces/tabs reaches offset 0, a
   `\n`, or the top markup frame's body start (`Markup { start }`; a body's own start is a line start,
@@ -143,12 +158,15 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
 
 ## Lowering (the emit surface)
 
-`NotaLowering` owns everything from Nota AST to the contract §1–§3 emit: the Scribble whitespace
+`NotaLowering` owns everything from Nota AST to the emit surface (notation.md §Emit reference;
+decode.md §The emit surface): the Scribble whitespace
 algorithm (`scribble.rs`, pure, unit-tested against the reference reader — one `"\n"` child per
 interior newline, never coalesced: a blank line = two adjacent `"\n"`, the runtime's
-paragraph-break marker, contract §7); document assembly (`export default function Doc()`, `%`
-routing: `import`/`export` + F1 component bindings hoist to module scope, other statements prepend
-into `Doc`; a `%` nested in an element body scopes the remaining siblings into an IIFE);
+paragraph-break marker, decode.md §struct); document assembly (`export default function Doc()`, `%`
+routing: `import`/`export` hoist to module scope, other statements — component bindings included —
+prepend into `Doc` in place (document-local; `%export` is the opt-in to module scope; top-level and
+`%export`-wrapped `inlineComponent`/`blockComponent` bindings get the name-attach 2nd argument);
+a `%` nested in an element body scopes the remaining siblings into an IIFE);
 `@for` → `iter.map((bind, _i) => Fragment({ key: _i }, ...))` with a collision-checked fresh `_i`;
 reserved-name collision diagnostics (`Doc`/`h`/`Fragment`/`decode`/`inlineComponent`/
 `blockComponent`).
@@ -161,7 +179,8 @@ Semantic pins (deliberate, tested):
   backtick or `${`) falls back to a **cooked string literal** — a `\`-escape inside `String.raw`
   would leak into the runtime value.
 - The reader does **not** emit the `@nota-lang/runtime` import (the shim/integrator prepends it);
-  `CodeInline`/`CodeBlock`/`Tex` are ambient prelude identifiers (`Tex`, not `Math` — contract R14).
+  `CodeInline`/`CodeBlock`/`Tex` are ambient prelude identifiers (`Tex`, not `Math` — an ambient
+  `Math` would capture the JS global in embedded code).
 
 ## Compiler entries (`crates/oxc/src/nota.rs`)
 
@@ -177,7 +196,26 @@ The CodeMapping join: lowering records source-span *marks* (embedded JS = full c
 identifiers = navigation/hover); codegen's offset log records where each source-spanned node was
 emitted; the join keeps innermost leaves, then **byte-exact-filters** (source slice == generated
 slice) — the load-bearing safety net that drops reformatted composites and host-tag
-reinterpretations. Every surviving segment round-trips byte-for-byte.
+reinterpretations. Every surviving segment round-trips byte-for-byte. `CodeMapping` is Volar's
+`@volar/language-core` shape (`sourceOffsets[]`, `generatedOffsets[]`, `lengths[]`,
+`data: {completion, format, navigation, semantic, structure, verification}`); generated
+boilerplate is unmapped.
+
+The binary's `--virtual` mode exposes `compile_virtual` to the language server — the
+binary ↔ shim ↔ language-server JSON contract:
+```
+nota_compile --virtual <file>  →  stdout JSON:
+{ "code": "<virtual .tsx>",
+  "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
+                  "generatedLengths": [u32]|null,
+                  "data": {"completion":bool,"format":bool,"navigation":bool,
+                           "semantic":bool,"structure":bool,"verification":bool} } ] }
+```
+The shim's `compileVirtual(source)` parses this; the language server prepends its runtime+ambient
+typing preamble to `code` and shifts every `generatedOffsets` by the preamble length
+(`sourceOffsets` index the `.nota`, unchanged). The wasm bindings (wasm-bindgen over the same
+entries, plus `parseAst` and `highlight`/`highlightKindNames`) serve the browser playground and
+the language server's semantic tokens.
 
 ## Highlighting (`oxc_parser/src/nota/highlight.rs`)
 
@@ -203,7 +241,7 @@ embedded JS re-lex as `/` operators (no parser context in the pump).
 | E2E fixtures (exact emit + validity invariant) | `oxc_codegen/tests/integration/nota.rs` | `cargo test -p oxc_codegen --test integration nota` |
 | Lexer scan units (boundaries, classifiers, string-aware skips) + highlight spans | `oxc_parser` lib (`lexer/nota.rs`, `nota/highlight.rs`) | `cargo test -p oxc_parser --lib nota` |
 | Scribble whitespace + mapping marks | `oxc_transformer` lib | `cargo test -p oxc_transformer --lib nota` |
-| Compile entries + H1/H2 mappings | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
+| Compile entries + CodeMapping / virtual emit | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
 | AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |
 
 The **validity invariant** (every fixture's emit re-parses under stock oxc) runs inside the
