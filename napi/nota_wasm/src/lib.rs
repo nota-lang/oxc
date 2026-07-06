@@ -8,7 +8,7 @@
 //! await init();                                  // load + instantiate the .wasm
 //! const { code } = compile(src);                 // build path (JS)            → { code }
 //! const { code, mappings } = compileWithMappings(src); // build + H1 mappings → { code, mappings }
-//! const { code, mappings } = compileVirtual(src);      // H2 .tsx + H1        → { code, mappings }
+//! const { code, mappings, errors } = compileVirtual(src); // H2 .tsx + H1 + recovered diagnostics
 //! const { ast } = parseAst(src);                 // post-parse Nota AST (ESTree JSON string)
 //! const spans = highlight(src);                  // [start, end, kind] u32 triples (editor spans)
 //! const names = highlightKindNames();            // kind discriminant → kebab-case name
@@ -73,10 +73,28 @@ export interface NotaCompileResult {
   code: string;
 }
 
-/** Result of `compileWithMappings` / `compileVirtual`: emitted code + Volar CodeMappings (H1). */
+/** Result of `compileWithMappings`: emitted code + Volar CodeMappings (H1). */
 export interface NotaMappedResult {
   code: string;
   mappings: NotaCodeMapping[];
+}
+
+/** One recovered Nota syntax/lowering diagnostic (byte-spanned into the `.nota`) — contract D5. */
+export interface NotaError {
+  message: string;
+  start: number;
+  len: number;
+}
+
+/**
+ * Result of `compileVirtual`: the type-preserving virtual `.tsx` + CodeMappings **plus** any
+ * recovered diagnostics. The virtual path uses EOF error-recovery, so it never throws on malformed
+ * markup — the syntax problems come back in `errors` (contract D4/D5).
+ */
+export interface NotaVirtualResult {
+  code: string;
+  mappings: NotaCodeMapping[];
+  errors: NotaError[];
 }
 
 /** Result of `parseAst`: the post-parse Nota AST as an ESTree JSON string (with `start`/`end`). */
@@ -113,6 +131,39 @@ struct MappedResult {
     code: String,
     /// The Volar `CodeMapping`s (H1).
     mappings: Vec<CodeMapping>,
+}
+
+/// `{ code, mappings, errors }` — the recovered virtual result ([`nota::compile_virtual`]).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VirtualResult {
+    code: String,
+    mappings: Vec<CodeMapping>,
+    errors: Vec<NotaErrorJs>,
+}
+
+/// Mirror of a recovered diagnostic as the `{ message, start, len }` JSON the shim expects.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NotaErrorJs {
+    message: String,
+    start: u32,
+    len: u32,
+}
+
+impl NotaErrorJs {
+    /// Extract `{message, start, len}` from an `OxcDiagnostic` — the first label's byte span, or
+    /// `(0, 0)` when the diagnostic carries no label. Mirrors the binary's `--virtual` error shape.
+    fn from_diagnostic(error: &OxcDiagnostic) -> Self {
+        let (start, len) = error
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.first())
+            .map_or((0u32, 0u32), |label| {
+                (label.offset() as u32, label.len() as u32)
+            });
+        Self { message: error.to_string(), start, len }
+    }
 }
 
 /// Mirror of [`oxc::nota::CodeMapping`] (contract §9 `--virtual` JSON shape).
@@ -271,9 +322,12 @@ pub fn compile_with_mappings(source: &str) -> Result<JsValue, JsError> {
 #[wasm_bindgen(js_name = compileVirtual)]
 pub fn compile_virtual(source: &str) -> Result<JsValue, JsError> {
     match nota::compile_virtual(source) {
-        Ok(compiled) => {
-            to_js(&MappedResult { code: compiled.code, mappings: map_mappings(&compiled.mappings) })
-        }
+        Ok(compiled) => to_js(&VirtualResult {
+            code: compiled.code,
+            mappings: map_mappings(&compiled.mappings),
+            errors: compiled.errors.iter().map(NotaErrorJs::from_diagnostic).collect(),
+        }),
+        // Practically unreachable on the recovery path; kept total.
         Err(errors) => Err(diagnostics_to_error(&errors)),
     }
 }
