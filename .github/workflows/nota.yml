@@ -28,17 +28,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Lexer + highlight units (oxc_parser)
-        run: cargo test -p oxc_parser --lib nota
-
-      - name: Whitespace + mapping units (oxc_transformer)
-        run: cargo test -p oxc_transformer --lib nota
-
-      - name: E2E golden emit (oxc_codegen)
-        run: cargo test -p oxc_codegen --test integration nota
-
-      - name: Compile entry + virtual emit (oxc)
-        run: cargo test -p oxc --features codegen nota
+      - name: Tests
+        run: cargo test -p oxc -p oxc_transformer -p oxc_codegen nota
 
       - name: nota_wasm compiles for wasm32
         run: |
