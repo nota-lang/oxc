@@ -30,6 +30,120 @@
 
 use std::fmt::Write as _;
 
+mod size_tracking_alloc {
+    //! A `#[global_allocator]` that records each block's true allocated size in a header, so that a
+    //! `dealloc`/`realloc` whose `Layout::size()` disagrees with the real allocation still frees the
+    //! exact number of bytes that were allocated.
+    //!
+    //! ## Why this is needed
+    //!
+    //! wasm-bindgen's `passStringToWasm0` (the JS→wasm string marshaller) allocates a buffer, then —
+    //! for any string containing a non-ASCII byte — `realloc`s it *up* to a worst-case UTF-8 size
+    //! (`offset + remainder.len() * 3`) and never shrinks it back. The reader borrows the string and
+    //! wasm-bindgen later frees it as a `Box<str>` using its **content length**, which is smaller
+    //! than the realloc'd allocation. That `GlobalAlloc::dealloc` call passes a `Layout` whose size
+    //! is *smaller* than the allocation's real size — a violation of the allocator contract ("layout
+    //! must be the same layout that was used to allocate"). The wasm target's allocator
+    //! (`dlmalloc`) trusts that size and, for certain size classes, mis-computes chunk coalescing on
+    //! the next free, corrupting the heap (`assertion failed: psize <= size + max_overhead`).
+    //!
+    //! Empirically the crash needs (a) a multibyte char (only non-ASCII takes the realloc path) and
+    //! (b) enough trailing content (the over-allocation scales with the bytes after the first
+    //! non-ASCII char), which is exactly this mechanism. Recording the true size and freeing exactly
+    //! that many bytes makes every `dealloc`/`realloc` size-exact regardless of the `Layout::size()`
+    //! the caller passes, so the contract violation can no longer corrupt the heap.
+    //!
+    //! The header is written/read with unaligned accesses (wasm permits them), so it is sound for any
+    //! `layout.align()`, including `align == 1` (as used for the `str` input buffers).
+
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        mem, ptr,
+    };
+
+    pub struct SizeTrackingAlloc;
+
+    /// Bytes reserved before the returned pointer to hold the true size (a `usize`). It is the
+    /// smallest multiple of `align` that is `>= size_of::<usize>()`, so (a) the header fits a
+    /// `usize`, and (b) `base + header` stays aligned to `align` (both are powers of two).
+    #[inline]
+    const fn header_size(align: usize) -> usize {
+        let word = mem::size_of::<usize>();
+        if align > word { align } else { word }
+    }
+
+    /// The outer `Layout` actually requested from the backing allocator for a data block of
+    /// `size`/`align`: `header + size`, aligned to `align`. Returns `None` on overflow.
+    #[inline]
+    fn outer_layout(size: usize, align: usize) -> Option<Layout> {
+        let total = header_size(align).checked_add(size)?;
+        Layout::from_size_align(total, align).ok()
+    }
+
+    unsafe impl GlobalAlloc for SizeTrackingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let Some(outer) = outer_layout(layout.size(), layout.align()) else {
+                return ptr::null_mut();
+            };
+            // SAFETY: `outer` is a valid layout with non-zero size (header is always non-zero).
+            let base = unsafe { System.alloc(outer) };
+            if base.is_null() {
+                return base;
+            }
+            // Record the true data size in the header. Unaligned because `base` is only aligned to
+            // `layout.align()`, which may be less than `align_of::<usize>()`.
+            // SAFETY: `base` points to `>= size_of::<usize>()` writable bytes (the header).
+            unsafe { ptr::write_unaligned(base.cast::<usize>(), layout.size()) };
+            // SAFETY: `header_size` bytes were reserved before the data region.
+            unsafe { base.add(header_size(layout.align())) }
+        }
+
+        unsafe fn dealloc(&self, data: *mut u8, layout: Layout) {
+            let hs = header_size(layout.align());
+            // SAFETY: `data` came from `alloc`/`realloc`, so `data - hs` is the block base.
+            let base = unsafe { data.sub(hs) };
+            // Use the *recorded* size, not `layout.size()` (which the caller may have gotten wrong).
+            // SAFETY: the header holds the size written at allocation time.
+            let size = unsafe { ptr::read_unaligned(base.cast::<usize>()) };
+            // The block was allocated with `outer_layout(size, align)`; reconstruct it to free.
+            // SAFETY: these are the same size/align used to allocate, so the layout matches.
+            let outer =
+                unsafe { Layout::from_size_align_unchecked(hs + size, layout.align()) };
+            // SAFETY: `base` was returned by `System.alloc`/`realloc` with `outer`.
+            unsafe { System.dealloc(base, outer) };
+        }
+
+        unsafe fn realloc(&self, data: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let align = layout.align();
+            let hs = header_size(align);
+            // SAFETY: `data` came from `alloc`/`realloc`.
+            let base = unsafe { data.sub(hs) };
+            // SAFETY: the header holds the current true size.
+            let old_size = unsafe { ptr::read_unaligned(base.cast::<usize>()) };
+            let (Some(old_outer), Some(new_total)) =
+                (outer_layout(old_size, align), hs.checked_add(new_size))
+            else {
+                return ptr::null_mut();
+            };
+            // SAFETY: `base`/`old_outer` are the true base and layout of the current allocation.
+            let new_base = unsafe { System.realloc(base, old_outer, new_total) };
+            if new_base.is_null() {
+                return new_base;
+            }
+            // Record the new true size.
+            // SAFETY: the header region is present and writable.
+            unsafe { ptr::write_unaligned(new_base.cast::<usize>(), new_size) };
+            // SAFETY: `header_size` bytes precede the data region.
+            unsafe { new_base.add(hs) }
+        }
+    }
+}
+
+/// Install the size-tracking allocator (see [`size_tracking_alloc`]): a workaround for a
+/// wasm-bindgen 0.2.89 string-marshalling quirk that otherwise corrupts the wasm `dlmalloc` heap.
+#[global_allocator]
+static ALLOC: size_tracking_alloc::SizeTrackingAlloc = size_tracking_alloc::SizeTrackingAlloc;
+
 use oxc::allocator::Allocator;
 use oxc::diagnostics::OxcDiagnostic;
 use oxc::nota::{
