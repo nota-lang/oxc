@@ -11,15 +11,15 @@
 [package]
 name = "nota_wasm"
 version = "0.0.1"
-authors.workspace = true
-categories.workspace = true
+authors = ["Will Crichton <crichton.will@gmail.com>"]
+# categories.workspace = true
 edition.workspace = true
-homepage.workspace = true
+# homepage.workspace = true
 include = ["/src", "README.md"]
-keywords.workspace = true
-license.workspace = true
+# keywords.workspace = true
+# license.workspace = true
 publish = false
-repository.workspace = true
+# repository.workspace = true
 rust-version.workspace = true
 description = "Nota reader compiled to WebAssembly for the in-browser playground."
 

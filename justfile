@@ -328,3 +328,10 @@ nota-tests:
 
 nota-lints:
   cargo clippy -p oxc_codegen -p oxc_parser
+
+nota-build-pkg name target dir:
+  wasm-pack build napi/nota_wasm --release --target {{target}} --out-dir {{dir}}
+  jq '.name = "@nota-lang/wasm"' napi/nota_wasm/{{dir}}/package.json > package.json.tmp
+  mv package.json.tmp napi/nota_wasm/{{dir}}/package.json
+
+nota-build: (nota-build-pkg "@nota-lang/wasm" "web" "pkg") (nota-build-pkg "@nota-lang/wasm-node" "nodejs" "pkg-node")
