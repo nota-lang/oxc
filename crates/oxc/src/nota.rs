@@ -31,6 +31,15 @@ pub struct NotaCompiled {
     pub code: String,
     /// The source map, if `source_map_path` was provided.
     pub map: Option<oxc_sourcemap::SourceMap>,
+    /// The **free names** of the emitted module: identifiers referenced in value position but bound
+    /// nowhere in it (root-unresolved references, sorted + deduped). The runtime surface
+    /// (`h`/`decode`/`Fragment`/…) always appears — the runtime import is prepended by the wrapper,
+    /// not emitted here. The rest is the ambient-prelude surface the lowering references free
+    /// (`Tex`, `Heading`, `Label`, …; `secset`-family config calls) plus any genuinely unbound user
+    /// references. Mechanism only: *which* of these an integrator binds, and from where, is the
+    /// `@nota-lang/compiler` shim's policy (it intersects this list with its ambient-name set to
+    /// synthesize the prelude import).
+    pub free_names: Vec<String>,
 }
 
 // ===================================================================================================
@@ -200,6 +209,10 @@ struct CompileOutput {
     mappings: Vec<CodeMapping>,
     /// Recovered diagnostics (parse + lowering) — non-empty only on the `recover` path.
     errors: Vec<OxcDiagnostic>,
+    /// Free (root-unresolved, value-position) names — harvested only on the `strip_ts` build path,
+    /// where a semantic pass already runs; empty on the mapping/virtual paths, which don't need it
+    /// (the language server prepends its own ambient typing preamble).
+    free_names: Vec<String>,
 }
 
 /// The one Nota compile pipeline: parse (TS-aware) → Nota-lower → optionally strip TS → codegen,
@@ -239,9 +252,8 @@ fn compile_internal(
         }
     }
 
-    if config.strip_ts {
-        strip_typescript(&allocator, &mut program)?;
-    }
+    let free_names =
+        if config.strip_ts { strip_typescript(&allocator, &mut program)? } else { Vec::new() };
 
     let options = CodegenOptions { source_map_path: config.source_map_path, ..Default::default() };
     let mut codegen = Codegen::new().with_options(options);
@@ -255,28 +267,42 @@ fn compile_internal(
     } else {
         Vec::new()
     };
-    Ok(CompileOutput { code, map, mappings, errors })
+    Ok(CompileOutput { code, map, mappings, errors, free_names })
 }
 
 /// Strip embedded TypeScript from the (already Nota-lowered) plain-JS/TS `program` in place, leaving
 /// plain JS. Runs `oxc_transformer`'s TypeScript transform only — `EnvOptions::default()` leaves all
 /// non-TS JS byte-identical (no arrow/class/etc. lowering), so an all-JS document is unchanged. The
 /// transform needs scoping, so a `SemanticBuilder` pass runs first over the lowered program.
+///
+/// Returns the module's **free names** ([`NotaCompiled::free_names`]), harvested from that same
+/// semantic pass: the root-unresolved references that are used in *value* position (a type-only
+/// reference — `const n: Foo = …` — is about to be stripped and must not count). Sorted + deduped
+/// (the underlying map's iteration order is arbitrary).
 fn strip_typescript<'a>(
     allocator: &'a Allocator,
     program: &mut oxc_ast::ast::Program<'a>,
-) -> Result<(), Vec<OxcDiagnostic>> {
+) -> Result<Vec<String>, Vec<OxcDiagnostic>> {
     // The Nota lowering rebuilds the document `Program` with a plain-JS `SourceType`, so the
     // transformer would skip the TS pass (it only strips when the source type is TS-flagged). Mark it
     // TypeScript (keeping module-ness) so the embedded TS nodes — already in the AST from the tsx
     // parse — get stripped. There is no JSX in the lowered hyperscript, so `ts` (not `tsx`) suffices.
     program.source_type = program.source_type.with_typescript(true);
     let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
+    let mut free_names: Vec<String> = scoping
+        .root_unresolved_references()
+        .iter()
+        .filter(|(_, reference_ids)| {
+            reference_ids.iter().any(|&id| scoping.get_reference(id).is_value())
+        })
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+    free_names.sort_unstable();
     let options =
         TransformOptions { typescript: TypeScriptOptions::default(), ..Default::default() };
     let ret = Transformer::new(allocator, Path::new("doc.nota"), &options)
         .build_with_scoping(scoping, program);
-    if ret.errors.is_empty() { Ok(()) } else { Err(ret.errors) }
+    if ret.errors.is_empty() { Ok(free_names) } else { Err(ret.errors) }
 }
 
 /// Compile a `.nota` source string to a JS module (+ optional source map).
@@ -304,7 +330,7 @@ pub fn compile(
             source_map_path,
         },
     )?;
-    Ok(NotaCompiled { code: out.code, map: out.map })
+    Ok(NotaCompiled { code: out.code, map: out.map, free_names: out.free_names })
 }
 
 /// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s.
@@ -538,6 +564,61 @@ mod tests {
             Ok(out) => panic!("expected a collision diagnostic, got:\n{}", out.code),
             Err(errors) => assert!(!errors.is_empty()),
         }
+    }
+
+    #[test]
+    fn free_names_cover_lowering_synthesized_and_user_refs() {
+        // `# t` synthesizes a free `Heading` ref; `$x$` a free `Tex`; `% secset(…)` is a free
+        // user call; the runtime surface (`h`/`decode`/`Fragment`) is free because the runtime
+        // import is the wrapper's job. Sorted output.
+        let out = compile("% secset({ n: 1 })\n# Title\n\n$y$\n", None).expect("compiles");
+        for name in ["Heading", "Tex", "secset", "h", "decode", "Fragment"] {
+            assert!(out.free_names.iter().any(|n| n == name), "{name} free: {:?}", out.free_names);
+        }
+        let mut sorted = out.free_names.clone();
+        sorted.sort_unstable();
+        assert_eq!(out.free_names, sorted, "free names are sorted");
+    }
+
+    #[test]
+    fn free_names_exclude_bound_and_textual_mentions() {
+        // A `%`-imported name is bound (not free), and prose/string mentions of a name's *text*
+        // are not references at all — the regex failure modes the metadata exists to kill.
+        let out = compile(
+            "%import { Tex } from \"./my-tex.js\"\n@p{secset( is not a call}\n$y$\n",
+            None,
+        )
+        .expect("compiles");
+        assert!(!out.free_names.iter().any(|n| n == "Tex"), "imported Tex bound: {:?}", out.free_names);
+        assert!(!out.free_names.iter().any(|n| n == "secset"), "prose mention: {:?}", out.free_names);
+    }
+
+    #[test]
+    fn free_names_exclude_type_only_references() {
+        // `Foo` occurs only in a (stripped) type annotation — a type reference, not a value one.
+        let out = compile("% const n: Foo = 1\n@p{@(n)}\n", None).expect("compiles");
+        assert!(!out.free_names.iter().any(|n| n == "Foo"), "type-only: {:?}", out.free_names);
+    }
+
+    #[test]
+    fn free_names_respect_nested_shadowing() {
+        // `useState` bound only inside the component arrow — the *outer* `mathset(…)` call is free,
+        // but a name bound at any enclosing scope of its every use is not.
+        let out = compile(
+            "%let C = inlineComponent((children) => { let mathset = () => 1; return mathset(); })\n@C{x}\n",
+            None,
+        )
+        .expect("compiles");
+        assert!(
+            !out.free_names.iter().any(|n| n == "mathset"),
+            "locally-bound mathset: {:?}",
+            out.free_names
+        );
+        assert!(
+            out.free_names.iter().any(|n| n == "inlineComponent"),
+            "inlineComponent free: {:?}",
+            out.free_names
+        );
     }
 }
 

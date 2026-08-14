@@ -52,13 +52,17 @@ pub struct NotaCodeMapping {
     pub data: NotaMappingCapabilities,
 }
 
-/// Result of `compile`: the emitted JS module source.
+/// Result of `compile`: the emitted JS module source + its free names.
 #[derive(Serialize, Tsify)]
 #[tsify(into_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct NotaCompileResult {
     /// The emitted JS module source.
     pub code: String,
+    /// The module's free (value-position, root-unresolved) names, sorted — the runtime surface plus
+    /// the ambient-prelude refs plus any unbound user names. The `@nota-lang/compiler` shim
+    /// intersects this with its ambient-name set to synthesize the prelude import.
+    pub free_names: Vec<String>,
 }
 
 /// Result of `compileWithMappings`: emitted code + Volar CodeMappings.
@@ -174,9 +178,10 @@ fn diagnostics_to_error(errors: &[OxcDiagnostic]) -> JsError {
 // highlight spans.
 // ===================================================================================================
 
-/// Compile a `.nota` source string to a JS module. Returns `{ code }`.
+/// Compile a `.nota` source string to a JS module. Returns `{ code, freeNames }`.
 ///
-/// JS: `compile(source: string): { code: string }` — throws on a Nota parse error.
+/// JS: `compile(source: string): { code: string, freeNames: string[] }` — throws on a Nota parse
+/// error.
 ///
 /// # Errors
 /// Returns a `JsError` (thrown in JS) carrying the rendered diagnostics if `source` is not
@@ -185,7 +190,9 @@ fn diagnostics_to_error(errors: &[OxcDiagnostic]) -> JsError {
 pub fn compile(source: String) -> Result<NotaCompileResult, JsError> {
     match nota::compile(&source, None) {
         // No `source_map_path`: the playground renders the `code`; a flat sourcemap is not needed.
-        Ok(compiled) => Ok(NotaCompileResult { code: compiled.code }),
+        Ok(compiled) => {
+            Ok(NotaCompileResult { code: compiled.code, free_names: compiled.free_names })
+        }
         Err(errors) => Err(diagnostics_to_error(&errors)),
     }
 }
