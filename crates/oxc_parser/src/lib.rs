@@ -458,11 +458,11 @@ mod parser_parse {
         /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
         ///
         /// The file is markup at the top level; this returns the lowered module:
-        /// `export default function Doc() { …prelude…; return decode(Fragment(...siblings)); }` plus
-        /// hoisted `import`/`export` and component bindings. The runtime `import { h, decode,
-        /// Fragment, inlineComponent, blockComponent } from "@nota-lang/runtime"` is injected by the
-        /// caller, not here. To parse a single expression-position markup element instead, use
-        /// [`Parser::parse_expression`] with a [`SourceType::is_nota`] source type.
+        /// `export default function Doc() { …prelude…; return <NotaDoc>…</NotaDoc>; }` plus
+        /// hoisted `import`/`export` statements. Binding the emit's free names (`NotaDoc`,
+        /// `Reforest`, …) to imports is the caller's concern, not the parser's. To parse a single
+        /// expression-position markup element instead, use [`Parser::parse_expression`] with a
+        /// [`SourceType::is_nota`] source type.
         ///
         /// # Errors
         /// If the file is not well-formed Nota.

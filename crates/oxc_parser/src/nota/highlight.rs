@@ -865,7 +865,7 @@ mod tests {
     fn percent_statement_with_markup_reentry() {
         // The golden's shape: a multi-line `%` statement whose JS contains an `@`-form. JS
         // classifies as JS, the markup island as markup, and the tail after it as JS again.
-        let src = "%let X = inlineComponent((c) => {\n  return @span[onClick: f]{@c};\n})\nprose\n";
+        let src = "%let X = (c) => {\n  return @span[onClick: f]{@c};\n}\nprose\n";
         let spans = hl(src);
         assert!(has(&spans, K::Sigil, "%"));
         assert!(has(&spans, K::JsKeyword, "let"));

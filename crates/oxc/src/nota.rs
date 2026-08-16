@@ -679,10 +679,10 @@ mod tests {
 
     #[test]
     fn free_names_respect_nested_shadowing() {
-        // `useState` bound only inside the component arrow — the *outer* `mathset(…)` call is free,
-        // but a name bound at any enclosing scope of its every use is not.
+        // `mathset` is bound only inside the component arrow — a name bound at an enclosing scope
+        // of its every use is not free; `createSignal` beside it stays free.
         let out = compile(
-            "%let C = inlineComponent((children) => { let mathset = () => 1; return mathset(); })\n@C{x}\n",
+            "%let C = (props) => { let mathset = () => 1; return createSignal(mathset()); }\n@C{x}\n",
             None,
         )
         .expect("compiles");
@@ -692,8 +692,8 @@ mod tests {
             out.free_names
         );
         assert!(
-            out.free_names.iter().any(|n| n == "inlineComponent"),
-            "inlineComponent free: {:?}",
+            out.free_names.iter().any(|n| n == "createSignal"),
+            "createSignal free: {:?}",
             out.free_names
         );
     }
@@ -882,9 +882,9 @@ mod h1_h2 {
     }
 
     /// The canonical golden, exercising the code mappings: the component binding, the `@Colorized`
-    /// tag reference, the `@for` iterable + binding, the `@x`/`@children` interps — all map
-    /// byte-exactly, with the right capabilities, and no boilerplate leaks in.
-    const CANONICAL_NOTA: &str = "%let Colorized = inlineComponent((children) => {\n  let [color, setColor] = useState(\"red\");\n  return @span[onClick: () => setColor(\"green\")][style: {color}]{@children};\n})\n\n@for (x of items) {\n  - @Colorized{@x}\n}\n";
+    /// tag reference, the `@for` iterable + binding, the `@x`/`@(props.children)` interps — all
+    /// map byte-exactly, with the right capabilities, and no boilerplate leaks in.
+    const CANONICAL_NOTA: &str = "%let Colorized = (props: { children?: unknown }) => {\n  let [color, setColor] = createSignal(\"red\");\n  return @span[onClick: () => setColor(\"green\")][style: {color: color()}]{@(props.children)};\n}\n\n@for (x of items) {\n  - @Colorized{@x}\n}\n";
 
     #[test]
     fn canonical_golden_mappings_are_byte_exact() {

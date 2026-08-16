@@ -492,28 +492,26 @@ fn doc_fence_statements() {
 }
 
 #[test]
-fn doc_component_binding_stays_document_local_with_name() {
-    // A top-level `%const X = inlineComponent(...)` is an ordinary lexical statement — it
-    // prepends into Doc (document-local, NOT hoisted or exported; the document hydrates as one
-    // Solid app, so the closure is the program's own). The old debug-manifest name-attach is
-    // GONE: the reader no longer special-cases the constructor call at all.
-    let js = nota_doc("%const Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
+fn doc_component_binding_stays_document_local() {
+    // A top-level `%const X = (props) => …` is an ordinary lexical statement — it prepends into
+    // Doc (document-local, NOT hoisted or exported; the document hydrates as one Solid app, so
+    // the closure is the program's own). The reader never special-cases any call in the binding.
+    let js = nota_doc("%const Card = (props) => @span{@(props.children)}\n@Card{hi}\n");
     assert!(!js.contains("export const Card"), "component NOT exported: {js}");
     assert!(!js.contains("export let Card"), "component NOT exported: {js}");
     // The binding sits INSIDE Doc's body (after the default-export function opens).
     let doc_pos = js.find("export default function Doc()").expect("Doc present");
-    let bind_pos = js.find("const Card = inlineComponent").expect("binding present");
+    let bind_pos = js.find("const Card = (props) =>").expect("binding present");
     assert!(bind_pos > doc_pos, "binding is inside Doc, not module scope: {js}");
     assert!(!js.contains(r#", "Card")"#), "no name-attach — the call is the user's own: {js}");
 }
 
 #[test]
-fn doc_export_component_binding_keeps_export_and_gets_name() {
-    // `%export let C = inlineComponent(...)` is the author's opt-in to module scope — the export
+fn doc_export_component_binding_keeps_export() {
+    // `%export let C = (props) => …` is the author's opt-in to module scope — the export
     // hoists verbatim. No name-attach (gone with the manifest), no body wrap of any kind.
-    let js =
-        nota_doc("%export let Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
-    assert!(js.contains("export let Card = inlineComponent"), "export kept + hoisted: {js}");
+    let js = nota_doc("%export let Card = (props) => @span{@(props.children)}\n@Card{hi}\n");
+    assert!(js.contains("export let Card = (props) =>"), "export kept + hoisted: {js}");
     assert!(!js.contains(r#", "Card")"#), "no name-attach — the call is the user's own: {js}");
     assert!(!js.contains("decode("), "no decode wrap anywhere in the emit: {js}");
 }
@@ -1392,11 +1390,13 @@ fn percent_statement_region_rules() {
 // THE canonical golden: stage-1 `.nota` → must equal stage-3 (modulo formatting).
 // ===============================================================================================
 
-/// The canonical stage-1 source.
-const CANONICAL_NOTA: &str = r#"%let Colorized = inlineComponent((children) => {
-  let [color, setColor] = useState("red");
-  return @span[onClick: () => setColor("green")][style: {color}]{@children};
-})
+/// The canonical stage-1 source — `integration/golden.nota` minus the props annotation: TS in
+/// `%`-code is stripped by the *compile entry* (`oxc/src/nota.rs`), while this harness checks
+/// the raw reader emit, which must re-parse as plain JSX.
+const CANONICAL_NOTA: &str = r#"%let Colorized = (props) => {
+  let [color, setColor] = createSignal("red");
+  return @span[onClick: () => setColor("green")][style: {color: color()}]{@(props.children)};
+}
 
 @for (x of ["a", "b"]) {
   - @Colorized{@x}
@@ -1416,24 +1416,22 @@ fn nota_doc_no_validity(source: &str) -> String {
     Codegen::new().build(&program).code
 }
 
-/// THE canonical golden, stage-3 (decode.md §The worked example): the component binding is
-/// **document-local** — it prepends into `Doc` (no hoist, no export), keeps its name 2nd-arg, and
-/// its body has **no** `decode(...)` wrap (dead at `▸ = true`). The `@for` is lowered to a *keyed*
-/// `.map` (`(x, _i) => Fragment({ key: _i }, …)`), and the `-` list marker is lowered to the
-/// `"nota-ul-li"` sentinel (the runtime `struct` later coalesces it). Doc's own body keeps its
-/// `decode(...)` wrap — that is what self-decodes the document at `▸ = false`.
+/// THE canonical golden, stage-3 (design/solid.md §The pipeline): the component binding is
+/// **document-local** — it prepends into `Doc` (no hoist, no export) as the user's own plain
+/// Solid arrow, with its TS annotation stripped. The `@for` lowers to `<For each={…}>`, and the
+/// `-` list marker to `<UlLi>` (Reforest coalesces the run at render).
 const CANONICAL_STAGE3: &str = r#"export default function Doc() {
-  let Colorized = inlineComponent((children) => {
-    let [color, setColor] = useState("red");
-    return <span onClick={() => setColor("green")} style={{ color }}>{children}</span>;
-  });
+  let Colorized = (props) => {
+    let [color, setColor] = createSignal("red");
+    return <span onClick={() => setColor("green")} style={{ color: color() }}>{props.children}</span>;
+  };
   return <NotaDoc><For each={["a", "b"]}>{(x) => <><UlLi><Colorized>{x}</Colorized></UlLi></>}</For></NotaDoc>;
 }"#;
 
 #[test]
 fn canonical_golden_matches_stage3() {
     // THE capstone: stage-1 `.nota` compiles to a module equal (modulo formatting) to stage-3 —
-    // incl. the inline component (a document-local binding, the constructor call untouched),
+    // incl. the component (a document-local plain-arrow binding, annotation stripped),
     // `@for` → `<For each={…}>`, and the `-` marker → `<UlLi>`. Also valid JSX (re-parses under
     // stock oxc — the validity invariant), now that nothing is un-lowered.
     let js = nota_doc(CANONICAL_NOTA);
@@ -1444,15 +1442,15 @@ fn canonical_golden_matches_stage3() {
 fn canonical_golden_minus_phase_d_is_valid() {
     // A control-flow-free analog of the canonical golden (a literal markup body instead of `@for`),
     // exercising the WHOLE document pipeline end-to-end with the validity invariant intact.
-    let src = r"%let Colorized = inlineComponent((children) => {
-  return @span[style: {color}]{@children};
-})
+    let src = r"%let Colorized = (props) => {
+  return @span[style: {color}]{@(props.children)};
+}
 
 @Colorized{a}
 ";
     let js = nota_doc(src); // asserts validity (re-parses under stock oxc)
-    assert!(js.contains(r"inlineComponent((children) => {"), "{js}");
-    assert!(js.contains(r#"return <span style={{ color }}>{children}</span>;"#), "{js}");
+    assert!(js.contains(r"let Colorized = (props) => {"), "{js}");
+    assert!(js.contains(r#"return <span style={{ color }}>{props.children}</span>;"#), "{js}");
     assert!(!js.contains("decode("), "no decode wrap anywhere: {js}");
     assert!(!js.contains(r#", "Colorized")"#), "no name-attach: {js}");
     assert!(js.contains(r#"<Colorized>{"a"}</Colorized>"#), "component use: {js}");
@@ -2564,11 +2562,11 @@ mod fuzz_findings_2 {
     }
 
     // [name-attach — RETIRED] the debug-manifest name-attach is gone with the manifest itself:
-    // the reader no longer touches an `inlineComponent(...)` call at all, so a user-supplied
-    // second argument passes through untouched (and is ignored by the compat shim).
+    // the reader no longer touches any call shape (the old `inlineComponent(fn, "Name")` attach
+    // included), so a user-supplied second argument passes through untouched.
     #[test]
     fn fuzz2_component_name_should_use_binding_name() {
-        let js = emit_doc_unchecked("%let C = inlineComponent((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
+        let js = emit_doc_unchecked("%let C = wrap((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
         assert!(js.contains("\"ZZZ\""), "the user's arg passes through untouched: {js}");
     }
 }

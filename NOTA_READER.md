@@ -9,7 +9,7 @@ decode.md there). This file describes the **current architecture** — history l
 
 Nota is **markup-outer, JS-embedded, mutually recursive** — the inverse of JSX: a `.nota` file is
 markup at the top level; JS is embedded inside it (`%` statements, `[props]` values, `@(expr)`,
-`@if`/`@for` heads); and markup re-embeds in that JS (`inlineComponent((c) => @span{…})`) because
+`@if`/`@for` heads); and markup re-embeds in that JS (`%let C = (props) => @span{…}`) because
 an `@`-form *is* an expression. Three capabilities are therefore required simultaneously: a
 document mode (a whole file parses as markup), markup parseable in JS expression position, and
 embedded JS parseable from markup. Component bodies are JS-containing-markup — you cannot locate
