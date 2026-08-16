@@ -517,15 +517,6 @@ pub fn ref_can_open(source: &str, off: u32) -> bool {
     !is_escaped(source, off) && is_docstate_start_at(source, off + 1)
 }
 
-/// Lexer opener check for `[^mark]`: unescaped `[^` directly followed by a doc-state label-start
-/// char. (`[^` needs no left-boundary guard — the digraph is unambiguous, and `text[^1]` glues,
-/// Markdown-style.)
-pub fn footnote_can_open(source: &str, off: u32) -> bool {
-    !is_escaped(source, off)
-        && byte_at(source, off + 1) == Some(b'^')
-        && is_docstate_start_at(source, off + 2)
-}
-
 /// The left-boundary guard on `<` and `&` (notation.md §Doc-state references): the sigil fires iff preceded by
 /// start of source, whitespace, or opening punctuation (`(`/`[`/`{`/double/single quote) — so
 /// `Vec<T>`, `R&D`, `a<b`, `a&b` stay literal prose. Start-of-*body* also fires, but that is the
@@ -2044,12 +2035,15 @@ mod tests {
         assert!(!ref_can_open("&$x", 0)); // `$` is not a label char now
         assert!(!ref_can_open("&,", 0));
         assert!(!ref_can_open(r"\&x", 1));
-        assert!(footnote_can_open("[^n]", 0));
-        assert!(footnote_can_open("[^1]", 0)); // digit start legal → `[^1]` fires
-        assert!(!footnote_can_open("[^ x]", 0)); // space after `^`
-        assert!(!footnote_can_open("[^$]", 0)); // `$` is not a label char
-        assert!(!footnote_can_open("[x]", 0)); // no `^`
-        assert!(!footnote_can_open(r"\[^n]", 1)); // escaped
+        // The footnote opener shape lives in `footnote_sugar_at` itself (the `[^` digraph plus a
+        // label-start char; a `[` without them falls through to the link/attrs/literal dispatch).
+        // An escaped `\[` never reaches it — the lexer's `[` arm demotes it to text.
+        let fn_opens = |src: &str| footnote_sugar_at(src, 0, src.len() as u32).is_some();
+        assert!(fn_opens("[^n]"));
+        assert!(fn_opens("[^1]")); // digit start legal → `[^1]` fires
+        assert!(!fn_opens("[^ x]")); // space after `^`
+        assert!(!fn_opens("[^$]")); // `$` is not a label char
+        assert!(!fn_opens("[x]")); // no `^`
 
         // --- left-boundary guard (byte half; frame-start is the parser's) ---
         assert!(docstate_left_guard("<x>", 0)); // start of source
