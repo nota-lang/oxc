@@ -2594,8 +2594,6 @@ impl ContentEq for NotaChild<'_> {
             (Self::ListItem(a), Self::ListItem(b)) => a.content_eq(b),
             (Self::DocState(a), Self::DocState(b)) => a.content_eq(b),
             (Self::ThematicBreak(a), Self::ThematicBreak(b)) => a.content_eq(b),
-            (Self::Link(a), Self::Link(b)) => a.content_eq(b),
-            (Self::Image(a), Self::Image(b)) => a.content_eq(b),
             (Self::Attrs(a), Self::Attrs(b)) => a.content_eq(b),
             (Self::Element(a), Self::Element(b)) => a.content_eq(b),
             (Self::Fragment(a), Self::Fragment(b)) => a.content_eq(b),
@@ -2827,19 +2825,6 @@ impl ContentEq for NotaListKind {
 impl ContentEq for NotaAttrs<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.props, &other.props)
-    }
-}
-
-impl ContentEq for NotaLink<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.url, &other.url)
-            && ContentEq::content_eq(&self.children, &other.children)
-    }
-}
-
-impl ContentEq for NotaImage<'_> {
-    fn content_eq(&self, other: &Self) -> bool {
-        ContentEq::content_eq(&self.alt, &other.alt) && ContentEq::content_eq(&self.src, &other.src)
     }
 }
 

@@ -539,10 +539,6 @@ impl<'a> TakeIn<'a> for NotaListItem<'a> {}
 
 impl<'a> TakeIn<'a> for NotaAttrs<'a> {}
 
-impl<'a> TakeIn<'a> for NotaLink<'a> {}
-
-impl<'a> TakeIn<'a> for NotaImage<'a> {}
-
 impl<'a> TakeIn<'a> for NotaThematicBreak {}
 
 impl<'a> TakeIn<'a> for NotaDocState<'a> {}

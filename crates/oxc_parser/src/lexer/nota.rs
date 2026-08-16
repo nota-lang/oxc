@@ -53,9 +53,7 @@ static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b 
     // Comment openers (`//` line, `/* … */` block — Typst/C style); a lone `/` stays 1-byte text.
     || b == b'/'
     // Strikethrough `~~` (two-byte emphasis marker); a lone `~` stays 1-byte text.
-    || b == b'~'
-    // Image opener `![` (notation.md §Links); a lone `!` stays 1-byte text.
-    || b == b'!');
+    || b == b'~');
 
 impl<C: Config> Lexer<'_, C> {
     /// Pull one Nota markup-body *child token* at the current source position.
@@ -110,26 +108,13 @@ impl<C: Config> Lexer<'_, C> {
                 return self.finish_re_lex(kind);
             }
             // A `[` is always a typed token (unless escaped): the parser resolves which of the
-            // three bracket sugars applies — footnote `[^mark]`, link `[text](url)` — or falls
-            // back to a literal `[` (notation.md §Links).
+            // bracket sugars applies — footnote `[^mark]`, a trailing attrs group — or falls
+            // back to a literal `[` (notation.md §Attrs groups).
             Some(b'[') => {
                 let kind = if is_escaped(self.source.whole(), start) {
                     Kind::MarkupText
                 } else {
                     Kind::LBrack
-                };
-                self.consume_char();
-                return self.finish_re_lex(kind);
-            }
-            // Image opener `![` (notation.md §Links): a marker token only at the digraph; a lone
-            // `!` stays 1-byte text. The parser validates the full `![alt](src)` shape.
-            Some(b'!') => {
-                let kind = if !is_escaped(self.source.whole(), start)
-                    && byte_at(self.source.whole(), start + 1) == Some(b'[')
-                {
-                    Kind::Bang
-                } else {
-                    Kind::MarkupText
                 };
                 self.consume_char();
                 return self.finish_re_lex(kind);
@@ -573,110 +558,6 @@ pub fn footnote_sugar_at(source: &str, lbrack_off: u32, limit: u32) -> Option<Sp
     let start = lbrack_off + 2;
     let end = docstate_ident_end(source, start, limit)?;
     (end < limit && byte_at(source, end) == Some(b']')).then(|| Span::new(start, end))
-}
-
-// ================================================================================================
-// Links `[text](url)` and images `![alt](src)` (notation.md §Links)
-// ================================================================================================
-
-/// The spans of a scanned `[text](url)` shape ([`lex_link_span`]).
-pub struct LinkSpans {
-    /// The text extent (inside `[…]`) — a bounded markup body for a link, plain text for an
-    /// image's alt.
-    pub text: Span,
-    /// The url extent (inside `(…)`) — a raw slice; trimming and `\<c>` cooking happen at
-    /// lowering.
-    pub url: Span,
-    /// One past the closing `)`.
-    pub resume: u32,
-}
-
-/// Scan a `[text](url)` shape whose `[` sits at `lbrack`, within `limit` (a bounded frame's clip
-/// — a match may not reach past the frame). The whole shape must close on its opening line (the
-/// inline-span line clamp). The text scan pairs nested `[`/`]`, steps over escapes, `@`-forms,
-/// raw spans, and comments (their `]` is not structure), and fails at a depth-0 `}` (the
-/// enclosing body closes first) or a `//` comment (which claims the rest of the line). The `(`
-/// must be glued to the `]`; the url scan pairs nested `(`/`)` and `{`/`}` and steps over
-/// escapes only (a url is raw). `None` → the `[` is not a link opener.
-pub fn lex_link_span(source: &str, lbrack: u32, limit: u32) -> Option<LinkSpans> {
-    let bound = line_content_end(source, lbrack).min(limit).min(source.len() as u32);
-
-    // --- text: the depth-0 `]` on the opening line ---
-    let mut s = Scan::new(source, lbrack + 1);
-    let mut bracket = 0u32;
-    let mut brace = 0i32;
-    let text_end = loop {
-        if s.pos() >= bound {
-            return None;
-        }
-        match s.peek()? {
-            b'\\' => s.advance(2),
-            b'[' => {
-                bracket += 1;
-                s.bump();
-            }
-            b']' if bracket == 0 => break s.pos(),
-            b']' => {
-                bracket -= 1;
-                s.bump();
-            }
-            b'{' => {
-                brace += 1;
-                s.bump();
-            }
-            b'}' if brace == 0 => return None, // the enclosing body closes first
-            b'}' => {
-                brace -= 1;
-                s.bump();
-            }
-            b'`' | b'$' => s.skip_raw_span(),
-            b'|' if s.peek_at(1) == Some(b'{') => s.skip_raw_span(),
-            b'@' => s.skip_at_form(),
-            b'/' if s.peek_at(1) == Some(b'/') => return None,
-            b'/' if s.peek_at(1) == Some(b'*') => s.skip_markup_block_comment(),
-            _ => s.bump(),
-        }
-    };
-
-    // --- the glued `(`, then the url's depth-0 `)` on the same line ---
-    if text_end + 1 >= bound || byte_at(source, text_end + 1) != Some(b'(') {
-        return None;
-    }
-    let mut s = Scan::new(source, text_end + 2);
-    let mut paren = 0u32;
-    let mut brace = 0i32;
-    let url_end = loop {
-        if s.pos() >= bound {
-            return None;
-        }
-        match s.peek()? {
-            b'\\' => s.advance(2),
-            b'(' => {
-                paren += 1;
-                s.bump();
-            }
-            b')' if paren == 0 => break s.pos(),
-            b')' => {
-                paren -= 1;
-                s.bump();
-            }
-            b'{' => {
-                brace += 1;
-                s.bump();
-            }
-            b'}' if brace == 0 => return None, // a body closer is never url content (escape it)
-            b'}' => {
-                brace -= 1;
-                s.bump();
-            }
-            _ => s.bump(),
-        }
-    };
-    Some(LinkSpans {
-        text: Span::new(lbrack + 1, text_end),
-        url: Span::new(text_end + 2, url_end),
-        resume: url_end + 1,
-    })
 }
 
 // ================================================================================================
@@ -1272,16 +1153,6 @@ fn find_marker_close(source: &str, open: u32, marker: u8, len: u32) -> Option<u3
             // comment is skipped whole (one crossing the line end kills the span via the bound).
             b'/' if s.peek_at(1) == Some(b'/') => return None,
             b'/' if s.peek_at(1) == Some(b'*') => s.skip_markup_block_comment(),
-            // A link/image extent is opaque — a marker byte inside its text or url cannot close
-            // (links bind tighter than emphasis, CommonMark-style).
-            b'[' => match lex_link_span(source, s.pos(), bound) {
-                Some(link) => s.goto(link.resume),
-                None => s.bump(),
-            },
-            b'!' if s.peek_at(1) == Some(b'[') => match lex_link_span(source, s.pos() + 1, bound) {
-                Some(link) => s.goto(link.resume),
-                None => s.bump(),
-            },
             _ if b == marker && depth == 0 => {
                 let run_ok = len == 1 || s.peek_at(1) == Some(marker);
                 if run_ok && s.pos() > open + len && can_close(source, s.pos(), len) {
@@ -1774,56 +1645,6 @@ mod tests {
         // A multi-line group is trailing on its *closing* line.
         assert_eq!(at("[k: 1,\n m: 2]", false), Some(13));
         assert!(at("[k: 1,\n m: 2] t", false).is_none());
-    }
-
-    /// Link scans: the `[text](url)` shape, nesting/escapes/skips, the glued `](`, the line
-    /// clamp, the `limit` clip, and link-opacity in the emphasis-close scan.
-    #[test]
-    fn link_scans() {
-        let scan = |src: &str, at: u32| lex_link_span(src, at, src.len() as u32);
-        let slices = |src: &str, l: &LinkSpans| {
-            (
-                src[l.text.start as usize..l.text.end as usize].to_string(),
-                src[l.url.start as usize..l.url.end as usize].to_string(),
-            )
-        };
-
-        let src = "[docs](https://x.com/a_b) t";
-        let l = scan(src, 0).expect("scans");
-        assert_eq!(slices(src, &l), ("docs".into(), "https://x.com/a_b".into()));
-        assert_eq!(l.resume, 25);
-
-        // Nested brackets pair; balanced parens in the url pair; escapes hide closers.
-        let src = "[a [b] c](u(v)w)";
-        let l = scan(src, 0).expect("scans");
-        assert_eq!(slices(src, &l), ("a [b] c".into(), "u(v)w".into()));
-        let src = r"[a\]b](u\)v)";
-        let l = scan(src, 0).expect("scans");
-        assert_eq!(slices(src, &l), (r"a\]b".into(), r"u\)v".into()));
-
-        // An `@`-form's groups and a raw span are opaque in the text scan.
-        let src = "[see @f[k: \"]\"] and `]`](u)";
-        let l = scan(src, 0).expect("scans");
-        assert_eq!(slices(src, &l).1, "u");
-
-        // Failures: no glued `(`, no close on the line, a depth-0 `}`, a `//` comment, the limit.
-        assert!(scan("[a] (u)", 0).is_none()); // space before `(`
-        assert!(scan("[a](u", 0).is_none()); // unclosed url
-        assert!(scan("[a\nb](u)", 0).is_none()); // the line clamp
-        assert!(scan("[a}](u)", 0).is_none()); // enclosing body closes first
-        assert!(scan("[a // b](u)", 0).is_none()); // comment claims the line
-        assert!(lex_link_span("[a](u)", 0, 4).is_none()); // clipped by the frame
-
-        // Empty text and empty url are legal shapes.
-        let src = "[](u)";
-        assert!(scan(src, 0).is_some());
-        let src = "[x]()";
-        let l = scan(src, 0).expect("scans");
-        assert_eq!(slices(src, &l).1, "");
-
-        // Emphasis-close opacity: a `_` inside a link's url cannot close an outer `_` span.
-        let src = "_see [x](a_b)_";
-        assert_eq!(find_emphasis_close(src, 0, b'_'), Some(src.len() as u32 - 1));
     }
 
     /// Comment scans: opener shapes, line/block extents, Typst-style nesting, the `limit` clamp,

@@ -2026,25 +2026,6 @@ const _: () = {
     assert!(offset_of!(NotaAttrs, props) == 16);
 
     // Padding: 4 bytes
-    assert!(size_of::<NotaLink>() == 64);
-    assert!(align_of::<NotaLink>() == 8);
-    assert!(offset_of!(NotaLink, span) == 0);
-    assert!(offset_of!(NotaLink, node_id) == 8);
-    assert!(offset_of!(NotaLink, url) == 16);
-    assert!(offset_of!(NotaLink, url_span) == 32);
-    assert!(offset_of!(NotaLink, children) == 40);
-
-    // Padding: 4 bytes
-    assert!(size_of::<NotaImage>() == 64);
-    assert!(align_of::<NotaImage>() == 8);
-    assert!(offset_of!(NotaImage, span) == 0);
-    assert!(offset_of!(NotaImage, node_id) == 8);
-    assert!(offset_of!(NotaImage, alt) == 16);
-    assert!(offset_of!(NotaImage, alt_span) == 32);
-    assert!(offset_of!(NotaImage, src) == 40);
-    assert!(offset_of!(NotaImage, src_span) == 56);
-
-    // Padding: 4 bytes
     assert!(size_of::<NotaThematicBreak>() == 16);
     assert!(align_of::<NotaThematicBreak>() == 8);
     assert!(offset_of!(NotaThematicBreak, span) == 0);
@@ -4081,25 +4062,6 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaAttrs, span) == 0);
     assert!(offset_of!(NotaAttrs, node_id) == 8);
     assert!(offset_of!(NotaAttrs, props) == 12);
-
-    // Padding: 0 bytes
-    assert!(size_of::<NotaLink>() == 44);
-    assert!(align_of::<NotaLink>() == 4);
-    assert!(offset_of!(NotaLink, span) == 0);
-    assert!(offset_of!(NotaLink, node_id) == 8);
-    assert!(offset_of!(NotaLink, url) == 12);
-    assert!(offset_of!(NotaLink, url_span) == 20);
-    assert!(offset_of!(NotaLink, children) == 28);
-
-    // Padding: 0 bytes
-    assert!(size_of::<NotaImage>() == 44);
-    assert!(align_of::<NotaImage>() == 4);
-    assert!(offset_of!(NotaImage, span) == 0);
-    assert!(offset_of!(NotaImage, node_id) == 8);
-    assert!(offset_of!(NotaImage, alt) == 12);
-    assert!(offset_of!(NotaImage, alt_span) == 20);
-    assert!(offset_of!(NotaImage, src) == 28);
-    assert!(offset_of!(NotaImage, src_span) == 36);
 
     // Padding: 0 bytes
     assert!(size_of::<NotaThematicBreak>() == 12);

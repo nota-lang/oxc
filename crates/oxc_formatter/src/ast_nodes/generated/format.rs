@@ -5950,26 +5950,6 @@ impl<'a> Format<'a> for AstNode<'a, NotaChild<'a>> {
                     })
                     .fmt(f);
             }
-            NotaChild::Link(inner) => {
-                allocator
-                    .alloc(AstNode::<NotaLink> {
-                        inner,
-                        parent,
-                        allocator,
-                        following_span_start: self.following_span_start,
-                    })
-                    .fmt(f);
-            }
-            NotaChild::Image(inner) => {
-                allocator
-                    .alloc(AstNode::<NotaImage> {
-                        inner,
-                        parent,
-                        allocator,
-                        following_span_start: self.following_span_start,
-                    })
-                    .fmt(f);
-            }
             NotaChild::Attrs(inner) => {
                 allocator
                     .alloc(AstNode::<NotaAttrs> {
@@ -6428,32 +6408,6 @@ impl<'a> Format<'a> for AstNode<'a, NotaListItem<'a>> {
 }
 
 impl<'a> Format<'a> for AstNode<'a, NotaAttrs<'a>> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
-        let is_suppressed = f.comments().is_suppressed(self.span().start);
-        self.format_leading_comments(f);
-        if is_suppressed {
-            FormatSuppressedNode(self.span()).fmt(f);
-        } else {
-            self.write(f);
-        }
-        self.format_trailing_comments(f);
-    }
-}
-
-impl<'a> Format<'a> for AstNode<'a, NotaLink<'a>> {
-    fn fmt(&self, f: &mut Formatter<'_, 'a>) {
-        let is_suppressed = f.comments().is_suppressed(self.span().start);
-        self.format_leading_comments(f);
-        if is_suppressed {
-            FormatSuppressedNode(self.span()).fmt(f);
-        } else {
-            self.write(f);
-        }
-        self.format_trailing_comments(f);
-    }
-}
-
-impl<'a> Format<'a> for AstNode<'a, NotaImage<'a>> {
     fn fmt(&self, f: &mut Formatter<'_, 'a>) {
         let is_suppressed = f.comments().is_suppressed(self.span().start);
         self.format_leading_comments(f);

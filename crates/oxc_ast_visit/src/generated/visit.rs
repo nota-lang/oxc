@@ -1355,16 +1355,6 @@ pub trait Visit<'a>: Sized {
     }
 
     #[inline]
-    fn visit_nota_link(&mut self, it: &NotaLink<'a>) {
-        walk_nota_link(self, it);
-    }
-
-    #[inline]
-    fn visit_nota_image(&mut self, it: &NotaImage<'a>) {
-        walk_nota_image(self, it);
-    }
-
-    #[inline]
     fn visit_nota_thematic_break(&mut self, it: &NotaThematicBreak) {
         walk_nota_thematic_break(self, it);
     }
@@ -4477,8 +4467,6 @@ pub mod walk {
             NotaChild::ListItem(it) => visitor.visit_nota_list_item(it),
             NotaChild::DocState(it) => visitor.visit_nota_doc_state(it),
             NotaChild::ThematicBreak(it) => visitor.visit_nota_thematic_break(it),
-            NotaChild::Link(it) => visitor.visit_nota_link(it),
-            NotaChild::Image(it) => visitor.visit_nota_image(it),
             NotaChild::Attrs(it) => visitor.visit_nota_attrs(it),
             match_nota_form!(NotaChild) => visitor.visit_nota_form(it.to_nota_form()),
         }
@@ -4728,26 +4716,6 @@ pub mod walk {
         visitor.enter_node(kind);
         visitor.visit_span(&it.span);
         visitor.visit_nota_props(&it.props);
-        visitor.leave_node(kind);
-    }
-
-    #[inline]
-    pub fn walk_nota_link<'a, V: Visit<'a>>(visitor: &mut V, it: &NotaLink<'a>) {
-        let kind = AstKind::NotaLink(visitor.alloc(it));
-        visitor.enter_node(kind);
-        visitor.visit_span(&it.span);
-        visitor.visit_span(&it.url_span);
-        visitor.visit_nota_children(&it.children);
-        visitor.leave_node(kind);
-    }
-
-    #[inline]
-    pub fn walk_nota_image<'a, V: Visit<'a>>(visitor: &mut V, it: &NotaImage<'a>) {
-        let kind = AstKind::NotaImage(visitor.alloc(it));
-        visitor.enter_node(kind);
-        visitor.visit_span(&it.span);
-        visitor.visit_span(&it.alt_span);
-        visitor.visit_span(&it.src_span);
         visitor.leave_node(kind);
     }
 

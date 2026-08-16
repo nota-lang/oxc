@@ -8653,8 +8653,6 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
             Self::DocState(it) => NotaChild::DocState(CloneIn::clone_in(it, allocator)),
             Self::ThematicBreak(it) => NotaChild::ThematicBreak(CloneIn::clone_in(it, allocator)),
-            Self::Link(it) => NotaChild::Link(CloneIn::clone_in(it, allocator)),
-            Self::Image(it) => NotaChild::Image(CloneIn::clone_in(it, allocator)),
             Self::Attrs(it) => NotaChild::Attrs(CloneIn::clone_in(it, allocator)),
             Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
             Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
@@ -8688,8 +8686,6 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::ThematicBreak(it) => {
                 NotaChild::ThematicBreak(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
-            Self::Link(it) => NotaChild::Link(CloneIn::clone_in_with_semantic_ids(it, allocator)),
-            Self::Image(it) => NotaChild::Image(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Attrs(it) => NotaChild::Attrs(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Element(it) => {
                 NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
@@ -9357,56 +9353,6 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaAttrs<'_> {
             node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
             span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
             props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
-        }
-    }
-}
-
-impl<'new_alloc> CloneIn<'new_alloc> for NotaLink<'_> {
-    type Cloned = NotaLink<'new_alloc>;
-
-    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        NotaLink {
-            node_id: Default::default(),
-            span: CloneIn::clone_in(&self.span, allocator),
-            url: CloneIn::clone_in(&self.url, allocator),
-            url_span: CloneIn::clone_in(&self.url_span, allocator),
-            children: CloneIn::clone_in(&self.children, allocator),
-        }
-    }
-
-    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        NotaLink {
-            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
-            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
-            url: CloneIn::clone_in_with_semantic_ids(&self.url, allocator),
-            url_span: CloneIn::clone_in_with_semantic_ids(&self.url_span, allocator),
-            children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
-        }
-    }
-}
-
-impl<'new_alloc> CloneIn<'new_alloc> for NotaImage<'_> {
-    type Cloned = NotaImage<'new_alloc>;
-
-    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        NotaImage {
-            node_id: Default::default(),
-            span: CloneIn::clone_in(&self.span, allocator),
-            alt: CloneIn::clone_in(&self.alt, allocator),
-            alt_span: CloneIn::clone_in(&self.alt_span, allocator),
-            src: CloneIn::clone_in(&self.src, allocator),
-            src_span: CloneIn::clone_in(&self.src_span, allocator),
-        }
-    }
-
-    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
-        NotaImage {
-            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
-            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
-            alt: CloneIn::clone_in_with_semantic_ids(&self.alt, allocator),
-            alt_span: CloneIn::clone_in_with_semantic_ids(&self.alt_span, allocator),
-            src: CloneIn::clone_in_with_semantic_ids(&self.src, allocator),
-            src_span: CloneIn::clone_in_with_semantic_ids(&self.src_span, allocator),
         }
     }
 }

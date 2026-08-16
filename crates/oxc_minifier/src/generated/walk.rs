@@ -5833,8 +5833,6 @@ unsafe fn walk_nota_child<'a, Tr: Traverse<'a>>(
         NotaChild::ThematicBreak(node) => {
             walk_nota_thematic_break(traverser, (&mut **node) as *mut _, ctx)
         }
-        NotaChild::Link(node) => walk_nota_link(traverser, (&mut **node) as *mut _, ctx),
-        NotaChild::Image(node) => walk_nota_image(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Attrs(node) => walk_nota_attrs(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Element(_)
         | NotaChild::Fragment(_)
@@ -6334,34 +6332,6 @@ unsafe fn walk_nota_attrs<'a, Tr: Traverse<'a>>(
     }
     ctx.pop_stack(pop_token);
     traverser.exit_nota_attrs(&mut *node, ctx);
-}
-
-unsafe fn walk_nota_link<'a, Tr: Traverse<'a>>(
-    traverser: &mut Tr,
-    node: *mut NotaLink<'a>,
-    ctx: &mut TraverseCtx<'a>,
-) {
-    traverser.enter_nota_link(&mut *node, ctx);
-    let pop_token = ctx.push_stack(Ancestor::NotaLinkChildren(ancestor::NotaLinkWithoutChildren(
-        node,
-        PhantomData,
-    )));
-    for item in
-        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_LINK_CHILDREN) as *mut Vec<NotaChild>)
-    {
-        walk_nota_child(traverser, item as *mut _, ctx);
-    }
-    ctx.pop_stack(pop_token);
-    traverser.exit_nota_link(&mut *node, ctx);
-}
-
-unsafe fn walk_nota_image<'a, Tr: Traverse<'a>>(
-    traverser: &mut Tr,
-    node: *mut NotaImage<'a>,
-    ctx: &mut TraverseCtx<'a>,
-) {
-    traverser.enter_nota_image(&mut *node, ctx);
-    traverser.exit_nota_image(&mut *node, ctx);
 }
 
 unsafe fn walk_nota_thematic_break<'a, Tr: Traverse<'a>>(

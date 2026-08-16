@@ -141,11 +141,11 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   JS can't lex) are **erased** when the region parses clean.
 - **Every text child is a real source slice** — including single-byte sigils that turned out
   literal — so `NotaText` spans are always true source positions (sourcemaps / Volar / ESTree).
-- **A markup `[` is one typed token with a fixed dispatch** (notation.md §Links/§Attrs): the
-  footnote digraph `[^`, then the `[text](url)` link shape (`lex_link_span` — one pure scan, line-
-  clamped, frame-limited; also the skip the emphasis-close scan uses, links bind tighter), then a
-  trailing attrs group (`attrs_group_at` — first-entry gate + trailing gate, then the ordinary
-  props parse), else a literal `[`. `![` is its own token feeding the same link scan.
+- **A markup `[` is one typed token with a fixed dispatch** (notation.md §Attrs groups): the
+  footnote digraph `[^`, then a trailing attrs group (`attrs_group_at` — first-entry gate +
+  trailing gate, then the ordinary props parse), else a literal `[`. (A markdown-style
+  `[text](url)` link sugar existed briefly and was reverted — the bracket syntax is reserved;
+  links are `@a[href]{…}`, with `&`-refs the likely future link surface.)
 - **Markup comments are trivia, not children** (notation.md §Comments): `lex_comment` scans the
   extent (nesting counted; comment-only lines consume their newline so no phantom breaks), the
   parser records them on the document Program's **comments vec** — the ESTree view and the

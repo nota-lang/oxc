@@ -1013,8 +1013,6 @@ nota_format_unreachable!(
     NotaHeading,
     NotaListItem,
     NotaDocState,
-    NotaLink,
-    NotaImage,
     NotaAttrs,
 );
 

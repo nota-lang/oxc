@@ -3311,8 +3311,6 @@ impl ESTree for NotaChild<'_> {
             Self::ListItem(it) => it.serialize(serializer),
             Self::DocState(it) => it.serialize(serializer),
             Self::ThematicBreak(it) => it.serialize(serializer),
-            Self::Link(it) => it.serialize(serializer),
-            Self::Image(it) => it.serialize(serializer),
             Self::Attrs(it) => it.serialize(serializer),
             Self::Element(it) => it.serialize(serializer),
             Self::Fragment(it) => it.serialize(serializer),
@@ -3627,28 +3625,6 @@ impl ESTree for NotaAttrs<'_> {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString("NotaAttrs"));
         state.serialize_field("props", &self.props);
-        state.serialize_span(self.span);
-        state.end();
-    }
-}
-
-impl ESTree for NotaLink<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString("NotaLink"));
-        state.serialize_field("url", &self.url);
-        state.serialize_field("children", &self.children);
-        state.serialize_span(self.span);
-        state.end();
-    }
-}
-
-impl ESTree for NotaImage<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString("NotaImage"));
-        state.serialize_field("alt", &self.alt);
-        state.serialize_field("src", &self.src);
         state.serialize_span(self.span);
         state.end();
     }

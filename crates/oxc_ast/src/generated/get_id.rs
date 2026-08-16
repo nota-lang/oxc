@@ -3825,38 +3825,6 @@ impl NotaAttrs<'_> {
     }
 }
 
-impl NotaLink<'_> {
-    /// Get [`NodeId`] of [`NotaLink`].
-    ///
-    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
-    #[inline]
-    pub fn node_id(&self) -> NodeId {
-        self.node_id.get()
-    }
-
-    /// Set [`NodeId`] of [`NotaLink`].
-    #[inline]
-    pub fn set_node_id(&self, node_id: NodeId) {
-        self.node_id.set(node_id);
-    }
-}
-
-impl NotaImage<'_> {
-    /// Get [`NodeId`] of [`NotaImage`].
-    ///
-    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
-    #[inline]
-    pub fn node_id(&self) -> NodeId {
-        self.node_id.get()
-    }
-
-    /// Set [`NodeId`] of [`NotaImage`].
-    #[inline]
-    pub fn set_node_id(&self, node_id: NodeId) {
-        self.node_id.set(node_id);
-    }
-}
-
 impl NotaThematicBreak {
     /// Get [`NodeId`] of [`NotaThematicBreak`].
     ///
@@ -4926,8 +4894,6 @@ impl NotaChild<'_> {
             Self::ListItem(it) => it.node_id(),
             Self::DocState(it) => it.node_id(),
             Self::ThematicBreak(it) => it.node_id(),
-            Self::Link(it) => it.node_id(),
-            Self::Image(it) => it.node_id(),
             Self::Attrs(it) => it.node_id(),
             Self::Element(it) => it.node_id(),
             Self::Fragment(it) => it.node_id(),

@@ -10,7 +10,7 @@ use oxc_syntax::node::NodeId;
 use crate::ast::*;
 
 /// The largest integer value that can be mapped to an `AstType`/`AstKind` enum variant.
-pub const AST_TYPE_MAX: u8 = 214;
+pub const AST_TYPE_MAX: u8 = 212;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -226,10 +226,8 @@ pub enum AstType {
     NotaHeading = 208,
     NotaListItem = 209,
     NotaAttrs = 210,
-    NotaLink = 211,
-    NotaImage = 212,
-    NotaThematicBreak = 213,
-    NotaDocState = 214,
+    NotaThematicBreak = 211,
+    NotaDocState = 212,
 }
 
 /// Untyped AST Node Kind
@@ -465,8 +463,6 @@ pub enum AstKind<'a> {
     NotaHeading(&'a NotaHeading<'a>) = AstType::NotaHeading as u8,
     NotaListItem(&'a NotaListItem<'a>) = AstType::NotaListItem as u8,
     NotaAttrs(&'a NotaAttrs<'a>) = AstType::NotaAttrs as u8,
-    NotaLink(&'a NotaLink<'a>) = AstType::NotaLink as u8,
-    NotaImage(&'a NotaImage<'a>) = AstType::NotaImage as u8,
     NotaThematicBreak(&'a NotaThematicBreak) = AstType::NotaThematicBreak as u8,
     NotaDocState(&'a NotaDocState<'a>) = AstType::NotaDocState as u8,
 }
@@ -698,8 +694,6 @@ impl AstKind<'_> {
             Self::NotaHeading(it) => it.node_id(),
             Self::NotaListItem(it) => it.node_id(),
             Self::NotaAttrs(it) => it.node_id(),
-            Self::NotaLink(it) => it.node_id(),
-            Self::NotaImage(it) => it.node_id(),
             Self::NotaThematicBreak(it) => it.node_id(),
             Self::NotaDocState(it) => it.node_id(),
         }
@@ -921,8 +915,6 @@ impl AstKind<'_> {
             Self::NotaHeading(it) => it.set_node_id(node_id),
             Self::NotaListItem(it) => it.set_node_id(node_id),
             Self::NotaAttrs(it) => it.set_node_id(node_id),
-            Self::NotaLink(it) => it.set_node_id(node_id),
-            Self::NotaImage(it) => it.set_node_id(node_id),
             Self::NotaThematicBreak(it) => it.set_node_id(node_id),
             Self::NotaDocState(it) => it.set_node_id(node_id),
         }
@@ -1146,8 +1138,6 @@ impl GetSpan for AstKind<'_> {
             Self::NotaHeading(it) => it.span(),
             Self::NotaListItem(it) => it.span(),
             Self::NotaAttrs(it) => it.span(),
-            Self::NotaLink(it) => it.span(),
-            Self::NotaImage(it) => it.span(),
             Self::NotaThematicBreak(it) => it.span(),
             Self::NotaDocState(it) => it.span(),
         }
@@ -1372,8 +1362,6 @@ impl GetAddress for AstKind<'_> {
             Self::NotaHeading(it) => it.unstable_address(),
             Self::NotaListItem(it) => it.unstable_address(),
             Self::NotaAttrs(it) => it.unstable_address(),
-            Self::NotaLink(it) => it.unstable_address(),
-            Self::NotaImage(it) => it.unstable_address(),
             Self::NotaThematicBreak(it) => it.unstable_address(),
             Self::NotaDocState(it) => it.unstable_address(),
         }
@@ -2444,16 +2432,6 @@ impl<'a> AstKind<'a> {
     #[inline]
     pub fn as_nota_attrs(self) -> Option<&'a NotaAttrs<'a>> {
         if let Self::NotaAttrs(v) = self { Some(v) } else { None }
-    }
-
-    #[inline]
-    pub fn as_nota_link(self) -> Option<&'a NotaLink<'a>> {
-        if let Self::NotaLink(v) = self { Some(v) } else { None }
-    }
-
-    #[inline]
-    pub fn as_nota_image(self) -> Option<&'a NotaImage<'a>> {
-        if let Self::NotaImage(v) = self { Some(v) } else { None }
     }
 
     #[inline]
