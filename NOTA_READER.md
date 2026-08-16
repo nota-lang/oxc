@@ -1,9 +1,9 @@
 # Nota reader — architecture notes (lives with the code)
 
-The Nota *reader* built into this oxc fork (branch `nota`): parser, AST, lowering, and compiler
-entries. The spec lives in the main repo: `design/notation.md` (surface syntax → emit, including
-the authoritative emit table) and `design/decode.md` (runtime semantics). This file describes the
-**current architecture** — history lives in git.
+The Nota *reader* built into this oxc fork (branch `solid`, off `nota`): parser, AST, lowering,
+and compiler entries. The spec lives in the main repo: `design/notation.md` (surface syntax) and
+`design/solid.md` (the Solid-only architecture — the emit is **Solid JSX**; it supersedes
+decode.md there). This file describes the **current architecture** — history lives in git.
 
 ## Why a fork
 
@@ -22,7 +22,7 @@ fork — kept shallow (see the fork seam below).
 ```
 .nota source
   → oxc_parser         document/expression entry → faithful Nota AST
-  → oxc_transformer    NotaLowering: Nota AST → hyperscript (h/Fragment/decode) Program
+  → oxc_transformer    NotaLowering: Nota AST → Solid JSX Program
   → oxc_codegen        JS text (+ sourcemap, + opt-in offset log)
   → crates/oxc/src/nota.rs   the compile entries + Volar CodeMapping join
 ```
@@ -35,7 +35,7 @@ fork — kept shallow (see the fork seam below).
 | Parser (markup → Nota AST) | `crates/oxc_parser/src/nota/mod.rs` |
 | Highlight pass (AST walk + embedded-JS re-lex → spans) | `crates/oxc_parser/src/nota/highlight.rs` |
 | Nota AST nodes (`Expression::NotaMarkup` umbrella) | `crates/oxc_ast/src/ast/nota.rs` |
-| Lowering pass (AST → hyperscript, `%` routing, name-attach) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
+| Lowering pass (AST → Solid JSX, `%` routing) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
 | Scribble whitespace algorithm (pure + unit tests) | `crates/oxc_transformer/src/nota/scribble.rs` |
 | Volar mapping marks | `crates/oxc_transformer/src/nota/mapping.rs` |
 | Compile entries + CodeMapping join (+ mapping/virtual-emit tests) | `crates/oxc/src/nota.rs` |
@@ -158,18 +158,20 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
 
 ## Lowering (the emit surface)
 
-`NotaLowering` owns everything from Nota AST to the emit surface (notation.md §Emit reference;
-decode.md §The emit surface): the Scribble whitespace
-algorithm (`scribble.rs`, pure, unit-tested against the reference reader — one `"\n"` child per
-interior newline, never coalesced: a blank line = two adjacent `"\n"`, the runtime's
-paragraph-break marker, decode.md §struct); document assembly (`export default function Doc()`, `%`
-routing: `import`/`export` hoist to module scope, other statements — component bindings included —
-prepend into `Doc` in place (document-local; `%export` is the opt-in to module scope; top-level and
-`%export`-wrapped `inlineComponent`/`blockComponent` bindings get the name-attach 2nd argument);
-a `%` nested in an element body scopes the remaining siblings into an IIFE);
-`@for` → `iter.map((bind, _i) => Fragment({ key: _i }, ...))` with a collision-checked fresh `_i`;
-reserved-name collision diagnostics (`Doc`/`h`/`Fragment`/`decode`/`inlineComponent`/
-`blockComponent`).
+`NotaLowering` owns everything from Nota AST to the emit surface (design/solid.md §The
+pipeline): the Scribble whitespace algorithm (`scribble.rs`, pure, unit-tested against the
+reference reader), with adjacent text pieces **coalesced at emit** into one `{"…"}` container
+per run — a blank source line surfaces as `"\n\n"` inside one string, the runtime Reforest
+pass's paragraph-break marker (text is unmapped boilerplate, so coalescing is mapping-safe);
+document assembly (`export default function Doc() { …; return <NotaDoc>…</NotaDoc>; }`, `%`
+routing: `import`/`export` hoist to module scope, every other statement prepends into `Doc` in
+place — document-local; a `%` nested in an element body scopes the remaining siblings into an
+IIFE returning a JSX fragment); list markers → `<UlLi>`/`<OlLi>` (reference-named); flow-container
+host tags (decode.md's old HOST_FLOW_TAGS, now an emit policy) get a `<Reforest>` interior;
+`@for` → `<For each={iter}>{(bind) => <>…</>}</For>`; dynamic tags → `<Dynamic component={…}>`;
+reserved-name collision diagnostics (`Doc`/`NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`).
+Component tags are JSX **identifier references** (they surface in free names and log byte-exact
+for the Volar mappings); host tags are plain intrinsic `JSXIdentifier`s.
 
 Semantic pins (deliberate, tested):
 - **`Doc` and the nested-`%` IIFE are always synchronous** — no `await`-driven auto-`async`
@@ -178,9 +180,12 @@ Semantic pins (deliberate, tested):
   whose printed body must equal the runtime string). Content containing a template breaker (a
   backtick or `${`) falls back to a **cooked string literal** — a `\`-escape inside `String.raw`
   would leak into the runtime value.
-- The reader does **not** emit the `@nota-lang/runtime` import (the shim/integrator prepends it);
-  `CodeInline`/`CodeBlock`/`Tex` are ambient prelude identifiers (`Tex`, not `Math` — an ambient
-  `Math` would capture the JS global in embedded code).
+- The reader emits **no imports at all** — the structural names (`NotaDoc`/`Reforest`/`UlLi`/
+  `OlLi`/`For`/`Dynamic`), the ambient prelude (`CodeInline`/`CodeBlock`/`Tex`/…; `Tex`, not
+  `Math` — an ambient `Math` would capture the JS global), and the `solid-js` state surface are
+  all free names the `@nota-lang/compiler` shim binds.
+- The TS-strip pass explicitly disables the transformer's (default-on) React JSX plugin — the
+  emit must stay JSX for the consumer's vite-plugin-solid.
 
 ## Compiler entries (`crates/oxc/src/nota.rs`)
 
