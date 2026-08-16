@@ -8652,6 +8652,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::Heading(it) => NotaChild::Heading(CloneIn::clone_in(it, allocator)),
             Self::ListItem(it) => NotaChild::ListItem(CloneIn::clone_in(it, allocator)),
             Self::DocState(it) => NotaChild::DocState(CloneIn::clone_in(it, allocator)),
+            Self::ThematicBreak(it) => NotaChild::ThematicBreak(CloneIn::clone_in(it, allocator)),
             Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
             Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
             Self::Interpolation(it) => NotaChild::Interpolation(CloneIn::clone_in(it, allocator)),
@@ -8680,6 +8681,9 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             }
             Self::DocState(it) => {
                 NotaChild::DocState(CloneIn::clone_in_with_semantic_ids(it, allocator))
+            }
+            Self::ThematicBreak(it) => {
+                NotaChild::ThematicBreak(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
             Self::Element(it) => {
                 NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
@@ -9328,6 +9332,24 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaListKind {
     #[inline(always)]
     fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
         *self
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaThematicBreak {
+    type Cloned = NotaThematicBreak;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaThematicBreak {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaThematicBreak {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+        }
     }
 }
 

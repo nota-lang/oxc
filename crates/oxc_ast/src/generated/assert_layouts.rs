@@ -2018,6 +2018,12 @@ const _: () = {
     assert!(size_of::<NotaListKind>() == 1);
     assert!(align_of::<NotaListKind>() == 1);
 
+    // Padding: 4 bytes
+    assert!(size_of::<NotaThematicBreak>() == 16);
+    assert!(align_of::<NotaThematicBreak>() == 8);
+    assert!(offset_of!(NotaThematicBreak, span) == 0);
+    assert!(offset_of!(NotaThematicBreak, node_id) == 8);
+
     // Padding: 3 bytes
     assert!(size_of::<NotaDocState>() == 64);
     assert!(align_of::<NotaDocState>() == 8);
@@ -4042,6 +4048,12 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
 
     assert!(size_of::<NotaListKind>() == 1);
     assert!(align_of::<NotaListKind>() == 1);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaThematicBreak>() == 12);
+    assert!(align_of::<NotaThematicBreak>() == 4);
+    assert!(offset_of!(NotaThematicBreak, span) == 0);
+    assert!(offset_of!(NotaThematicBreak, node_id) == 8);
 
     // Padding: 3 bytes
     assert!(size_of::<NotaDocState>() == 48);

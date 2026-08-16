@@ -2055,6 +2055,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             _ => {
                 // Remaining variants do not contain scopes:
                 // `Text`
+                // `ThematicBreak`
             }
         }
     }
@@ -2208,6 +2209,11 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline]
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
         self.visit_nota_children(&it.children);
+    }
+
+    #[inline(always)]
+    fn visit_nota_thematic_break(&mut self, it: &NotaThematicBreak) {
+        // Struct does not contain a scope. Halt traversal.
     }
 
     #[inline]

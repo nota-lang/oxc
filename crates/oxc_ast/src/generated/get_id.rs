@@ -3809,6 +3809,22 @@ impl NotaListItem<'_> {
     }
 }
 
+impl NotaThematicBreak {
+    /// Get [`NodeId`] of [`NotaThematicBreak`].
+    ///
+    /// Only use this method on a post-semantic AST where [`NodeId`]s are always defined.
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.node_id.get()
+    }
+
+    /// Set [`NodeId`] of [`NotaThematicBreak`].
+    #[inline]
+    pub fn set_node_id(&self, node_id: NodeId) {
+        self.node_id.set(node_id);
+    }
+}
+
 impl NotaDocState<'_> {
     /// Get [`NodeId`] of [`NotaDocState`].
     ///
@@ -4861,6 +4877,7 @@ impl NotaChild<'_> {
             Self::Heading(it) => it.node_id(),
             Self::ListItem(it) => it.node_id(),
             Self::DocState(it) => it.node_id(),
+            Self::ThematicBreak(it) => it.node_id(),
             Self::Element(it) => it.node_id(),
             Self::Fragment(it) => it.node_id(),
             Self::Interpolation(it) => it.node_id(),

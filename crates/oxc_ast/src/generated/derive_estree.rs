@@ -3310,6 +3310,7 @@ impl ESTree for NotaChild<'_> {
             Self::Heading(it) => it.serialize(serializer),
             Self::ListItem(it) => it.serialize(serializer),
             Self::DocState(it) => it.serialize(serializer),
+            Self::ThematicBreak(it) => it.serialize(serializer),
             Self::Element(it) => it.serialize(serializer),
             Self::Fragment(it) => it.serialize(serializer),
             Self::Interpolation(it) => it.serialize(serializer),
@@ -3614,6 +3615,15 @@ impl ESTree for NotaListKind {
             Self::Unordered => JsonSafeString("unordered").serialize(serializer),
             Self::Ordered => JsonSafeString("ordered").serialize(serializer),
         }
+    }
+}
+
+impl ESTree for NotaThematicBreak {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("NotaThematicBreak"));
+        state.serialize_span(self.span);
+        state.end();
     }
 }
 

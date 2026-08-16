@@ -156,6 +156,8 @@ pub enum NotaChild<'a> {
     ListItem(Box<'a, NotaListItem<'a>>) = 12,
     /// `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body` — inline doc-state sugar.
     DocState(Box<'a, NotaDocState<'a>>) = 13,
+    /// A `---` thematic-break line (a run of 3+ `-` alone on its line) → `<hr />`.
+    ThematicBreak(Box<'a, NotaThematicBreak>) = 14,
     // `NotaForm` variants added here by `inherit_variants!` macro
     @inherit NotaForm
 }
@@ -521,6 +523,16 @@ pub enum NotaListKind {
     Unordered = 0,
     /// `+` or `N.`.
     Ordered = 1,
+}
+
+/// A `---` thematic break (a line-start run of 3+ `-` with a whitespace-only tail) → `<hr />`.
+/// The span covers the `-` run (indentation and the trailing newline excluded).
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
+pub struct NotaThematicBreak {
+    pub node_id: Cell<NodeId>,
+    pub span: Span,
 }
 
 /// Inline **doc-state sugar** (notation.md §Doc-state references).

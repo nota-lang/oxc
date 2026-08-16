@@ -10,7 +10,7 @@ use oxc_syntax::node::NodeId;
 use crate::ast::*;
 
 /// The largest integer value that can be mapped to an `AstType`/`AstKind` enum variant.
-pub const AST_TYPE_MAX: u8 = 210;
+pub const AST_TYPE_MAX: u8 = 211;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -225,7 +225,8 @@ pub enum AstType {
     NotaEmphasis = 207,
     NotaHeading = 208,
     NotaListItem = 209,
-    NotaDocState = 210,
+    NotaThematicBreak = 210,
+    NotaDocState = 211,
 }
 
 /// Untyped AST Node Kind
@@ -460,6 +461,7 @@ pub enum AstKind<'a> {
     NotaEmphasis(&'a NotaEmphasis<'a>) = AstType::NotaEmphasis as u8,
     NotaHeading(&'a NotaHeading<'a>) = AstType::NotaHeading as u8,
     NotaListItem(&'a NotaListItem<'a>) = AstType::NotaListItem as u8,
+    NotaThematicBreak(&'a NotaThematicBreak) = AstType::NotaThematicBreak as u8,
     NotaDocState(&'a NotaDocState<'a>) = AstType::NotaDocState as u8,
 }
 
@@ -689,6 +691,7 @@ impl AstKind<'_> {
             Self::NotaEmphasis(it) => it.node_id(),
             Self::NotaHeading(it) => it.node_id(),
             Self::NotaListItem(it) => it.node_id(),
+            Self::NotaThematicBreak(it) => it.node_id(),
             Self::NotaDocState(it) => it.node_id(),
         }
     }
@@ -908,6 +911,7 @@ impl AstKind<'_> {
             Self::NotaEmphasis(it) => it.set_node_id(node_id),
             Self::NotaHeading(it) => it.set_node_id(node_id),
             Self::NotaListItem(it) => it.set_node_id(node_id),
+            Self::NotaThematicBreak(it) => it.set_node_id(node_id),
             Self::NotaDocState(it) => it.set_node_id(node_id),
         }
     }
@@ -1129,6 +1133,7 @@ impl GetSpan for AstKind<'_> {
             Self::NotaEmphasis(it) => it.span(),
             Self::NotaHeading(it) => it.span(),
             Self::NotaListItem(it) => it.span(),
+            Self::NotaThematicBreak(it) => it.span(),
             Self::NotaDocState(it) => it.span(),
         }
     }
@@ -1351,6 +1356,7 @@ impl GetAddress for AstKind<'_> {
             Self::NotaEmphasis(it) => it.unstable_address(),
             Self::NotaHeading(it) => it.unstable_address(),
             Self::NotaListItem(it) => it.unstable_address(),
+            Self::NotaThematicBreak(it) => it.unstable_address(),
             Self::NotaDocState(it) => it.unstable_address(),
         }
     }
@@ -2415,6 +2421,11 @@ impl<'a> AstKind<'a> {
     #[inline]
     pub fn as_nota_list_item(self) -> Option<&'a NotaListItem<'a>> {
         if let Self::NotaListItem(v) = self { Some(v) } else { None }
+    }
+
+    #[inline]
+    pub fn as_nota_thematic_break(self) -> Option<&'a NotaThematicBreak> {
+        if let Self::NotaThematicBreak(v) = self { Some(v) } else { None }
     }
 
     #[inline]

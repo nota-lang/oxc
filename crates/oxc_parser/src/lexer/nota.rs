@@ -736,6 +736,21 @@ pub fn heading_at(source: &str, line_start: u32) -> Option<(u8, u32, u32)> {
     Some((level, line_start + caps[0].len() as u32, line_content_end(source, line_start)))
 }
 
+/// Detect a `---` thematic break at `line_start`: a run of 3+ `-` (leading indentation
+/// tolerated) whose tail up to `line_end` — the caller's clipped line extent (content end ∧ brace
+/// clip ∧ bounded end) — is whitespace-only. Returns the `-` run's span, or `None`. (A `- ` list
+/// marker never matches: it has a space after one `-`; `---` never matches a list marker for the
+/// same reason.)
+pub fn thematic_break_at(source: &str, line_start: u32, line_end: u32) -> Option<Span> {
+    let mut s = Scan::new(source, line_start);
+    s.skip_inline_ws();
+    let run_start = s.pos();
+    let run = s.eat_run(b'-');
+    let run_end = s.pos();
+    s.skip_while(|b| matches!(b, b' ' | b'\t' | b'\r'));
+    (run >= 3 && run_end <= line_end && s.pos() >= line_end).then(|| Span::new(run_start, run_end))
+}
+
 /// Classify a list marker at the first non-whitespace of the line at `line_start`
 /// (`- ` / `+ ` / `N. `), or `None`.
 pub fn list_marker_at(source: &str, line_start: u32) -> Option<ListMarker> {
@@ -1644,6 +1659,18 @@ mod tests {
         assert_eq!(heading_at("### Sub\n", 0), Some((3, 4, 7)));
         assert_eq!(heading_at("####### seven\n", 0), None);
         assert_eq!(heading_at("#nospace\n", 0), None);
+
+        // thematic breaks: a run of 3+ `-`, whitespace-only tail up to the clipped line end
+        let t = |src: &str| thematic_break_at(src, 0, line_content_end(src, 0));
+        assert_eq!(t("---\n"), Some(Span::new(0, 3)));
+        assert_eq!(t("  ----- \nx"), Some(Span::new(2, 7)));
+        assert_eq!(t("----"), Some(Span::new(0, 4))); // EOF line
+        assert_eq!(t("--\n"), None); // run of 2
+        assert_eq!(t("--- x\n"), None); // nonempty tail
+        assert_eq!(t("- --\n"), None); // a list line, not a break
+        // The clip: `@{---}` hands a line_end at the `}` — the break still fires there.
+        assert_eq!(thematic_break_at("---} t", 0, 3), Some(Span::new(0, 3)));
+        assert_eq!(thematic_break_at("--- x} t", 0, 6), None);
 
         // list markers
         let m = list_marker_at("  - item\n", 0).unwrap();

@@ -555,6 +555,12 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         self.visit_nota_children(&it.children);
     }
 
+    fn visit_nota_thematic_break(&mut self, it: &NotaThematicBreak) {
+        // The `---` run paints as a list-marker sibling (no new wire discriminant: it is line
+        // punctuation of the same family).
+        self.emit(it.span.start, it.span.end, NotaHighlightKind::ListMarker);
+    }
+
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
         // The item span starts at its marker; `list_marker_at` treats the given offset as a line
         // start, which also covers body-start items (a body start is a line start: `@{- x}` — the

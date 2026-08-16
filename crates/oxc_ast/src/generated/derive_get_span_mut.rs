@@ -2242,6 +2242,7 @@ impl GetSpanMut for NotaChild<'_> {
             Self::Heading(it) => GetSpanMut::span_mut(&mut **it),
             Self::ListItem(it) => GetSpanMut::span_mut(&mut **it),
             Self::DocState(it) => GetSpanMut::span_mut(&mut **it),
+            Self::ThematicBreak(it) => GetSpanMut::span_mut(&mut **it),
             Self::Element(it) => GetSpanMut::span_mut(&mut **it),
             Self::Fragment(it) => GetSpanMut::span_mut(&mut **it),
             Self::Interpolation(it) => GetSpanMut::span_mut(&mut **it),
@@ -2449,6 +2450,13 @@ impl GetSpanMut for NotaHeading<'_> {
 }
 
 impl GetSpanMut for NotaListItem<'_> {
+    #[inline]
+    fn span_mut(&mut self) -> &mut Span {
+        &mut self.span
+    }
+}
+
+impl GetSpanMut for NotaThematicBreak {
     #[inline]
     fn span_mut(&mut self) -> &mut Span {
         &mut self.span

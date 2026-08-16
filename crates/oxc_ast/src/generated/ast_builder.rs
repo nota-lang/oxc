@@ -15886,6 +15886,17 @@ impl<'a> AstBuilder<'a> {
         NotaChild::DocState(self.alloc_nota_doc_state(span, kind, label, label_span, children))
     }
 
+    /// Build a [`NotaChild::ThematicBreak`].
+    ///
+    /// This node contains a [`NotaThematicBreak`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    #[inline]
+    pub fn nota_child_thematic_break(self, span: Span) -> NotaChild<'a> {
+        NotaChild::ThematicBreak(self.alloc_nota_thematic_break(span))
+    }
+
     /// Build a [`NotaText`].
     ///
     /// If you want the built node to be allocated in the memory arena,
@@ -16797,6 +16808,30 @@ impl<'a> AstBuilder<'a> {
         children: Vec<'a, NotaChild<'a>>,
     ) -> Box<'a, NotaListItem<'a>> {
         Box::new_in(self.nota_list_item(span, kind, children), self.allocator)
+    }
+
+    /// Build a [`NotaThematicBreak`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_thematic_break`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    #[inline]
+    pub fn nota_thematic_break(self, span: Span) -> NotaThematicBreak {
+        NotaThematicBreak { node_id: Default::default(), span }
+    }
+
+    /// Build a [`NotaThematicBreak`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_thematic_break`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    #[inline]
+    pub fn alloc_nota_thematic_break(self, span: Span) -> Box<'a, NotaThematicBreak> {
+        Box::new_in(self.nota_thematic_break(span), self.allocator)
     }
 
     /// Build a [`NotaDocState`].

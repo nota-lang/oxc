@@ -537,4 +537,6 @@ impl<'a> TakeIn<'a> for NotaHeading<'a> {}
 
 impl<'a> TakeIn<'a> for NotaListItem<'a> {}
 
+impl<'a> TakeIn<'a> for NotaThematicBreak {}
+
 impl<'a> TakeIn<'a> for NotaDocState<'a> {}

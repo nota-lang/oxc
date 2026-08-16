@@ -5830,6 +5830,9 @@ unsafe fn walk_nota_child<'a, Tr: Traverse<'a>>(
         NotaChild::Heading(node) => walk_nota_heading(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::ListItem(node) => walk_nota_list_item(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::DocState(node) => walk_nota_doc_state(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::ThematicBreak(node) => {
+            walk_nota_thematic_break(traverser, (&mut **node) as *mut _, ctx)
+        }
         NotaChild::Element(_)
         | NotaChild::Fragment(_)
         | NotaChild::Interpolation(_)
@@ -6311,6 +6314,15 @@ unsafe fn walk_nota_list_item<'a, Tr: Traverse<'a>>(
     }
     ctx.pop_stack(pop_token);
     traverser.exit_nota_list_item(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_thematic_break<'a, Tr: Traverse<'a>>(
+    traverser: &mut Tr,
+    node: *mut NotaThematicBreak,
+    ctx: &mut TraverseCtx<'a>,
+) {
+    traverser.enter_nota_thematic_break(&mut *node, ctx);
+    traverser.exit_nota_thematic_break(&mut *node, ctx);
 }
 
 unsafe fn walk_nota_doc_state<'a, Tr: Traverse<'a>>(

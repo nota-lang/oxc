@@ -40,7 +40,7 @@ use crate::{
         label_sugar_at, lex_code_span, lex_comment, lex_math_span, line_content_end,
         line_indent_of, list_item_extent, list_marker_at, markup_trigger, next_line_start,
         percent_line_is_empty, ref_sugar_at, scan_hyphen_tail, statement_bound, statement_kind,
-        verbatim_boundary,
+        thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -734,6 +734,18 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 && list_marker_at(self.source_text, at).is_some()
             {
                 at = self.parse_list(at, mode);
+                continue;
+            }
+            // A `---` thematic-break line → one `<hr/>` child; resume at the line's trailing
+            // `\n` (like a heading) so the caller's next `\n` iteration chains into what follows.
+            if depth == 0
+                && mode.bound().is_none_or(|end| at < end)
+                && let Some(span) =
+                    thematic_break_at(self.source_text, at, self.sugar_line_end(at, mode))
+            {
+                let node = self.ast.nota_thematic_break(span);
+                self.push_nota_item(NotaChild::ThematicBreak(self.ast.alloc(node)));
+                at = self.sugar_line_end(at, mode);
                 continue;
             }
             break;

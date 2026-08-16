@@ -3277,9 +3277,9 @@ impl<'a> Dummy<'a> for NotaDocument<'a> {
 impl<'a> Dummy<'a> for NotaChild<'a> {
     /// Create a dummy [`NotaChild`].
     ///
-    /// Has cost of making 1 allocation (32 bytes).
+    /// Has cost of making 1 allocation (16 bytes).
     fn dummy(allocator: &'a Allocator) -> Self {
-        Self::Text(Dummy::dummy(allocator))
+        Self::ThematicBreak(Dummy::dummy(allocator))
     }
 }
 
@@ -3622,6 +3622,15 @@ impl<'a> Dummy<'a> for NotaListKind {
     #[inline(always)]
     fn dummy(allocator: &'a Allocator) -> Self {
         Self::Unordered
+    }
+}
+
+impl<'a> Dummy<'a> for NotaThematicBreak {
+    /// Create a dummy [`NotaThematicBreak`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self { node_id: Dummy::dummy(allocator), span: Dummy::dummy(allocator) }
     }
 }
 

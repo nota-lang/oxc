@@ -236,6 +236,7 @@ pub enum AstNodes<'a> {
     NotaEmphasis(&'a AstNode<'a, NotaEmphasis<'a>>),
     NotaHeading(&'a AstNode<'a, NotaHeading<'a>>),
     NotaListItem(&'a AstNode<'a, NotaListItem<'a>>),
+    NotaThematicBreak(&'a AstNode<'a, NotaThematicBreak>),
     NotaDocState(&'a AstNode<'a, NotaDocState<'a>>),
 }
 impl AstNodes<'_> {
@@ -453,6 +454,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(n) => n.span(),
             Self::NotaHeading(n) => n.span(),
             Self::NotaListItem(n) => n.span(),
+            Self::NotaThematicBreak(n) => n.span(),
             Self::NotaDocState(n) => n.span(),
         }
     }
@@ -670,6 +672,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(n) => n.parent(),
             Self::NotaHeading(n) => n.parent(),
             Self::NotaListItem(n) => n.parent(),
+            Self::NotaThematicBreak(n) => n.parent(),
             Self::NotaDocState(n) => n.parent(),
         }
     }
@@ -887,6 +890,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(_) => "NotaEmphasis",
             Self::NotaHeading(_) => "NotaHeading",
             Self::NotaListItem(_) => "NotaListItem",
+            Self::NotaThematicBreak(_) => "NotaThematicBreak",
             Self::NotaDocState(_) => "NotaDocState",
         }
     }
@@ -10865,6 +10869,14 @@ impl<'a> AstNode<'a, NotaChild<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
+            NotaChild::ThematicBreak(s) => {
+                AstNodes::NotaThematicBreak(self.allocator.alloc(AstNode {
+                    inner: s.as_ref(),
+                    parent,
+                    allocator: self.allocator,
+                    following_span_start: self.following_span_start,
+                }))
+            }
             it @ match_nota_form!(NotaChild) => {
                 return self
                     .allocator
@@ -11704,6 +11716,22 @@ impl<'a> AstNode<'a, NotaListItem<'a>> {
             parent: AstNodes::NotaListItem(transmute_self(self)),
             following_span_start,
         })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaThematicBreak> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
     }
 
     pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {

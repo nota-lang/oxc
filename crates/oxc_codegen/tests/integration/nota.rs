@@ -1947,6 +1947,47 @@ fn id(x: i32) -> i32 { x }
 }
 
 // ===============================================================================================
+// Thematic break: a line-start run of 3+ `-` with a whitespace-only tail → `<hr />` (a block:
+// the runtime's Reforest pass breaks paragraphs around it). Inline `---` stays literal text
+// (smart-dash material at the decode stage).
+// ===============================================================================================
+
+#[test]
+fn thematic_break_line() {
+    let js = nota_doc("a\n\n---\n\nb\n");
+    assert!(js.contains("<hr />"), "hr emitted: {js}");
+    // The dashes themselves never surface as text.
+    assert!(!js.contains("---"), "dashes leaked: {js}");
+
+    // Longer runs and trailing whitespace still break; no blank lines needed (hr is a block).
+    assert!(nota_doc("a\n----------  \nb\n").contains("<hr />"));
+}
+
+#[test]
+fn thematic_break_chains_with_line_start_constructs() {
+    // `---` directly followed by a list: both constructs fire.
+    let js = nota_doc("---\n- item\n");
+    assert!(js.contains("<hr />"), "hr: {js}");
+    assert!(js.contains("UlLi"), "list item: {js}");
+}
+
+#[test]
+fn thematic_break_in_a_braced_body() {
+    // The content-block rule: a body start is a line start; the extent clips at the body's `}`.
+    nota_expr("@div{---}", "<div><Reforest><hr /></Reforest></div>");
+}
+
+#[test]
+fn dashes_that_are_not_breaks_stay_literal() {
+    // Inline `---` is text; a run of 2 is text; a nonempty tail is text.
+    nota_expr("@p{a --- b}", r#"<p>{"a --- b"}</p>"#);
+    let js = nota_doc("--\n");
+    assert!(js.contains(r#"{"--"}"#), "two dashes stay text: {js}");
+    let js = nota_doc("--- x\n");
+    assert!(js.contains(r#"{"--- x"}"#), "nonempty tail stays text: {js}");
+}
+
+// ===============================================================================================
 // Comments (`//` line, `/* … */` block — Typst/C style; notation.md §Comments). A comment is
 // trivia: excised from the child stream, never emitted. A comment with its line to itself is
 // consumed WITH the line's `\n`, so it contributes no phantom soft/paragraph break.

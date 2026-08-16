@@ -3439,6 +3439,21 @@ pub trait Traverse<'a, State> {
     }
 
     #[inline]
+    fn enter_nota_thematic_break(
+        &mut self,
+        node: &mut NotaThematicBreak,
+        ctx: &mut TraverseCtx<'a, State>,
+    ) {
+    }
+    #[inline]
+    fn exit_nota_thematic_break(
+        &mut self,
+        node: &mut NotaThematicBreak,
+        ctx: &mut TraverseCtx<'a, State>,
+    ) {
+    }
+
+    #[inline]
     fn enter_nota_doc_state(
         &mut self,
         node: &mut NotaDocState<'a>,

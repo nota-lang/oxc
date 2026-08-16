@@ -150,6 +150,7 @@ impl<'a> NotaLowering<'a> {
             NotaChild::Heading(h) => self.lower_heading(h.unbox()),
             NotaChild::ListItem(li) => self.lower_list_item(li.unbox()),
             NotaChild::DocState(d) => self.lower_doc_state(d.unbox()),
+            NotaChild::ThematicBreak(t) => self.lower_thematic_break(&t),
             NotaChild::Text(_) | NotaChild::Statement(_) => {
                 unreachable!("Text/Statement handled by lower_children")
             }
@@ -480,6 +481,18 @@ impl<'a> NotaLowering<'a> {
             Some(value),
         ));
         self.build_named_element(span, slot, props, children)
+    }
+
+    /// `---` thematic-break sugar → `<hr />` — a plain host element (a block, so the runtime's
+    /// Reforest pass breaks paragraphs around it).
+    fn lower_thematic_break(&mut self, t: &NotaThematicBreak) -> Expression<'a> {
+        self.build_element(
+            t.span,
+            build::JsxTag::Host { name: "hr", span: Span::empty(t.span.start) },
+            self.ast.vec(),
+            self.ast.vec(),
+            None,
+        )
     }
 
     /// One `<UlLi>`/`<OlLi>` item per marker — runs coalesce into `<ul>`/`<ol>` in the runtime's
