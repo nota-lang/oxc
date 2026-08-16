@@ -111,13 +111,15 @@ pub enum NotaHighlightKind {
     Comment = 24,
     /// A whole `~~…~~` span (under-layer), like [`Self::EmphasisStrong`].
     EmphasisStrike = 25,
+    /// A link/image target — the raw url inside `[text](url)` / `![alt](src)`.
+    LinkUrl = 26,
 }
 
 impl NotaHighlightKind {
     /// Every kind, in discriminant order (index = discriminant, test-guarded). Clients build
     /// kind→name/style tables from this — the *names* are client-side (the wasm bindings own the
     /// kebab-case table their `highlightKindNames()` serves; this crate only owns the wire enum).
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Sigil,
         Self::TagHost,
         Self::TagComponent,
@@ -144,6 +146,7 @@ impl NotaHighlightKind {
         Self::StyleText,
         Self::Comment,
         Self::EmphasisStrike,
+        Self::LinkUrl,
     ];
 }
 
@@ -558,6 +561,23 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         self.visit_nota_children(&it.children);
     }
 
+    fn visit_nota_link(&mut self, it: &NotaLink<'a>) {
+        // `[` … `](` … `)` are sigils; the url paints LinkUrl; the text is ordinary markup.
+        self.emit(it.span.start, it.span.start + 1, NotaHighlightKind::Sigil);
+        self.emit(it.url_span.start - 2, it.url_span.start, NotaHighlightKind::Sigil);
+        self.emit(it.url_span.start, it.url_span.end, NotaHighlightKind::LinkUrl);
+        self.emit(it.url_span.end, it.span.end, NotaHighlightKind::Sigil);
+        self.visit_nota_children(&it.children);
+    }
+
+    fn visit_nota_image(&mut self, it: &NotaImage<'a>) {
+        // `![` … `](` … `)` are sigils; the src paints LinkUrl; the alt stays plain prose.
+        self.emit(it.span.start, it.span.start + 2, NotaHighlightKind::Sigil);
+        self.emit(it.src_span.start - 2, it.src_span.start, NotaHighlightKind::Sigil);
+        self.emit(it.src_span.start, it.src_span.end, NotaHighlightKind::LinkUrl);
+        self.emit(it.src_span.end, it.span.end, NotaHighlightKind::Sigil);
+    }
+
     fn visit_nota_thematic_break(&mut self, it: &NotaThematicBreak) {
         // The `---` run paints as a list-marker sibling (no new wire discriminant: it is line
         // punctuation of the same family).
@@ -842,6 +862,17 @@ mod tests {
         assert!(has(&spans, K::EmphasisStrike, "~~x~~"));
         assert!(has(&spans, K::Sigil, "~~"));
         assert!(has(&spans, K::ListMarker, "---"));
+    }
+
+    #[test]
+    fn link_and_image_spans() {
+        let spans = hl("see [the *docs*](https://x.com) and ![owl](o.png)\n");
+        assert!(has(&spans, K::LinkUrl, "https://x.com"));
+        assert!(has(&spans, K::LinkUrl, "o.png"));
+        assert!(has(&spans, K::Sigil, "]("));
+        assert!(has(&spans, K::Sigil, "!["));
+        // Link text is ordinary markup — the emphasis inside still paints.
+        assert!(has(&spans, K::EmphasisStrong, "*docs*"));
     }
 
     /// Markup comments surface as `Comment` spans (delimiters included); embedded-JS comments

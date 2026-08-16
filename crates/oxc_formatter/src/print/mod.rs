@@ -1013,7 +1013,16 @@ nota_format_unreachable!(
     NotaHeading,
     NotaListItem,
     NotaDocState,
+    NotaLink,
+    NotaImage,
 );
+
+// `NotaThematicBreak` is lifetime-free, so it sits outside the macro (which appends `<'a>`).
+impl<'a> FormatWrite<'a> for AstNode<'a, NotaThematicBreak> {
+    fn write(&self, _f: &mut Formatter<'_, 'a>) {
+        unreachable!("NotaThematicBreak must be lowered before the JS formatter")
+    }
+}
 
 impl<'a> FormatWrite<'a> for AstNode<'a, BooleanLiteral> {
     fn write(&self, f: &mut Formatter<'_, 'a>) {

@@ -151,6 +151,8 @@ impl<'a> NotaLowering<'a> {
             NotaChild::ListItem(li) => self.lower_list_item(li.unbox()),
             NotaChild::DocState(d) => self.lower_doc_state(d.unbox()),
             NotaChild::ThematicBreak(t) => self.lower_thematic_break(&t),
+            NotaChild::Link(l) => self.lower_link(l.unbox()),
+            NotaChild::Image(i) => self.lower_image(&i),
             NotaChild::Text(_) | NotaChild::Statement(_) => {
                 unreachable!("Text/Statement handled by lower_children")
             }
@@ -482,6 +484,65 @@ impl<'a> NotaLowering<'a> {
             Some(value),
         ));
         self.build_named_element(span, slot, props, children)
+    }
+
+    /// Cook a raw link-target / alt slice (notation.md §Links): process `\<c>` escapes (the `\`
+    /// dropped, the `<c>` kept; a trailing lone `\` stays). Escape-free slices pass through
+    /// without allocation.
+    fn cook_link_slice(&self, raw: &'a str) -> &'a str {
+        if !raw.contains('\\') {
+            return raw;
+        }
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => out.push(chars.next().unwrap_or('\\')),
+                c => out.push(c),
+            }
+        }
+        self.ast.allocator.alloc_str(&out)
+    }
+
+    /// `[text](url)` link sugar → `<a href="url">text…</a>` — a plain host element (phrasing, so
+    /// it flows inside paragraphs). The href is the raw slice trimmed of surrounding whitespace
+    /// (`[x]( /y )` → `/y`), with `\<c>` escapes cooked.
+    fn lower_link(&mut self, l: NotaLink<'a>) -> Expression<'a> {
+        let NotaLink { span, url, children, .. } = l;
+        let empty = Span::empty(span.start);
+        let href = self.cook_link_slice(url.as_str().trim_matches([' ', '\t']));
+        let value = self.ast.expression_string_literal(empty, href, None);
+        let props = self.ast.vec1(self.jsx_attr(empty, empty, "href", Some(value)));
+        // The text is an ordinary (brace-regime) markup body.
+        let children = self.lower_children(children, true);
+        self.build_element(
+            span,
+            build::JsxTag::Host { name: "a", span: empty },
+            props,
+            children,
+            None,
+        )
+    }
+
+    /// `![alt](src)` image sugar → `<img src="src" alt="alt" />`. Both attributes always emit
+    /// (an empty `alt=""` is the accessible marker for a decorative image); the src is trimmed
+    /// like a link href, the alt cooked verbatim (plain text — no markup, no trim).
+    fn lower_image(&mut self, i: &NotaImage<'a>) -> Expression<'a> {
+        let empty = Span::empty(i.span.start);
+        let src = self.cook_link_slice(i.src.as_str().trim_matches([' ', '\t']));
+        let alt = self.cook_link_slice(i.alt.as_str());
+        let src_value = self.ast.expression_string_literal(empty, src, None);
+        let alt_value = self.ast.expression_string_literal(empty, alt, None);
+        let mut props = self.ast.vec_with_capacity(2);
+        props.push(self.jsx_attr(empty, empty, "src", Some(src_value)));
+        props.push(self.jsx_attr(empty, empty, "alt", Some(alt_value)));
+        self.build_element(
+            i.span,
+            build::JsxTag::Host { name: "img", span: empty },
+            props,
+            self.ast.vec(),
+            None,
+        )
     }
 
     /// `---` thematic-break sugar → `<hr />` — a plain host element (a block, so the runtime's

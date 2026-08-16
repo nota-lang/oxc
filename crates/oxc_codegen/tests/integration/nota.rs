@@ -1947,6 +1947,61 @@ fn id(x: i32) -> i32 { x }
 }
 
 // ===============================================================================================
+// Links `[text](url)` → `<a href>` and images `![alt](src)` → `<img/>` (notation.md §Links).
+// Inline links only — no autolinks, no reference links, no titles. The whole shape closes on its
+// opening line; text is markup, url/alt are raw (escapes cooked, targets trimmed).
+// ===============================================================================================
+
+#[test]
+fn link_basic_markup_text_and_attrs() {
+    nota_expr(
+        "@p{see [the docs](https://x.com/a_b).}",
+        r#"<p>{"see "}<a href="https://x.com/a_b">{"the docs"}</a>{"."}</p>"#,
+    );
+    // Markup nests in the text; the url may hold emphasis-marker bytes (the link is opaque).
+    nota_expr(
+        "@p{[a *b* `c`](u_v)}",
+        r#"<p><a href="u_v">{"a "}<strong>{"b"}</strong>{" "}<CodeInline>{String.raw`c`}</CodeInline></a></p>"#,
+    );
+    // A url with a `&`/quote rides in an expression container (JSX attr strings are entity-decoded).
+    nota_expr("@p{[x](a?b=1&c=2)}", r#"<p><a href={"a?b=1&c=2"}>{"x"}</a></p>"#);
+}
+
+#[test]
+fn link_escapes_trim_and_empties() {
+    nota_expr(r"@p{[a\]b](u\)v)}", r#"<p><a href="u)v">{"a]b"}</a></p>"#);
+    nota_expr("@p{[x]( /y )}", r#"<p><a href="/y">{"x"}</a></p>"#);
+    nota_expr("@p{[x]()}", r#"<p><a href="">{"x"}</a></p>"#);
+}
+
+#[test]
+fn link_non_shapes_stay_literal() {
+    // No glued `(` / no close on the line → the `[` (and the rest) is literal prose.
+    nota_expr("@p{see [1] and [2](}", r#"<p>{"see [1] and [2]("}</p>"#);
+    nota_expr("@p{a [b] (c)}", r#"<p>{"a [b] (c)"}</p>"#);
+    // The footnote digraph wins over a link shape: `[^1](u)` is a mark + literal parens.
+    nota_expr("@p{x[^1](u)}", r#"<p>{"x"}<FootnoteMark label="1" />{"(u)"}</p>"#);
+    // Escaped opener: plain prose.
+    nota_expr(r"@p{\[x](u)}", r#"<p>{"[x](u)"}</p>"#);
+}
+
+#[test]
+fn image_basic_and_literal() {
+    nota_expr("@p{![An owl](owl.png)}", r#"<p><img src="owl.png" alt="An owl" /></p>"#);
+    // Empty alt is the decorative-image marker and still emits.
+    nota_expr("@p{![](sep.svg)}", r#"<p><img src="sep.svg" alt="" /></p>"#);
+    // A `!` without the full shape is literal; the `[` re-dispatches on its own.
+    nota_expr("@p{hey! [x](u)}", r#"<p>{"hey! "}<a href="u">{"x"}</a></p>"#);
+    nota_expr("@p{no! [brackets] here}", r#"<p>{"no! [brackets] here"}</p>"#);
+}
+
+#[test]
+fn link_binds_tighter_than_emphasis() {
+    // A `_` inside the link's url cannot close the outer emphasis span.
+    nota_expr("@p{_see [x](a_b)_}", r#"<p><em>{"see "}<a href="a_b">{"x"}</a></em></p>"#);
+}
+
+// ===============================================================================================
 // Strikethrough `~~…~~` → `<s>` — the emphasis machinery with a two-byte marker (word
 // boundaries, the line clamp, nesting).
 // ===============================================================================================

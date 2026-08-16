@@ -33,14 +33,14 @@ use crate::{
     error_handler::FatalError,
     lexer::Kind,
     lexer::nota::{
-        ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
+        ArmedBoundary, CodeScan, ElsePeek, LinkSpans, MarkupTrigger, MathScan, VerbatimBoundary,
         armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
         colon_prop_line_at, docstate_left_guard, else_peek, escape_span, find_emphasis_close,
         find_fence_close, find_strike_close, footnote_sugar_at, heading_at, is_ident_start_at,
-        is_statement_line, label_sugar_at, lex_code_span, lex_comment, lex_math_span,
-        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
-        next_line_start, percent_line_is_empty, ref_sugar_at, scan_hyphen_tail, statement_bound,
-        statement_kind, thematic_break_at, verbatim_boundary,
+        is_statement_line, label_sugar_at, lex_code_span, lex_comment, lex_link_span,
+        lex_math_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
+        markup_trigger, next_line_start, percent_line_is_empty, ref_sugar_at, scan_hyphen_tail,
+        statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -629,11 +629,17 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.parse_ref_sugar(self.cur_token().start());
                 }
                 Kind::LBrack => {
-                    self.parse_footnote_sugar(self.cur_token().start());
+                    self.parse_bracket_sugar(self.cur_token().start());
                     // A `[^x]: body` definition reuses the colon-body extent machinery, so it can
                     // resume at a line start exactly like an `@head:` form — same hook (else a
-                    // heading/list/`%` after the definition lexes as literal text).
+                    // heading/list/`%` after the definition lexes as literal text; the mid-line
+                    // forms — mark/link/literal — resume mid-line and fall through it).
                     self.consume_line_start_after_form(depth);
+                }
+                Kind::Bang => {
+                    // The lexer emits `Bang` only at an `![` digraph; the parser validates the
+                    // full `![alt](src)` shape, else the `!` is literal.
+                    self.parse_image_or_literal(self.cur_token().start());
                 }
                 Kind::Pipe => {
                     // A bare `|` in a markup body is literal (`|{`/`|@` are handled at the head
@@ -1321,18 +1327,56 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
+    /// Dispatch a markup `[` at `open` between the bracket sugars, in fixed precedence
+    /// (notation.md §Links): the footnote digraph `[^mark]` / `[^label]: body` first, then a
+    /// `[text](url)` link, else a literal `[`.
+    fn parse_bracket_sugar(&mut self, open: u32) {
+        let limit = self.docstate_scan_limit();
+        if let Some(label_span) = footnote_sugar_at(self.nota_scan_source(), open, limit) {
+            self.parse_footnote_sugar(open, label_span, limit);
+        } else if let Some(link) = lex_link_span(self.nota_scan_source(), open, limit) {
+            self.parse_link(open, &link);
+        } else {
+            self.push_text(open, open + 1);
+            self.nota_seek_markup(open + 1);
+        }
+    }
+
+    /// `[text](url)` at `open` — an inline link (notation.md §Links) ≡ `@a[href: "url"]{text}`.
+    /// The text is a bounded markup body; the url stays a raw slice (trimmed/cooked at lowering).
+    fn parse_link(&mut self, open: u32, link: &LinkSpans) {
+        let children = self.collect_markup_range(link.text.start, link.text.end);
+        let url = &self.source_text[link.url.start as usize..link.url.end as usize];
+        let span = Span::new(open, link.resume);
+        let node = self.ast.nota_link(span, url, link.url, children);
+        self.push_nota_item(NotaChild::Link(self.ast.alloc(node)));
+        self.nota_seek_markup(link.resume);
+    }
+
+    /// `![alt](src)` at `open` (the `!`) — an image (notation.md §Links) ≡
+    /// `@img[src: "src", alt: "alt"]{}`; the alt is plain text (no markup). Without the full
+    /// shape the `!` is literal (the following `[` then re-dispatches on its own).
+    fn parse_image_or_literal(&mut self, open: u32) {
+        let limit = self.docstate_scan_limit();
+        if let Some(link) = lex_link_span(self.nota_scan_source(), open + 1, limit) {
+            let alt = &self.source_text[link.text.start as usize..link.text.end as usize];
+            let src = &self.source_text[link.url.start as usize..link.url.end as usize];
+            let span = Span::new(open, link.resume);
+            let node = self.ast.nota_image(span, alt, link.text, src, link.url);
+            self.push_nota_item(NotaChild::Image(self.ast.alloc(node)));
+            self.nota_seek_markup(link.resume);
+        } else {
+            self.push_text(open, open + 1);
+            self.nota_seek_markup(open + 1);
+        }
+    }
+
     /// `[^mark]` at `open` (≡ `@FootnoteMark[label: "mark"]{}`; unguarded — `text[^1]` glues,
     /// Markdown-style), or — with a glued `:` under the positional line-start gate
     /// ([`Self::colon_trigger_live`], the same gate as `@head:`) — a `[^label]: body` footnote
     /// *text* definition (≡ `@FootnoteText[label: "label"]: body`, the colon-body extent
-    /// machinery verbatim). A non-matching open (`[^ x]`, `[x]`) is a literal `[`.
-    fn parse_footnote_sugar(&mut self, open: u32) {
-        let limit = self.docstate_scan_limit();
-        let Some(label_span) = footnote_sugar_at(self.nota_scan_source(), open, limit) else {
-            self.push_text(open, open + 1);
-            self.nota_seek_markup(open + 1);
-            return;
-        };
+    /// machinery verbatim). `label_span` comes from the caller's `footnote_sugar_at` match.
+    fn parse_footnote_sugar(&mut self, open: u32, label_span: Span, limit: u32) {
         let after_rbrack = label_span.end + 1; // past `]`
         let colon_glued =
             after_rbrack < limit && byte_at(self.source_text, after_rbrack) == Some(b':');

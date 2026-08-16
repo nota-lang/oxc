@@ -1260,6 +1260,18 @@ impl<'a> VisitMut<'a> for Utf8ToUtf16Converter<'_> {
         self.convert_offset(&mut it.span.end);
     }
 
+    fn visit_nota_link(&mut self, it: &mut NotaLink<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_link(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
+    fn visit_nota_image(&mut self, it: &mut NotaImage<'a>) {
+        self.convert_offset(&mut it.span.start);
+        walk_mut::walk_nota_image(self, it);
+        self.convert_offset(&mut it.span.end);
+    }
+
     fn visit_nota_thematic_break(&mut self, it: &mut NotaThematicBreak) {
         self.convert_offset(&mut it.span.start);
         walk_mut::walk_nota_thematic_break(self, it);

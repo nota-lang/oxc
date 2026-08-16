@@ -351,7 +351,8 @@ pub(crate) enum AncestorType {
     NotaEmphasisChildren = 327,
     NotaHeadingChildren = 328,
     NotaListItemChildren = 329,
-    NotaDocStateChildren = 330,
+    NotaLinkChildren = 330,
+    NotaDocStateChildren = 331,
 }
 
 /// Ancestor type used in AST traversal.
@@ -975,6 +976,7 @@ pub enum Ancestor<'a, 't> {
         AncestorType::NotaHeadingChildren as u16,
     NotaListItemChildren(NotaListItemWithoutChildren<'a, 't>) =
         AncestorType::NotaListItemChildren as u16,
+    NotaLinkChildren(NotaLinkWithoutChildren<'a, 't>) = AncestorType::NotaLinkChildren as u16,
     NotaDocStateChildren(NotaDocStateWithoutChildren<'a, 't>) =
         AncestorType::NotaDocStateChildren as u16,
 }
@@ -2077,6 +2079,11 @@ impl<'a, 't> Ancestor<'a, 't> {
     }
 
     #[inline]
+    pub fn is_nota_link(self) -> bool {
+        matches!(self, Self::NotaLinkChildren(_))
+    }
+
+    #[inline]
     pub fn is_nota_doc_state(self) -> bool {
         matches!(self, Self::NotaDocStateChildren(_))
     }
@@ -2449,6 +2456,7 @@ impl<'a, 't> Ancestor<'a, 't> {
                 | Self::NotaEmphasisChildren(_)
                 | Self::NotaHeadingChildren(_)
                 | Self::NotaListItemChildren(_)
+                | Self::NotaLinkChildren(_)
                 | Self::NotaDocStateChildren(_)
         )
     }
@@ -2815,6 +2823,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::NotaEmphasisChildren(a) => a.address(),
             Self::NotaHeadingChildren(a) => a.address(),
             Self::NotaListItemChildren(a) => a.address(),
+            Self::NotaLinkChildren(a) => a.address(),
             Self::NotaDocStateChildren(a) => a.address(),
         }
     }
@@ -19913,6 +19922,48 @@ impl<'a, 't> NotaListItemWithoutChildren<'a, 't> {
 }
 
 impl<'a, 't> GetAddress for NotaListItemWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_LINK_NODE_ID: usize = offset_of!(NotaLink, node_id);
+pub(crate) const OFFSET_NOTA_LINK_SPAN: usize = offset_of!(NotaLink, span);
+pub(crate) const OFFSET_NOTA_LINK_URL: usize = offset_of!(NotaLink, url);
+pub(crate) const OFFSET_NOTA_LINK_URL_SPAN: usize = offset_of!(NotaLink, url_span);
+pub(crate) const OFFSET_NOTA_LINK_CHILDREN: usize = offset_of!(NotaLink, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaLinkWithoutChildren<'a, 't>(
+    pub(crate) *const NotaLink<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaLinkWithoutChildren<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LINK_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LINK_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn url(self) -> &'t Str<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LINK_URL) as *const Str<'a>) }
+    }
+
+    #[inline]
+    pub fn url_span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_LINK_URL_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaLinkWithoutChildren<'a, 't> {
     #[inline]
     fn address(&self) -> Address {
         unsafe { Address::from_ptr(self.0) }

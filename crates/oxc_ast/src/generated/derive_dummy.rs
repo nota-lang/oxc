@@ -3625,6 +3625,37 @@ impl<'a> Dummy<'a> for NotaListKind {
     }
 }
 
+impl<'a> Dummy<'a> for NotaLink<'a> {
+    /// Create a dummy [`NotaLink`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            url: Dummy::dummy(allocator),
+            url_span: Dummy::dummy(allocator),
+            children: Dummy::dummy(allocator),
+        }
+    }
+}
+
+impl<'a> Dummy<'a> for NotaImage<'a> {
+    /// Create a dummy [`NotaImage`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            alt: Dummy::dummy(allocator),
+            alt_span: Dummy::dummy(allocator),
+            src: Dummy::dummy(allocator),
+            src_span: Dummy::dummy(allocator),
+        }
+    }
+}
+
 impl<'a> Dummy<'a> for NotaThematicBreak {
     /// Create a dummy [`NotaThematicBreak`].
     ///

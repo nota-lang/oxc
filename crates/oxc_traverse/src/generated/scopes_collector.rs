@@ -2044,6 +2044,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             NotaChild::Heading(it) => self.visit_nota_heading(it),
             NotaChild::ListItem(it) => self.visit_nota_list_item(it),
             NotaChild::DocState(it) => self.visit_nota_doc_state(it),
+            NotaChild::Link(it) => self.visit_nota_link(it),
             NotaChild::Element(it) => self.visit_nota_element(it),
             NotaChild::Fragment(it) => self.visit_nota_fragment(it),
             NotaChild::Interpolation(it) => self.visit_nota_interpolation(it),
@@ -2056,6 +2057,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
                 // Remaining variants do not contain scopes:
                 // `Text`
                 // `ThematicBreak`
+                // `Image`
             }
         }
     }
@@ -2209,6 +2211,16 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline]
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
         self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_link(&mut self, it: &NotaLink<'a>) {
+        self.visit_nota_children(&it.children);
+    }
+
+    #[inline(always)]
+    fn visit_nota_image(&mut self, it: &NotaImage<'a>) {
+        // Struct does not contain a scope. Halt traversal.
     }
 
     #[inline(always)]

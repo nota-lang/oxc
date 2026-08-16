@@ -3439,6 +3439,16 @@ pub trait Traverse<'a, State> {
     }
 
     #[inline]
+    fn enter_nota_link(&mut self, node: &mut NotaLink<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+    #[inline]
+    fn exit_nota_link(&mut self, node: &mut NotaLink<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+
+    #[inline]
+    fn enter_nota_image(&mut self, node: &mut NotaImage<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+    #[inline]
+    fn exit_nota_image(&mut self, node: &mut NotaImage<'a>, ctx: &mut TraverseCtx<'a, State>) {}
+
+    #[inline]
     fn enter_nota_thematic_break(
         &mut self,
         node: &mut NotaThematicBreak,

@@ -158,6 +158,10 @@ pub enum NotaChild<'a> {
     DocState(Box<'a, NotaDocState<'a>>) = 13,
     /// A `---` thematic-break line (a run of 3+ `-` alone on its line) → `<hr />`.
     ThematicBreak(Box<'a, NotaThematicBreak>) = 14,
+    /// `[text](url)` — an inline link → `<a href="url">…</a>`.
+    Link(Box<'a, NotaLink<'a>>) = 15,
+    /// `![alt](src)` — an image → `<img src alt />`.
+    Image(Box<'a, NotaImage<'a>>) = 16,
     // `NotaForm` variants added here by `inherit_variants!` macro
     @inherit NotaForm
 }
@@ -525,6 +529,48 @@ pub enum NotaListKind {
     Unordered = 0,
     /// `+` or `N.`.
     Ordered = 1,
+}
+
+/// `[text](url)` — an inline link (notation.md §Links) → `<a href="url">text…</a>`.
+///
+/// The text is an ordinary markup body (emphasis/`@`-forms/raw spans nest; the whole shape is
+/// clamped to its opening line). The url is kept as the **raw source slice** between the parens —
+/// whitespace-trimming and `\<c>` escape-cooking happen at lowering, keeping the tree faithful.
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
+pub struct NotaLink<'a> {
+    pub node_id: Cell<NodeId>,
+    pub span: Span,
+    /// The raw url slice (inside `(…)`, untrimmed/uncooked).
+    pub url: Str<'a>,
+    /// Source span of `url` — for the highlight pass.
+    #[estree(skip)]
+    pub url_span: Span,
+    /// The link text (inside `[…]`) — a bounded markup body.
+    pub children: Vec<'a, NotaChild<'a>>,
+}
+
+/// `![alt](src)` — an image (notation.md §Links) → `<img src="src" alt="alt" />`.
+///
+/// The alt is **plain text** (no markup — an HTML `alt` is a string); both slices are kept raw,
+/// with trimming (src only) and `\<c>` cooking at lowering.
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
+pub struct NotaImage<'a> {
+    pub node_id: Cell<NodeId>,
+    pub span: Span,
+    /// The raw alt-text slice (inside `[…]`, uncooked).
+    pub alt: Str<'a>,
+    /// Source span of `alt` — for the highlight pass.
+    #[estree(skip)]
+    pub alt_span: Span,
+    /// The raw src slice (inside `(…)`, untrimmed/uncooked).
+    pub src: Str<'a>,
+    /// Source span of `src` — for the highlight pass.
+    #[estree(skip)]
+    pub src_span: Span,
 }
 
 /// A `---` thematic break (a line-start run of 3+ `-` with a whitespace-only tail) → `<hr />`.

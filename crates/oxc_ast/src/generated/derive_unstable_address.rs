@@ -429,6 +429,10 @@ impl UnstableAddress for NotaHeading<'_> {}
 
 impl UnstableAddress for NotaListItem<'_> {}
 
+impl UnstableAddress for NotaLink<'_> {}
+
+impl UnstableAddress for NotaImage<'_> {}
+
 impl UnstableAddress for NotaThematicBreak {}
 
 impl UnstableAddress for NotaDocState<'_> {}
