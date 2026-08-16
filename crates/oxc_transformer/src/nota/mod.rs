@@ -1,22 +1,21 @@
-//! Nota markup → hyperscript lowering (the Nota transform).
+//! Nota markup → Solid JSX lowering (the Nota transform).
 //!
-//! The Nota *reader* (in `oxc_parser`) parses `@`-markup into a faithful Nota AST: a `.nota` document
-//! is a single `Expression::NotaMarkup(NotaMarkupKind::Document(..))` statement, and every embedded
-//! `@`-form is an `Expression::NotaMarkup` left in place. This module *lowers* those nodes to the
-//! hyperscript `h`/`Fragment`/`decode` `Expression` AST — the deferred-pass analog of how
-//! `oxc_transformer` lowers JSX to `createElement`.
+//! The Nota *reader* (in `oxc_parser`) parses `@`-markup into a faithful Nota AST: a `.nota`
+//! document is a single `Expression::NotaMarkup(NotaMarkupKind::Document(..))` statement, and
+//! every embedded `@`-form is an `Expression::NotaMarkup` left in place. This module *lowers*
+//! those nodes to **Solid JSX** (design/solid.md §The pipeline): the document becomes
+//! `export default function Doc() { …; return <NotaDoc>…</NotaDoc>; }`, list markers become
+//! `<UlLi>`/`<OlLi>`, flow-container host tags get a `<Reforest>` interior, and `@for` lowers to
+//! Solid's `<For>`. The consumer compiles the JSX per target with vite-plugin-solid.
 //!
-//! Entry: [`NotaLowering`]. The document is rebuilt by [`NotaLowering::lower_document_program`] (Doc
-//! skeleton, `%`-statement routing + component name-attach — component bindings are
-//! ordinary lexical statements, document-local, NOT hoisted/exported — decode.md §The worked
-//! example); embedded `@`-forms are then
-//! replaced by a [`oxc_ast_visit::VisitMut`] walk. Optionally collects Volar [`NotaMappingMark`]s.
+//! Entry: [`NotaLowering`]. The document is rebuilt by [`NotaLowering::lower_document_program`]
+//! (Doc skeleton, `%`-statement routing — component bindings are ordinary lexical statements,
+//! document-local, NOT hoisted/exported); embedded `@`-forms are then replaced by a
+//! [`oxc_ast_visit::VisitMut`] walk. Optionally collects Volar [`NotaMappingMark`]s.
 //!
-//! Semantic pin: `Doc` and the nested-`%` IIFE are always emitted **synchronous** — the presence of
-//! `await` does not auto-`async`ify them. Top-level `await` therefore emits JS that does not parse,
-//! by design (not a silent rewrite).
-
-use oxc_ast::ast::*;
+//! Semantic pin: `Doc` and the nested-`%` IIFE are always emitted **synchronous** — the presence
+//! of `await` does not auto-`async`ify them. Top-level `await` therefore emits JS that does not
+//! parse, by design (not a silent rewrite).
 
 mod build;
 mod lower;
@@ -26,45 +25,33 @@ mod scribble;
 pub use lower::{NotaLowering, NotaLoweringReturn};
 pub use mapping::{NotaMappingKind, NotaMappingMark};
 
-/// Runtime hyperscript names (`import { h, Fragment, decode, ... } from "@nota-lang/runtime"`).
-const H: &str = "h";
-const FRAGMENT: &str = "Fragment";
-const DECODE: &str = "decode";
-/// The fresh map-index parameter injected as the `@for` body's `Fragment` key.
-const FOR_KEY_PARAM: &str = "_i";
 /// The default-export document component name.
 const DOC: &str = "Doc";
-/// The component constructors. A top-level `%const X = inlineComponent(...)` binding stays
-/// document-local (no hoist/export; `%export` is the author's opt-in); the reader
-/// only attaches the binding name as the constructor's 2nd argument.
-const INLINE_COMPONENT: &str = "inlineComponent";
-const BLOCK_COMPONENT: &str = "blockComponent";
+/// The `@nota-lang/solid` structural names the emit references free (the shim binds them):
+/// the document wrapper, the flow-interior restructurer, and the list-item sentinels.
+const NOTA_DOC: &str = "NotaDoc";
+const REFOREST: &str = "Reforest";
+const UL_LI: &str = "UlLi";
+const OL_LI: &str = "OlLi";
+/// Solid's keyed list component (`@for` lowers to `<For each={…}>`), bound from `"solid-js"`.
+const FOR: &str = "For";
+/// Solid's dynamic-tag component (`@(expr)[…]{…}` heads), bound from `"solid-js/web"`.
+const DYNAMIC: &str = "Dynamic";
 /// Ambient-prelude tags for code/math spans (referenced as identifiers — no import emitted).
 const CODE_INLINE: &str = "CodeInline";
 const CODE_BLOCK: &str = "CodeBlock";
-/// `Tex`, not `Math` (decode.md §The registry & config): the ambient identifier must not capture
-/// the JS `Math` global —
-/// the integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
+/// `Tex`, not `Math`: the ambient identifier must not capture the JS `Math` global — the
+/// integrator's prelude inject rewrites *free* references, so `% Math.floor(x)` would break.
 const MATH: &str = "Tex";
-/// Ambient-prelude heading slot (decode.md §Doc-state): `#` heading *sugar* lowers to
-/// `h(Heading, { rank: N }, […])` — a free identifier reference (like `Tex`/`CodeInline`, no import
-/// emitted). Raw `@hN{…}` element forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
+/// Ambient-prelude heading component: `#` heading *sugar* lowers to `<Heading rank={N}>…` — a
+/// free identifier reference (like `Tex`/`CodeInline`, no import emitted). Raw `@hN{…}` element
+/// forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
 const HEADING: &str = "Heading";
-/// Ambient-prelude doc-state slots (notation.md §Doc-state references): the four inline sugars lower to free
-/// identifier references, exactly the `HEADING` pattern — `<x>` → `h(Label, { id: "x" }, [])`,
-/// `&x` → `h(Ref, { id: "x" }, [])`, `[^x]` → `h(FootnoteMark, { label: "x" }, [])`, line-start
-/// `[^x]: body` → `h(FootnoteText, { label: "x" }, [body…])`.
+/// Ambient-prelude doc-state components (notation.md §Doc-state references): the four inline
+/// sugars lower to free identifier references, exactly the `HEADING` pattern — `<x>` →
+/// `<Label id="x" />`, `&x` → `<Ref id="x" />`, `[^x]` → `<FootnoteMark label="x" />`,
+/// line-start `[^x]: body` → `<FootnoteText label="x">body…</FootnoteText>`.
 const LABEL: &str = "Label";
 const REF: &str = "Ref";
 const FOOTNOTE_MARK: &str = "FootnoteMark";
 const FOOTNOTE_TEXT: &str = "FootnoteText";
-
-/// Is `init` a call to a component constructor (`inlineComponent`/`blockComponent`)? Such a
-/// top-level binding gets the name attach (constructor 2nd argument — decode.md §The worked
-/// example: the returned function cannot otherwise recover its authored name for the debug
-/// manifest).
-fn is_component_constructor(init: &Expression<'_>) -> bool {
-    let Expression::CallExpression(call) = init else { return false };
-    let Expression::Identifier(callee) = &call.callee else { return false };
-    matches!(callee.name.as_str(), INLINE_COMPONENT | BLOCK_COMPONENT)
-}

@@ -9,8 +9,9 @@
 //! `parse_nota_highlights` editor spans — are `Parser` entries consumed directly by the wasm
 //! bindings; they never reach the lowering, so they don't belong to this compile seam.)
 //!
-//! The runtime import (`import { h, decode, Fragment, inlineComponent, blockComponent } from
-//! "@nota-lang/runtime"`) is *not* emitted here; the wrapper prepends it.
+//! The emit is **Solid JSX** (design/solid.md): no imports are emitted here — the structural
+//! names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`), the ambient prelude, and the
+//! `solid-js` state surface are all *free names* the `@nota-lang/compiler` wrapper binds.
 
 use std::path::{Path, PathBuf};
 
@@ -21,7 +22,7 @@ use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{
-    NotaLowering, NotaMappingKind, NotaMappingMark, TransformOptions, Transformer,
+    JsxOptions, NotaLowering, NotaMappingKind, NotaMappingMark, TransformOptions, Transformer,
     TypeScriptOptions,
 };
 
@@ -283,10 +284,9 @@ fn strip_typescript<'a>(
     allocator: &'a Allocator,
     program: &mut oxc_ast::ast::Program<'a>,
 ) -> Result<Vec<String>, Vec<OxcDiagnostic>> {
-    // The Nota lowering rebuilds the document `Program` with a plain-JS `SourceType`, so the
-    // transformer would skip the TS pass (it only strips when the source type is TS-flagged). Mark it
-    // TypeScript (keeping module-ness) so the embedded TS nodes — already in the AST from the tsx
-    // parse — get stripped. There is no JSX in the lowered hyperscript, so `ts` (not `tsx`) suffices.
+    // The Nota lowering rebuilds the document `Program` with a JSX-flagged `SourceType`; mark it
+    // TypeScript too (keeping module-ness) so the embedded TS nodes — already in the AST from the
+    // tsx parse — get stripped.
     program.source_type = program.source_type.with_typescript(true);
     let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
     let mut free_names: Vec<String> = scoping
@@ -298,8 +298,14 @@ fn strip_typescript<'a>(
         .map(|(name, _)| (*name).to_string())
         .collect();
     free_names.sort_unstable();
-    let options =
-        TransformOptions { typescript: TypeScriptOptions::default(), ..Default::default() };
+    // TypeScript strip ONLY. `JsxOptions::default()` ENABLES the React JSX transform, which would
+    // compile the lowered JSX to `createElement` calls — the emit must stay JSX (the consumer's
+    // vite-plugin-solid owns JSX compilation, per target). Explicitly disabled.
+    let options = TransformOptions {
+        typescript: TypeScriptOptions::default(),
+        jsx: JsxOptions::disable(),
+        ..Default::default()
+    };
     let ret = Transformer::new(allocator, Path::new("doc.nota"), &options)
         .build_with_scoping(scoping, program);
     if ret.errors.is_empty() { Ok(free_names) } else { Err(ret.errors) }
@@ -452,18 +458,31 @@ fn build_code_mappings(
     let mut mappings = Vec::with_capacity(marks.len());
     for mark in marks {
         // A props-completion anchor (EOF-recovered `@tag[|`) is resolved specially: it is *not* a
-        // byte-exact leaf. The lowering gave the props object literal the mark's `[` span, so the
-        // raw offset log has an entry `(bracket_start, bracket_end, gen_of_open_brace)`. Emit a
-        // single **zero-width** segment mapping the source position just after `[` to the generated
-        // position just after `{`, so a completion request there lands inside the object type.
+        // byte-exact leaf. The lowering gave the JSX opening element the mark's `[` span, so the
+        // raw offset log has an entry `(bracket_start, bracket_end, gen_of_open_angle)`. Emit a
+        // single **zero-width** segment mapping the source position just after `[` to the
+        // generated position just inside the opening tag (after the tag name and its following
+        // space, when present) — a completion request there gets the TSX service's JSX
+        // *attribute* completions, the JSX-native form of prop completion.
         if mark.kind == NotaMappingKind::PropsAnchor {
-            if let Some(&(_, _, gen_brace)) = offset_log
-                .iter()
-                .find(|&&(gs, ge, _)| gs == mark.span.start && ge == mark.span.end)
+            if let Some(&(_, _, gen_angle)) =
+                offset_log.iter().find(|&&(gs, ge, _)| gs == mark.span.start && ge == mark.span.end)
             {
+                let bytes = code.as_bytes();
+                let mut at = gen_angle as usize + 1; // past `<`
+                while at < bytes.len()
+                    && (bytes[at].is_ascii_alphanumeric()
+                        || matches!(bytes[at], b'-' | b'_' | b'$'))
+                {
+                    at += 1;
+                }
+                if bytes.get(at) == Some(&b' ') {
+                    at += 1;
+                }
+                #[expect(clippy::cast_possible_truncation)]
                 mappings.push(CodeMapping {
                     source_offsets: vec![mark.span.end],
-                    generated_offsets: vec![gen_brace + 1],
+                    generated_offsets: vec![at as u32],
                     lengths: vec![0],
                     generated_lengths: Some(vec![0]),
                     data: MappingCapabilities::props_anchor(),
@@ -515,8 +534,41 @@ mod tests {
     fn compile_basic_document() {
         let out = compile("@h1{Hello}\n", None).expect("compiles");
         assert!(out.code.contains("export default function Doc()"), "{}", out.code);
-        assert!(out.code.contains(r#"h("h1", {}, ["Hello"])"#), "{}", out.code);
+        assert!(out.code.contains(r#"<h1>{"Hello"}</h1>"#), "{}", out.code);
+        assert!(out.code.contains("<NotaDoc>"), "{}", out.code);
         assert!(out.map.is_none());
+    }
+
+    #[test]
+    fn adjacent_text_coalesces_with_blank_line_marker() {
+        // Two paragraphs: the blank line must surface as `\n\n` INSIDE one string child
+        // (Reforest's paragraph-break contract), not as separate `"\n"` children.
+        let out = compile("one two\n\nthree four\n", None).expect("compiles");
+        assert!(
+            out.code.contains(r#"{"one two\n\nthree four"}"#),
+            "coalesced text with interior blank line:\n{}",
+            out.code
+        );
+    }
+
+    #[test]
+    fn list_markers_emit_ulli_and_for_lowers_to_solid_for() {
+        let out = compile("@for (x of xs) {\n  - @em{a @(x)}\n}\n", None).expect("compiles");
+        assert!(out.code.contains("<For each={xs}>"), "{}", out.code);
+        assert!(out.code.contains("<UlLi>"), "{}", out.code);
+        assert!(out.code.contains("<em>"), "{}", out.code);
+        assert!(!out.code.contains(".map("), "no keyed-map emit remains:\n{}", out.code);
+    }
+
+    #[test]
+    fn flow_container_interiors_get_reforest() {
+        let out = compile("@blockquote{quoted @em{prose}}\n@p{tight}\n", None).expect("compiles");
+        assert!(
+            out.code.contains("<blockquote><Reforest>"),
+            "flow tag wraps its interior:\n{}",
+            out.code
+        );
+        assert!(out.code.contains(r#"<p>{"tight"}</p>"#), "tight tag does not:\n{}", out.code);
     }
 
     #[test]
@@ -559,21 +611,30 @@ mod tests {
 
     #[test]
     fn compile_reports_reserved_name_collision() {
-        // A `%` binding that shadows a reserved emit name (`h`/`Doc`/…) is a lowering diagnostic.
-        match compile("%let h = 1\n@p{x}\n", None) {
+        // A `%` binding that shadows a reserved emit name (`NotaDoc`/`Doc`/…) is a lowering
+        // diagnostic. (`h` is no longer reserved — the h-call surface is gone.)
+        match compile("%let NotaDoc = 1\n@p{x}\n", None) {
             Ok(out) => panic!("expected a collision diagnostic, got:\n{}", out.code),
             Err(errors) => assert!(!errors.is_empty()),
         }
+        assert!(compile("%let h = 1\n@p{x}\n", None).is_ok(), "`h` is an ordinary name now");
     }
 
     #[test]
     fn free_names_cover_lowering_synthesized_and_user_refs() {
         // `# t` synthesizes a free `Heading` ref; `$x$` a free `Tex`; `% secset(…)` is a free
-        // user call; the runtime surface (`h`/`decode`/`Fragment`) is free because the runtime
+        // user call; the structural surface (`NotaDoc`) is free because the `@nota-lang/solid`
         // import is the wrapper's job. Sorted output.
         let out = compile("% secset({ n: 1 })\n# Title\n\n$y$\n", None).expect("compiles");
-        for name in ["Heading", "Tex", "secset", "h", "decode", "Fragment"] {
+        for name in ["Heading", "Tex", "secset", "NotaDoc"] {
             assert!(out.free_names.iter().any(|n| n == name), "{name} free: {:?}", out.free_names);
+        }
+        for gone in ["h", "decode", "Fragment"] {
+            assert!(
+                !out.free_names.iter().any(|n| n == gone),
+                "{gone} is no longer part of the emit: {:?}",
+                out.free_names
+            );
         }
         let mut sorted = out.free_names.clone();
         sorted.sort_unstable();
@@ -581,16 +642,32 @@ mod tests {
     }
 
     #[test]
+    fn free_names_cover_structural_jsx_references() {
+        // List markers → `UlLi`; `@for` → `For`; a dynamic tag → `Dynamic`. All JSX identifier
+        // references, all free (the wrapper binds them).
+        let out = compile("@for (x of xs) {\n  - @(tags[0]){y}\n}\n", None).expect("compiles");
+        for name in ["NotaDoc", "UlLi", "For", "Dynamic"] {
+            assert!(out.free_names.iter().any(|n| n == name), "{name} free: {:?}", out.free_names);
+        }
+    }
+
+    #[test]
     fn free_names_exclude_bound_and_textual_mentions() {
         // A `%`-imported name is bound (not free), and prose/string mentions of a name's *text*
         // are not references at all — the regex failure modes the metadata exists to kill.
-        let out = compile(
-            "%import { Tex } from \"./my-tex.js\"\n@p{secset( is not a call}\n$y$\n",
-            None,
-        )
-        .expect("compiles");
-        assert!(!out.free_names.iter().any(|n| n == "Tex"), "imported Tex bound: {:?}", out.free_names);
-        assert!(!out.free_names.iter().any(|n| n == "secset"), "prose mention: {:?}", out.free_names);
+        let out =
+            compile("%import { Tex } from \"./my-tex.js\"\n@p{secset( is not a call}\n$y$\n", None)
+                .expect("compiles");
+        assert!(
+            !out.free_names.iter().any(|n| n == "Tex"),
+            "imported Tex bound: {:?}",
+            out.free_names
+        );
+        assert!(
+            !out.free_names.iter().any(|n| n == "secset"),
+            "prose mention: {:?}",
+            out.free_names
+        );
     }
 
     #[test]
@@ -851,17 +928,18 @@ mod recover {
     /// The load-bearing P5 case: `@a[` at EOF still emits the props object literal, and a mapping
     /// anchors a completion cursor (the position just after `[`) into it (just inside `{`).
     #[test]
-    fn unclosed_props_group_yields_object_literal_with_completion_anchor() {
+    fn unclosed_props_group_yields_opening_tag_with_completion_anchor() {
         let out = compile_virtual("@a[").expect("recovers");
 
-        // The virtual contains the props object literal (recovered `h("a", {}, …)`).
-        assert!(out.code.contains("h(\"a\", {"), "props object literal present:\n{}", out.code);
+        // The virtual contains the recovered JSX element.
+        assert!(out.code.contains("<a"), "recovered opening tag present:\n{}", out.code);
 
         // A syntax diagnostic is reported, not swallowed.
         assert_eq!(out.errors.len(), 1, "one recovered diagnostic: {:?}", out.errors);
 
-        // The completion anchor: source offset 3 (just after `[`, where the cursor sits) maps to a
-        // zero-width generated point *inside* the object literal, with `completion` capability.
+        // The completion anchor: source offset 3 (just after `[`, where the cursor sits) maps to
+        // a zero-width generated point *inside the opening tag* (after the tag name), where the
+        // TSX service serves JSX attribute completions.
         let anchor = out
             .mappings
             .iter()
@@ -869,9 +947,11 @@ mod recover {
             .expect("props-completion anchor mapping present");
         assert!(anchor.data.completion, "anchor carries completion capability");
         let g = anchor.generated_offsets[0] as usize;
-        // The generated byte just before the anchor is the object's `{` (or a space inside it).
         let before = &out.code[..g];
-        assert!(before.ends_with('{') || before.ends_with("{ "), "anchor is inside `{{`: {before:?}");
+        assert!(
+            before.ends_with("<a") || before.ends_with("<a "),
+            "anchor is inside the opening tag: {before:?}"
+        );
     }
 
     /// A well-formed file recovers to *exactly* the strict result: no phantom errors, no anchor.
@@ -900,15 +980,15 @@ mod recover {
     fn bare_at_drops_to_empty_fragment() {
         let out = compile_virtual("@").expect("recovers");
         assert_eq!(out.errors.len(), 1, "bare-`@` diagnostic: {:?}", out.errors);
-        // Recovered as `Fragment()` — no dangling identifier reference.
-        assert!(out.code.contains("Fragment()"), "empty fragment recovery:\n{}", out.code);
+        // Recovered as `<></>` — no dangling identifier reference.
+        assert!(out.code.contains("<></>"), "empty fragment recovery:\n{}", out.code);
     }
 
-    /// Recovery surfaces a reserved-name collision (`%let h = …`) as a diagnostic too, rather
-    /// than silently dropping it the way the lenient (non-recover) virtual path used to.
+    /// Recovery surfaces a reserved-name collision (`%let NotaDoc = …`) as a diagnostic too,
+    /// rather than silently dropping it the way the lenient (non-recover) virtual path used to.
     #[test]
     fn reserved_name_collision_surfaces_as_diagnostic() {
-        let out = compile_virtual("%let h = 1\n@p{x}\n").expect("recovers");
+        let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n").expect("recovers");
         assert!(!out.errors.is_empty(), "collision surfaced as a diagnostic");
     }
 }

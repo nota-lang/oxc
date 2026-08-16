@@ -1,38 +1,59 @@
-//! Hyperscript emit primitives + document assembly for [`super::lower::NotaLowering`]: the
-//! `h`/`Fragment`/`decode`/`String.raw` `Expression` builders and the document `Program` assembly
-//! (Doc skeleton, `%`-statement routing, component name-attach — decode.md §The worked example).
+//! Solid JSX emit primitives + document assembly for [`super::lower::NotaLowering`]: the
+//! JSX element/fragment `Expression` builders and the document `Program` assembly (Doc skeleton,
+//! `%`-statement routing — design/solid.md §The pipeline).
+//!
+//! The emit targets `@nota-lang/solid`'s runtime surface: the document body is wrapped in
+//! `<NotaDoc>`, list markers become `<UlLi>`/`<OlLi>`, flow-container host tags get a
+//! `<Reforest>` interior, `@for` lowers to Solid's `<For>`, and a dynamic tag rides on
+//! `<Dynamic component={…}>`. Text children are emitted as `{"…"}` expression containers
+//! (never `JSXText` — whitespace is the reader's Scribble contract, not JSX's), with adjacent
+//! runs coalesced so a blank source line surfaces as `"\n\n"` inside one string (Reforest's
+//! paragraph-break marker).
 
-use lazy_regex::{Regex, regex};
 use oxc_allocator::Vec as ArenaVec;
 use oxc_ast::{NONE, ast::*};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
-use oxc_syntax::identifier::is_identifier_name;
 
 use super::lower::NotaLowering;
-use super::mapping::NotaMappingKind;
-use super::{
-    BLOCK_COMPONENT, DECODE, DOC, FOR_KEY_PARAM, FRAGMENT, H, INLINE_COMPONENT,
-    is_component_constructor,
-};
+use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, UL_LI};
 
-/// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The lowered
-/// module references the default-export component `Doc` and the runtime imports the markup calls
-/// (`h`/`Fragment`/`decode`/`inlineComponent`/`blockComponent`); these are pinned by the emit
-/// surface (notation.md §Emit reference) and
-/// cannot be silently renamed, so a colliding binding is diagnosed rather than emitted.
+/// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
+/// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
+/// time (the tag is statically known here; a rendered element cannot be restructured from
+/// outside).
+const FLOW_TAGS: &[&str] = &[
+    "section",
+    "article",
+    "aside",
+    "nav",
+    "header",
+    "footer",
+    "main",
+    "div",
+    "blockquote",
+    "figure",
+    "td",
+    "th",
+];
+
+/// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The
+/// lowered module references the default-export component `Doc` and the `@nota-lang/solid`
+/// structural names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`, Solid's `For`, and `Dynamic` for
+/// dynamic tags) as free identifiers the integrator binds; a colliding binding is diagnosed
+/// rather than silently shadowed.
 fn is_reserved_emit_name(name: &str) -> bool {
-    matches!(name, DOC | H | FRAGMENT | DECODE | INLINE_COMPONENT | BLOCK_COMPONENT)
+    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | DYNAMIC)
 }
 
 /// Diagnostic for a user module binding that shadows a reader-injected emit-surface name.
 fn reserved_name_collision(name: &str, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!(
-        "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` (the \
-         default-export document component) and imports `h`/`Fragment`/`decode`/`inlineComponent`/\
-         `blockComponent` from the runtime, which the lowered markup calls; a module binding of the \
-         same name shadows them and breaks the emit. Rename the binding."
+        "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` \
+         (the default-export document component) and references \
+         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`, which the lowered markup uses; a \
+         module binding of the same name shadows them and breaks the emit. Rename the binding."
     ))
     .with_label(span)
 }
@@ -44,6 +65,16 @@ fn duplicate_default_export(span: Span) -> OxcDiagnostic {
          would be a second default export (a module may have only one). Remove it.",
     )
     .with_label(span)
+}
+
+/// A lowered element tag, as [`NotaLowering::lower_tagged`] dispatches it.
+pub(super) enum JsxTag<'a> {
+    /// A host tag (`@p`, the emphasis/list sugar targets): lowercase JSX name, not a reference.
+    Host { name: &'a str, span: Span },
+    /// A component tag (`@Aside`): an identifier **reference** (free-name analysis + mappings).
+    Component(IdentifierReference<'a>),
+    /// A dynamic tag (`@(expr)…` head): `<Dynamic component={expr} …>`.
+    Dynamic(Expression<'a>),
 }
 
 impl<'a> NotaLowering<'a> {
@@ -130,112 +161,244 @@ impl<'a> NotaLowering<'a> {
         )
     }
 
-    /// A `key: value` object property (or shorthand). The key is a bare identifier when `name` is
-    /// a valid JS identifier (incl. keywords), a string literal otherwise (`data-x`, `aria-label`).
-    pub(super) fn obj_prop(
+    // ===========================================================================================
+    // JSX emit primitives
+    // ===========================================================================================
+
+    /// A synthesized **reference** element name (`NotaDoc`/`Reforest`/`UlLi`/… and component
+    /// tags): participates in scoping, so it surfaces as a free name and maps as an identifier.
+    fn jsx_ref_name(&self, span: Span, name: &'a str) -> JSXElementName<'a> {
+        self.ast.jsx_element_name_identifier_reference(span, name)
+    }
+
+    /// A host-tag element name (`p`, `em`, …): a plain `JSXIdentifier` — intrinsic, NOT a
+    /// reference (a lowercase JSX name resolves to the host vocabulary, not a binding).
+    fn jsx_host_name(&self, span: Span, name: &'a str) -> JSXElementName<'a> {
+        self.ast.jsx_element_name_identifier(span, name)
+    }
+
+    /// `{<expr>}` — a JSX expression container child.
+    fn jsx_container(&self, at: u32, expr: Expression<'a>) -> JSXChild<'a> {
+        self.ast.jsx_child_expression_container(Span::empty(at), JSXExpression::from(expr))
+    }
+
+    /// Convert lowered child expressions to JSX children: an emitted JSX element/fragment nests
+    /// directly; **adjacent string literals coalesce** into one `{"…"}` container (a blank source
+    /// line surfaces as `"\n\n"` within one string — Reforest's paragraph-break contract); any
+    /// other expression rides in a container.
+    pub(super) fn jsx_children(
+        &self,
+        exprs: ArenaVec<'a, Expression<'a>>,
+    ) -> ArenaVec<'a, JSXChild<'a>> {
+        let mut out = self.ast.vec_with_capacity(exprs.len());
+        let mut text: Option<(u32, String)> = None;
+        macro_rules! flush_text {
+            () => {
+                if let Some((at, s)) = text.take() {
+                    let value: &'a str = self.ast.allocator.alloc_str(&s);
+                    out.push(self.jsx_container(
+                        at,
+                        self.ast.expression_string_literal(Span::empty(at), value, None),
+                    ));
+                }
+            };
+        }
+        for expr in exprs {
+            match expr {
+                Expression::StringLiteral(lit) => match &mut text {
+                    Some((_, s)) => s.push_str(lit.value.as_str()),
+                    None => text = Some((lit.span.start, lit.value.as_str().to_string())),
+                },
+                Expression::JSXElement(el) => {
+                    flush_text!();
+                    out.push(JSXChild::Element(el));
+                }
+                Expression::JSXFragment(frag) => {
+                    flush_text!();
+                    out.push(JSXChild::Fragment(frag));
+                }
+                other => {
+                    flush_text!();
+                    out.push(self.jsx_container(other.span().start, other));
+                }
+            }
+        }
+        flush_text!();
+        out
+    }
+
+    /// `<name attrs>children</name>` (self-closing when childless). `opening_span` is
+    /// `Span::empty` boilerplate except on the EOF props-recovery path, where it carries the
+    /// unclosed `[`'s span so codegen logs the opening element's generated position (the
+    /// prop-completion anchor — see the join in `oxc::nota`).
+    fn jsx_element(
+        &self,
+        span: Span,
+        name: JSXElementName<'a>,
+        attrs: ArenaVec<'a, JSXAttributeItem<'a>>,
+        children: ArenaVec<'a, JSXChild<'a>>,
+        opening_span: Span,
+    ) -> Expression<'a> {
+        let closing = if children.is_empty() {
+            None
+        } else {
+            Some(
+                self.ast
+                    .alloc_jsx_closing_element(Span::empty(span.end), name.clone_in_name(self.ast)),
+            )
+        };
+        let opening = self.ast.alloc_jsx_opening_element(opening_span, name, NONE, attrs);
+        self.ast.expression_jsx_element(span, opening, children, closing)
+    }
+
+    /// A `name={value}` / `name="value"` attribute. A reader-synthesized string prop prints as a
+    /// JSX string attribute only when its text is inert under JSX attribute-string rules (no
+    /// quote, no HTML-entity ampersand — JSX attribute strings are escape-less and
+    /// entity-decoded); anything else rides in an expression container, whose JS string escaping
+    /// is exact.
+    pub(super) fn jsx_attr(
         &self,
         span: Span,
         key_span: Span,
         name: &'a str,
-        value: Expression<'a>,
-        shorthand: bool,
-    ) -> ObjectPropertyKind<'a> {
-        let key = if is_identifier_name(name) {
-            PropertyKey::StaticIdentifier(self.ast.alloc_identifier_name(key_span, name))
-        } else {
-            PropertyKey::StringLiteral(self.ast.alloc_string_literal(key_span, name, None))
-        };
-        ObjectPropertyKind::ObjectProperty(self.ast.alloc_object_property(
-            span,
-            PropertyKind::Init,
-            key,
-            value,
-            false,
-            shorthand,
-            false,
-        ))
+        value: Option<Expression<'a>>,
+    ) -> JSXAttributeItem<'a> {
+        let attr_name = self.ast.jsx_attribute_name_identifier(key_span, name);
+        let attr_value = value.map(|expr| match expr {
+            Expression::StringLiteral(lit) if jsx_string_safe(lit.value.as_str()) => {
+                JSXAttributeValue::StringLiteral(lit)
+            }
+            other => self.ast.jsx_attribute_value_expression_container(
+                Span::empty(span.start),
+                JSXExpression::from(other),
+            ),
+        });
+        JSXAttributeItem::Attribute(self.ast.alloc_jsx_attribute(span, attr_name, attr_value))
     }
 
-    // ===========================================================================================
-    // Element / fragment emit primitives
-    // ===========================================================================================
-
-    /// `h(tag, { props }, [children])`.
-    ///
-    /// `props_span` is the source span for the emitted props object literal. It is `Span::empty`
-    /// (unmapped boilerplate) in the normal case, but EOF error-recovery passes the real span of an
-    /// unclosed `[` so codegen logs the object's position and the join can anchor prop completions
-    /// inside `{ | }` (see [`super::mapping::NotaMappingKind::PropsAnchor`]).
-    pub(super) fn build_h(
+    /// `{...argument}` — a JSX spread attribute.
+    pub(super) fn jsx_spread_attr(
         &self,
         span: Span,
-        tag: Expression<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-        props_span: Span,
-    ) -> Expression<'a> {
-        let props_obj = self.ast.expression_object(props_span, props);
-        let children_arr = self.ast.expression_array(
-            Span::empty(span.end),
-            self.ast.vec_from_iter(children.into_iter().map(ArrayExpressionElement::from)),
-        );
-        self.call(span, self.ident(span.start, H), [tag, props_obj, children_arr])
+        argument: Expression<'a>,
+    ) -> JSXAttributeItem<'a> {
+        JSXAttributeItem::SpreadAttribute(self.ast.alloc_jsx_spread_attribute(span, argument))
     }
 
-    /// `Fragment(...children)` — variadic call (no props, no array wrap).
+    /// The tagged-element builder — the one funnel for host/component/dynamic tags
+    /// (design/solid.md §The pipeline):
+    ///
+    /// * host `nota-ul-li`/`nota-ol-li` sentinels → `<UlLi>`/`<OlLi>` (runtime references);
+    /// * host flow containers ([`FLOW_TAGS`]) → `<tag …><Reforest>children</Reforest></tag>`;
+    /// * other host tags → plain intrinsic elements;
+    /// * components → reference-named elements;
+    /// * dynamic tags → `<Dynamic component={expr} …>`.
+    pub(super) fn build_element(
+        &self,
+        span: Span,
+        tag: JsxTag<'a>,
+        mut attrs: ArenaVec<'a, JSXAttributeItem<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+        recovery_span: Option<Span>,
+    ) -> Expression<'a> {
+        let opening_span = recovery_span.unwrap_or_else(|| Span::empty(span.start));
+        let children = self.jsx_children(children);
+        match tag {
+            JsxTag::Host { name, span: tag_span } => {
+                if let Some(item) = match name {
+                    "nota-ul-li" => Some(UL_LI),
+                    "nota-ol-li" => Some(OL_LI),
+                    _ => None,
+                } {
+                    return self.jsx_element(
+                        span,
+                        self.jsx_ref_name(Span::empty(tag_span.start), item),
+                        attrs,
+                        children,
+                        opening_span,
+                    );
+                }
+                let children = if FLOW_TAGS.contains(&name) && !children.is_empty() {
+                    let reforest = self.jsx_element(
+                        Span::empty(span.start),
+                        self.jsx_ref_name(Span::empty(span.start), REFOREST),
+                        self.ast.vec(),
+                        children,
+                        Span::empty(span.start),
+                    );
+                    let Expression::JSXElement(el) = reforest else { unreachable!() };
+                    self.ast.vec1(JSXChild::Element(el))
+                } else {
+                    children
+                };
+                self.jsx_element(
+                    span,
+                    self.jsx_host_name(tag_span, name),
+                    attrs,
+                    children,
+                    opening_span,
+                )
+            }
+            JsxTag::Component(ident) => {
+                let name = JSXElementName::IdentifierReference(self.ast.alloc(ident));
+                self.jsx_element(span, name, attrs, children, opening_span)
+            }
+            JsxTag::Dynamic(expr) => {
+                let component_attr = self.jsx_attr(
+                    Span::empty(span.start),
+                    Span::empty(span.start),
+                    "component",
+                    Some(expr),
+                );
+                attrs.insert(0, component_attr);
+                self.jsx_element(
+                    span,
+                    self.jsx_ref_name(Span::empty(span.start), DYNAMIC),
+                    attrs,
+                    children,
+                    opening_span,
+                )
+            }
+        }
+    }
+
+    /// A runtime/ambient-named element (`<Tex …>`, `<Heading …>`, `<NotaDoc>`, `<Reforest>`):
+    /// reference-named, so the shim's free-name binding reaches it.
+    pub(super) fn build_named_element(
+        &self,
+        span: Span,
+        name: &'a str,
+        attrs: ArenaVec<'a, JSXAttributeItem<'a>>,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> Expression<'a> {
+        let children = self.jsx_children(children);
+        self.jsx_element(
+            span,
+            self.jsx_ref_name(Span::empty(span.start), name),
+            attrs,
+            children,
+            Span::empty(span.start),
+        )
+    }
+
+    /// `<>children</>`.
     pub(super) fn build_fragment(
         &self,
         span: Span,
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        self.call(span, self.ident(span.start, FRAGMENT), children)
-    }
-
-    /// `Fragment({ key: _i }, ...children)` — a `Fragment` with a leading props arg.
-    fn build_keyed_fragment(
-        &self,
-        span: Span,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        let props_obj = self.ast.expression_object(Span::empty(span.start), props);
-        self.call(
+        let children = self.jsx_children(children);
+        self.ast.expression_jsx_fragment(
             span,
-            self.ident(span.start, FRAGMENT),
-            std::iter::once(props_obj).chain(children),
+            self.ast.jsx_opening_fragment(Span::empty(span.start)),
+            children,
+            self.ast.jsx_closing_fragment(Span::empty(span.end)),
         )
     }
 
-    /// Pick a fresh identifier name for a reader-injected binding (`_i`) that cannot collide with a
-    /// user identifier in the construct at `span`. Returns `candidate` unless it appears as a whole
-    /// word in the construct's source (`@for(_i of …)`), in which case a numeric suffix is appended
-    /// until free. (Scanning the source over-approximates — a name in a string or comment also
-    /// bumps — which only ever yields a *more* distinct name, never a colliding one.)
-    fn fresh_name(&self, candidate: &'static str, span: Span) -> &'a str {
-        /// Does `needle` occur in `hay` as a whole word? Boundaries are JS-identifier chars in the
-        /// ASCII class `[0-9A-Za-z_$]` — a multibyte char conservatively counts as a boundary
-        /// (over-approximation is the safe direction, see above).
-        fn contains_word(hay: &str, needle: &str) -> bool {
-            let pattern =
-                format!(r"(?:^|[^0-9A-Za-z_$]){}(?:[^0-9A-Za-z_$]|$)", regex::escape(needle));
-            Regex::new(&pattern).expect("escaped word pattern is valid").is_match(hay)
-        }
-        let src = &self.source_text[span.start as usize..span.end as usize];
-        if !contains_word(src, candidate) {
-            return candidate;
-        }
-        let mut n = 2u32;
-        loop {
-            let cand = format!("{candidate}{n}");
-            if !contains_word(src, &cand) {
-                return self.ast.allocator.alloc_str(&cand);
-            }
-            n += 1;
-        }
-    }
-
-    /// Build `iter.map((bind, _i) => Fragment({ key: _i }, ...children))`.
-    pub(super) fn build_for_map(
+    /// `<For each={iter}>{(bind) => <>children</>}</For>` — Solid's keyed list rendering; the old
+    /// map-index Fragment key is gone (Solid has no `key`; `<For>` reconciles by item).
+    pub(super) fn build_for(
         &self,
         span: Span,
         bind: BindingPattern<'a>,
@@ -243,30 +406,20 @@ impl<'a> NotaLowering<'a> {
         children: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
         let empty = Span::empty(span.start);
-        let index_name = self.fresh_name(FOR_KEY_PARAM, span);
-
-        // The arrow's expression body: `Fragment({ key: _i }, ...children)`.
-        let key_props = self.ast.vec1(self.obj_prop(
-            empty,
-            empty,
-            "key",
-            self.ident(span.start, index_name),
-            false,
-        ));
-        let fragment = self.build_keyed_fragment(span, key_props, children);
-
-        // `iter.map((bind, _i) => Fragment(...))`.
-        let index_pat = self.ast.binding_pattern_binding_identifier(empty, index_name);
+        let body = self.build_fragment(span, children);
         let arrow = self.arrow(
             span.start,
-            [bind, index_pat],
+            [bind],
             true,
-            self.ast.vec1(self.ast.statement_expression(empty, fragment)),
+            self.ast.vec1(self.ast.statement_expression(empty, body)),
         );
-        self.call(span, self.member(span.start, iter, "map"), [arrow])
+        let each = self.jsx_attr(empty, empty, "each", Some(iter));
+        let attrs = self.ast.vec1(each);
+        let callback = self.ast.vec1(self.jsx_container(span.start, arrow));
+        self.jsx_element(span, self.jsx_ref_name(empty, FOR), attrs, callback, empty)
     }
 
-    /// `(() => { …stmts…; return Fragment(...rest); })()`. Always synchronous — the reader does not
+    /// `(() => { …stmts…; return <>...rest</>; })()`. Always synchronous — the reader does not
     /// `async`ify the IIFE from the presence of `await` in `stmts`.
     pub(super) fn build_statement_iife(
         &self,
@@ -278,7 +431,7 @@ impl<'a> NotaLowering<'a> {
     }
 
     // ===========================================================================================
-    // `String.raw` tagged-template builders + code/math element
+    // `String.raw` tagged-template builders (code/math raw runs)
     // ===========================================================================================
 
     /// `String.raw\`<raw>\`` — a tagged template over a single raw quasi (no substitutions).
@@ -327,28 +480,14 @@ impl<'a> NotaLowering<'a> {
         self.ast.expression_tagged_template(span, tag, NONE, quasi)
     }
 
-    /// Build the ambient-prelude element `h(<Name>, { <props> }, [<raw-children>])` for a code/math
-    /// span (`CodeInline`/`CodeBlock`/`Tex` — referenced as identifiers, no import emitted).
-    pub(super) fn build_raw_element(
-        &self,
-        span: Span,
-        name: &'a str,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
-        children: ArenaVec<'a, Expression<'a>>,
-    ) -> Expression<'a> {
-        self.build_h(span, self.ident(span.start, name), props, children, Span::empty(span.start))
-    }
-
     // ===========================================================================================
-    // Document assembly + `%`-statement routing + component name-attach (decode.md §The worked example)
+    // Document assembly + `%`-statement routing
     // ===========================================================================================
 
     /// Route a parsed top-level statement: `import`/`export` hoist to module scope; everything
-    /// else — **including component bindings** — prepends into `Doc` (a
-    /// `%let C = inlineComponent(...)` is an ordinary lexical statement, document-local, so its
-    /// body may close over document state; replay hydration recovers the closure client-side).
-    /// Component bindings — top-level `%let/%const` and `%export`-wrapped alike — get the binding
-    /// name attached as the constructor's 2nd argument (the debug-manifest name).
+    /// else prepends into `Doc` as an ordinary lexical statement (document-local — a component
+    /// binding may close over document state; the document hydrates as one Solid app, so the
+    /// closure is just the program's own).
     pub(super) fn route_statement(
         &mut self,
         stmt: Statement<'a>,
@@ -356,30 +495,16 @@ impl<'a> NotaLowering<'a> {
         doc_prelude: &mut ArenaVec<'a, Statement<'a>>,
     ) {
         // Diagnose a binding / default-export that would collide with the reader's emit surface
-        // (`Doc`, the runtime imports) before routing it — the oxc parser cannot catch these (the
-        // collision is with names the *lowering* injects, not with anything in the source).
+        // (`Doc`, the structural references) before routing it — the oxc parser cannot catch
+        // these (the collision is with names the *lowering* injects, not anything in the source).
         self.check_reserved_collisions(&stmt);
         // A `%`/`%%%` statement body is embedded JS/TS spliced verbatim (full capabilities).
-        self.record_nota_mapping(stmt.span(), NotaMappingKind::EmbeddedJs);
+        self.record_nota_mapping(stmt.span(), super::mapping::NotaMappingKind::EmbeddedJs);
         match stmt {
-            Statement::ExportNamedDeclaration(mut export) => {
-                // `%export let C = inlineComponent(...)` — the author's opt-in to module scope —
-                // gets the same name attach as an unexported binding (previously it got none).
-                if let Some(Declaration::VariableDeclaration(decl)) = &mut export.declaration
-                    && Self::is_component_decl(decl)
-                {
-                    self.attach_component_name(decl);
-                }
-                module_items.push(Statement::ExportNamedDeclaration(export));
-            }
             Statement::ImportDeclaration(_)
+            | Statement::ExportNamedDeclaration(_)
             | Statement::ExportDefaultDeclaration(_)
             | Statement::ExportAllDeclaration(_) => module_items.push(stmt),
-            Statement::VariableDeclaration(mut decl) if Self::is_component_decl(&decl) => {
-                // No hoist, no auto-export — only the name rides along.
-                self.attach_component_name(&mut decl);
-                doc_prelude.push(Statement::VariableDeclaration(decl));
-            }
             other => doc_prelude.push(other),
         }
     }
@@ -390,8 +515,8 @@ impl<'a> NotaLowering<'a> {
     /// as usual — the diagnostic is advisory (the emit would be broken/ambiguous JS otherwise).
     ///
     /// Bindings come from ECMA's `BoundNames` ([`oxc_ecmascript::BoundNames`]), so destructured
-    /// names collide too (`%const { h } = lib`, `%const [Doc] = xs`, rest elements), as do import
-    /// locals and `% export`-wrapped declarations.
+    /// names collide too (`%const { NotaDoc } = lib`, rest elements), as do import locals and
+    /// `% export`-wrapped declarations.
     fn check_reserved_collisions(&mut self, stmt: &Statement<'a>) {
         match stmt {
             Statement::ExportDefaultDeclaration(d) => self.error(duplicate_default_export(d.span)),
@@ -413,8 +538,9 @@ impl<'a> NotaLowering<'a> {
         });
     }
 
-    /// Build the `export default function Doc() { …prelude…; return decode(Fragment(...)); }` module.
-    /// `Doc` is always synchronous — the reader does not `async`ify it from `await` in the prelude.
+    /// Build the `export default function Doc() { …prelude…; return <NotaDoc>…</NotaDoc>; }`
+    /// module. `Doc` is always synchronous — the reader does not `async`ify it from `await` in
+    /// the prelude.
     pub(super) fn build_document(
         &self,
         siblings: ArenaVec<'a, Expression<'a>>,
@@ -424,9 +550,8 @@ impl<'a> NotaLowering<'a> {
         let ast = self.ast;
         let empty = Span::empty(0);
 
-        let fragment = self.build_fragment(empty, siblings);
-        let decoded = self.build_decode(empty, fragment);
-        let return_stmt = ast.statement_return(empty, Some(decoded));
+        let doc_body = self.build_named_element(empty, NOTA_DOC, ast.vec(), siblings);
+        let return_stmt = ast.statement_return(empty, Some(doc_body));
 
         let mut body_stmts = doc_prelude;
         body_stmts.push(return_stmt);
@@ -456,7 +581,7 @@ impl<'a> NotaLowering<'a> {
 
         ast.program(
             empty,
-            SourceType::default().with_module(true),
+            SourceType::default().with_module(true).with_jsx(true),
             self.source_text,
             ast.vec(),
             None,
@@ -464,37 +589,37 @@ impl<'a> NotaLowering<'a> {
             program_body,
         )
     }
+}
 
-    /// `decode(<expr>)`.
-    fn build_decode(&self, span: Span, expr: Expression<'a>) -> Expression<'a> {
-        self.call(span, self.ident(span.start, DECODE), [expr])
-    }
+/// Is `s` inert as a JSX attribute string? JSX attribute strings have **no escapes** (the value
+/// runs to the matching quote) and **decode HTML entities** — so a value with a `"` or an `&`
+/// cannot round-trip and must ride in an expression container instead. `<`/`>`/newlines are
+/// legal in attribute strings, but `<` is kept out conservatively (some downstream tooling
+/// chokes); everything the reader synthesizes (ids, labels, langs) passes.
+fn jsx_string_safe(s: &str) -> bool {
+    is_jsx_attr_inert(s)
+}
 
-    /// Is `decl` a single `let/const X = inlineComponent(...)|blockComponent(...)` binding?
-    fn is_component_decl(decl: &VariableDeclaration<'a>) -> bool {
-        decl.declarations.len() == 1
-            && decl.declarations[0].id.get_binding_identifier().is_some()
-            && decl.declarations[0].init.as_ref().is_some_and(is_component_constructor)
-    }
+fn is_jsx_attr_inert(s: &str) -> bool {
+    !s.contains(['"', '&', '<', '>'])
+}
 
-    /// Pass the binding name as the constructor's 2nd argument (`inlineComponent(fn, "Name")`).
-    /// That is ALL the reader does to a component binding (decode.md §The worked example) — no hoist, no
-    /// export, and no body `decode(...)` wrap (the wrap was semantically dead: component bodies
-    /// only run at `▸ = true`, where `decode` is the identity). The name feeds the island's
-    /// *debug* manifest (`comp`); it is overridden rather than kept if the author supplied a 2nd
-    /// argument, so the manifest always shows the binding name.
-    fn attach_component_name(&self, decl: &mut VariableDeclaration<'a>) {
-        let declarator = &mut decl.declarations[0];
-        let Some(name) = declarator.id.get_binding_identifier().map(|id| id.name) else {
-            return;
-        };
-        if let Some(Expression::CallExpression(call)) = declarator.init.as_mut() {
-            let name_lit = self.ast.expression_string_literal(Span::empty(0), name, None);
-            if call.arguments.len() >= 2 {
-                call.arguments[1] = Argument::from(name_lit);
-            } else {
-                call.arguments.push(Argument::from(name_lit));
+/// Clone-a-name helper: `JSXElementName` is consumed by the opening element, but the closing
+/// element repeats it. Only the variants the lowering synthesizes are supported.
+trait CloneInName<'a> {
+    fn clone_in_name(&self, ast: oxc_ast::AstBuilder<'a>) -> JSXElementName<'a>;
+}
+
+impl<'a> CloneInName<'a> for JSXElementName<'a> {
+    fn clone_in_name(&self, ast: oxc_ast::AstBuilder<'a>) -> JSXElementName<'a> {
+        match self {
+            JSXElementName::Identifier(id) => {
+                ast.jsx_element_name_identifier(Span::empty(id.span.start), id.name.as_str())
             }
+            JSXElementName::IdentifierReference(id) => {
+                ast.jsx_element_name_identifier(Span::empty(id.span.start), id.name.as_str())
+            }
+            _ => unreachable!("the Nota lowering synthesizes only identifier element names"),
         }
     }
 }

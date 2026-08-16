@@ -115,9 +115,11 @@ pub enum NotaMarkupKind<'a> {
 // Document
 // ===============================================================================================
 
-/// A whole `.nota` document: a source-ordered run of top-level items (markup + `%`/`%%%` statements).
-/// Lowering builds the `Doc` skeleton, hoists/routes statements (imports hoist; component bindings
-/// stay document-local), and wraps in `decode`.
+/// A whole `.nota` document.
+///
+/// A source-ordered run of top-level items (markup + `%`/`%%%` statements). Lowering builds the
+/// `Doc` skeleton, hoists/routes statements (imports hoist; everything else stays
+/// document-local), and wraps the body in `<NotaDoc>`.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]

@@ -22,7 +22,8 @@ use oxc_span::SourceType;
 #[track_caller]
 fn reformat(js: &str) -> String {
     let allocator = Allocator::default();
-    let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+    let ret =
+        Parser::new(&allocator, js, SourceType::default().with_module(true).with_jsx(true)).parse();
     assert!(ret.errors.is_empty(), "reformat: not valid JS: {js:?}\n{:?}", ret.errors);
     Codegen::new().build(&ret.program).code
 }
@@ -30,6 +31,9 @@ fn reformat(js: &str) -> String {
 /// Assert that the Nota-emitted JS equals `expected` modulo formatting.
 #[track_caller]
 fn assert_js_eq(emitted: &str, expected: &str) {
+    if nota_regen_record(emitted) {
+        return;
+    }
     assert_eq!(
         reformat(emitted),
         reformat(expected),
@@ -57,6 +61,22 @@ fn nota_expr_raw(source: &str) -> String {
 fn nota_expr(source: &str, expected: &str) {
     let js = nota_expr_raw(source);
     assert_js_eq(&js, expected);
+}
+
+/// `NOTA_REGEN=<path>`: record `{line, actual}` JSONL (the expectation-regeneration harness)
+/// instead of asserting. Returns true when recording (the caller skips its assertion). The line
+/// is `assert_js_eq`'s call site via `#[track_caller]` propagation.
+#[track_caller]
+fn nota_regen_record(actual: &str) -> bool {
+    let Ok(path) = std::env::var("NOTA_REGEN") else { return false };
+    use std::io::Write;
+    let esc = |s: &str| {
+        s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t")
+    };
+    let line = std::panic::Location::caller().line();
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+    writeln!(f, "{{\"line\": {line}, \"actual\": \"{}\"}}", esc(actual)).unwrap();
+    true
 }
 
 /// Compile a whole `.nota` file to a JS module string (document mode).
@@ -96,8 +116,10 @@ fn nota_doc_err(source: &str) {
 #[track_caller]
 fn assert_valid_js(js: &str) {
     let allocator = Allocator::default();
-    // Module source type so `import`/`export` in document-mode output is accepted.
-    let ret = Parser::new(&allocator, js, SourceType::nota().with_module(true)).parse();
+    // TSX module source type: the emit is Solid JSX (document mode may hoist `import`/`export`;
+    // the virtual paths preserve embedded TS, so tsx covers every fixture).
+    let source_type = SourceType::default().with_module(true).with_jsx(true).with_typescript(true);
+    let ret = Parser::new(&allocator, js, source_type).parse();
     assert!(!ret.panicked, "stock oxc panicked re-parsing emitted JS: {js:?}");
     assert!(ret.errors.is_empty(), "emitted JS did not re-parse cleanly: {js:?}\n{:?}", ret.errors);
 }
@@ -108,47 +130,47 @@ fn assert_valid_js(js: &str) {
 
 #[test]
 fn host_element_text() {
-    nota_expr("@p{Hello}", r#"h("p", {}, ["Hello"])"#);
-    nota_expr("@em{hi}", r#"h("em", {}, ["hi"])"#);
+    nota_expr("@p{Hello}", r#"<p>{"Hello"}</p>"#);
+    nota_expr("@em{hi}", r#"<em>{"hi"}</em>"#);
 }
 
 #[test]
 fn component_element() {
     // Capitalized tag → identifier (component); `@Unknown{}` is a downstream TS scope error, not ours.
-    nota_expr("@Aside{hi}", r#"h(Aside, {}, ["hi"])"#);
-    nota_expr("@Unknown{}", r"h(Unknown, {}, [])");
+    nota_expr("@Aside{hi}", r#"<Aside>{"hi"}</Aside>"#);
+    nota_expr("@Unknown{}", "<Unknown />");
 }
 
 #[test]
 fn empty_body_is_no_children() {
     // The whitespace pass drops empty/whitespace-only text → `[]`.
-    nota_expr("@p{}", r#"h("p", {}, [])"#);
-    nota_expr("@input{}", r#"h("input", {}, [])"#);
+    nota_expr("@p{}", "<p />");
+    nota_expr("@input{}", "<input />");
 }
 
 #[test]
 fn nested_children() {
-    nota_expr("@p{Hello @em{world}}", r#"h("p", {}, ["Hello ", h("em", {}, ["world"])])"#);
+    nota_expr("@p{Hello @em{world}}", r#"<p>{"Hello "}<em>{"world"}</em></p>"#);
 }
 
 #[test]
 fn fragment() {
-    nota_expr("@{one @b{two}}", r#"Fragment("one ", h("b", {}, ["two"]))"#);
-    nota_expr("@{x}", r#"Fragment("x")"#);
+    nota_expr("@{one @b{two}}", r#"<>{"one "}<b>{"two"}</b></>"#);
+    nota_expr("@{x}", r#"<>{"x"}</>"#);
 }
 
 #[test]
 fn interpolation() {
     // Bare identifier and `@(expr)` interpolation inside a body.
-    nota_expr("@p{@name}", r#"h("p", {}, [name])"#);
-    nota_expr("@p{@(user.posts[0])}", r#"h("p", {}, [user.posts[0]])"#);
-    nota_expr("@p{@(a + b)}", r#"h("p", {}, [a + b])"#);
+    nota_expr("@p{@name}", "<p>{name}</p>");
+    nota_expr("@p{@(user.posts[0])}", "<p>{user.posts[0]}</p>");
+    nota_expr("@p{@(a + b)}", "<p>{a + b}</p>");
 }
 
 #[test]
 fn interpolation_in_text() {
     // Surrounding spaces are kept by the preceding/following text segments.
-    nota_expr("@p{x @name y}", r#"h("p", {}, ["x ", name, " y"])"#);
+    nota_expr("@p{x @name y}", r#"<p>{"x "}{name}{" y"}</p>"#);
 }
 
 #[test]
@@ -160,45 +182,45 @@ fn head_boundary_dispatch() {
 
     // `@(expr)` boundary token (`)`): glued text, a space, and end-of-input all close the head as an
     // interpolation — exercising the resume-markup-text and resume-JS paths after consuming `)`.
-    nota_expr("@p{@(a + b)c}", r#"h("p", {}, [a + b, "c"])"#);
-    nota_expr("@p{@(a + b) c}", r#"h("p", {}, [a + b, " c"])"#);
+    nota_expr("@p{@(a + b)c}", r#"<p>{a + b}{"c"}</p>"#);
+    nota_expr("@p{@(a + b) c}", r#"<p>{a + b}{" c"}</p>"#);
     nota_expr("@(a + b)", "a + b");
 
     // A `{` glued to a dynamic head opens an element; a space before any would-be trigger does not.
-    nota_expr("@(Box){hi}", r#"h(Box, {}, ["hi"])"#);
-    nota_expr("@p{@(Box) x}", r#"h("p", {}, [Box, " x"])"#);
+    nota_expr("@(Box){hi}", r#"<Dynamic component={Box}>{"hi"}</Dynamic>"#);
+    nota_expr("@p{@(Box) x}", r#"<p>{Box}{" x"}</p>"#);
 
     // Bare-identifier head: a glued `{` is an element trigger; a trailing space is not.
-    nota_expr("@p{@foo bar}", r#"h("p", {}, [foo, " bar"])"#);
-    nota_expr("@p{@foo{x}}", r#"h("p", {}, [h("foo", {}, ["x"])])"#);
+    nota_expr("@p{@foo bar}", r#"<p>{foo}{" bar"}</p>"#);
+    nota_expr("@p{@foo{x}}", r#"<p><foo>{"x"}</foo></p>"#);
 }
 
 #[test]
 fn props_string_and_expr() {
-    nota_expr(r#"@a[href:"/x"]{go}"#, r#"h("a", { href: "/x" }, ["go"])"#);
-    nota_expr("@a[href:url]{go}", r#"h("a", { href: url }, ["go"])"#);
+    nota_expr(r#"@a[href:"/x"]{go}"#, r#"<a href="/x">{"go"}</a>"#);
+    nota_expr("@a[href:url]{go}", r#"<a href={url}>{"go"}</a>"#);
 }
 
 #[test]
 fn props_shorthand_and_spread() {
     // Empty body → no children.
-    nota_expr("@input[disabled, ...rest]{}", r#"h("input", { disabled, ...rest }, [])"#);
+    nota_expr("@input[disabled, ...rest]{}", "<input disabled={disabled} {...rest} />");
 }
 
 #[test]
 fn props_markup_valued() {
-    nota_expr("@fig[cap:@em{hi}]{x}", r#"h("fig", { cap: h("em", {}, ["hi"]) }, ["x"])"#);
+    nota_expr("@fig[cap:@em{hi}]{x}", r#"<fig cap={<em>{"hi"}</em>}>{"x"}</fig>"#);
 }
 
 #[test]
 fn props_multiple_groups_accumulate() {
     // Multiple `[…]` groups union into one props object.
-    nota_expr("@a[href:url][title:t]{go}", r#"h("a", { href: url, title: t }, ["go"])"#);
+    nota_expr("@a[href:url][title:t]{go}", r#"<a href={url} title={t}>{"go"}</a>"#);
 }
 
 #[test]
 fn self_closing_with_props_no_body() {
-    nota_expr("@hr[class:c]", r#"h("hr", { class: c }, [])"#);
+    nota_expr("@hr[class:c]", "<hr class={c} />");
 }
 
 #[test]
@@ -206,20 +228,20 @@ fn dynamic_tag_direct() {
     // Every `@(expr)` head emits directly as `h`'s first argument — `h` is a plain function, so
     // there is no grammatical restriction on what may sit in tag position (unlike JSX, which needs
     // a bound identifier there). Capitalized ident, static member, and arbitrary expression alike.
-    nota_expr("@(Box){hi}", r#"h(Box, {}, ["hi"])"#);
-    nota_expr("@(ui.Card){hi}", r#"h(ui.Card, {}, ["hi"])"#);
-    nota_expr("@(getTag()){hi}", r#"h(getTag(), {}, ["hi"])"#);
+    nota_expr("@(Box){hi}", r#"<Dynamic component={Box}>{"hi"}</Dynamic>"#);
+    nota_expr("@(ui.Card){hi}", r#"<Dynamic component={ui.Card}>{"hi"}</Dynamic>"#);
+    nota_expr("@(getTag()){hi}", r#"<Dynamic component={getTag()}>{"hi"}</Dynamic>"#);
 }
 
 #[test]
 fn dynamic_tag_with_props() {
-    nota_expr("@(comps[k])[x:1]{hi}", r#"h(comps[k], { x: 1 }, ["hi"])"#);
+    nota_expr("@(comps[k])[x:1]{hi}", r#"<Dynamic component={comps[k]} x={1}>{"hi"}</Dynamic>"#);
 }
 
 #[test]
 fn balanced_braces_are_literal() {
     // `@code{f{o}o}` — balanced braces are literal body text, not a nested form.
-    nota_expr("@code{f{o}o}", r#"h("code", {}, ["f{o}o"])"#);
+    nota_expr("@code{f{o}o}", r#"<code>{"f{o}o"}</code>"#);
 }
 
 // ===============================================================================================
@@ -234,7 +256,7 @@ fn balanced_braces_are_literal() {
 fn self_closing_props_group_then_raw_markup() {
     // `@br[]` self-closes; the byte after `]` is peeked raw, so the following `\x` resumes as
     // markup (the escape yields a literal `x`), not a JS `\u`-style escape.
-    nota_expr(r#"@p{@br[]\x rest}"#, r#"h("p", {}, [h("br", {}, []), "x rest"])"#);
+    nota_expr(r#"@p{@br[]\x rest}"#, r#"<p><br />{"x rest"}</p>"#);
 }
 
 #[test]
@@ -245,12 +267,12 @@ fn props_then_verbatim_body() {
     // catch-all as self-closing, silently leaking `|{...}|` out as sibling markup text.
     nota_expr(
         r#"@CodeBlock[lang: "hello"]|{some code}|"#,
-        r#"h(CodeBlock, { lang: "hello" }, [String.raw`some code`])"#,
+        r#"<CodeBlock lang="hello">{String.raw`some code`}</CodeBlock>"#,
     );
     // Multiple prop groups still accumulate ahead of the verbatim body.
     nota_expr(
         r#"@CodeBlock[lang: "hello"][foo: 1]|{code}|"#,
-        r#"h(CodeBlock, { lang: "hello", foo: 1 }, [String.raw`code`])"#,
+        r#"<CodeBlock lang="hello" foo={1}>{String.raw`code`}</CodeBlock>"#,
     );
 }
 
@@ -258,7 +280,7 @@ fn props_then_verbatim_body() {
 fn self_closing_props_then_bare_pipe_is_literal() {
     // A `|` after `]` NOT immediately followed by `{` is not a verbatim trigger — self-closing,
     // same as any other trailing byte (mirrors `self_closing_props_group_then_raw_markup`).
-    nota_expr(r#"@p{@hr[class:c]|x}"#, r#"h("p", {}, [h("hr", { class: c }, []), "|x"])"#);
+    nota_expr(r#"@p{@hr[class:c]|x}"#, r#"<p><hr class={c} />{"|x"}</p>"#);
 }
 
 #[test]
@@ -269,23 +291,26 @@ fn props_then_colon_body() {
     assert_js_eq(
         &nota_doc("@aside[class: \"x\"]: styled aside\n"),
         r#"export default function Doc() {
-            return decode(Fragment(h("aside", { class: "x" }, ["styled aside"])));
-        }"#,
+	return <NotaDoc><aside class="x"><Reforest>{"styled aside"}</Reforest></aside></NotaDoc>;
+}
+"#,
     );
     // Multiple prop groups accumulate ahead of the colon body (union), like the verbatim form.
     assert_js_eq(
         &nota_doc("@aside[class: \"x\"][id: y]: body\n"),
         r#"export default function Doc() {
-            return decode(Fragment(h("aside", { class: "x", id: y }, ["body"])));
-        }"#,
+	return <NotaDoc><aside class="x" id={y}><Reforest>{"body"}</Reforest></aside></NotaDoc>;
+}
+"#,
     );
     // The doc-state element form is now legal: `@FootnoteText[label: "n2"]: def` — a colon-body footnote
     // definition (previously the `[^x]:` sugar was the only colon-body definition surface).
     assert_js_eq(
         &nota_doc("@FootnoteText[label: \"n2\"]: def two\n"),
         r#"export default function Doc() {
-            return decode(Fragment(h(FootnoteText, { label: "n2" }, ["def two"])));
-        }"#,
+	return <NotaDoc><FootnoteText label="n2">{"def two"}</FootnoteText></NotaDoc>;
+}
+"#,
     );
 }
 
@@ -296,12 +321,15 @@ fn props_colon_body_parity_with_bare_colon() {
     // literal fills both expected emits.
     let doc = |props: &str, children: &str| {
         format!(
-            "export default function Doc() {{ return decode(Fragment(h(\"aside\", {{{props}}}, [{children}]))); }}"
+            "export default function Doc() {{ return <NotaDoc><aside{props}><Reforest>{children}</Reforest></aside></NotaDoc>; }}"
         )
     };
-    let children = r#""one ", h("em", {}, ["two"])"#;
+    let children = r#"{"one "}<em>{"two"}</em>"#;
     assert_js_eq(&nota_doc("@aside: one @em{two}\n"), &doc("", children));
-    assert_js_eq(&nota_doc("@aside[class: \"x\"]: one @em{two}\n"), &doc("class: \"x\"", children));
+    assert_js_eq(
+        &nota_doc("@aside[class: \"x\"]: one @em{two}\n"),
+        &doc(r#" class="x""#, children),
+    );
 }
 
 #[test]
@@ -309,7 +337,7 @@ fn props_colon_dead_gate_is_literal() {
     // Where the positional gate is dead (mid-prose, not a line start), the form
     // dies exactly as a bare head does — the `[props]` element self-closes and `: y` stays literal
     // text (the post-`]` `:` is NOT a trigger).
-    nota_expr("@{x @a[p: 1]: y}", r#"Fragment("x ", h("a", { p: 1 }, []), ": y")"#);
+    nota_expr("@{x @a[p: 1]: y}", r#"<>{"x "}<a p={1} />{": y"}</>"#);
 }
 
 #[test]
@@ -320,12 +348,9 @@ fn props_colon_and_verbatim_coexist() {
     assert_js_eq(
         &nota_doc("@CodeBlock[lang: \"python\"]|{f(x)}|\n\n@aside[class: \"x\"]: note\n"),
         r#"export default function Doc() {
-            return decode(Fragment(
-                h(CodeBlock, { lang: "python" }, [String.raw`f(x)`]),
-                "\n", "\n",
-                h("aside", { class: "x" }, ["note"])
-            ));
-        }"#,
+	return <NotaDoc><CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock>{"\n\n"}<aside class="x"><Reforest>{"note"}</Reforest></aside></NotaDoc>;
+}
+"#,
     );
 }
 
@@ -336,9 +361,10 @@ fn math_armed_paren_then_raw_tex() {
     // (not a `${…}` substitution), so it lowers beside the raw run.
     assert_js_eq(
         &nota_doc(r"$|@(x) \frac{a}{b}$"),
-        r"export default function Doc() {
-  return decode(Fragment(h(Tex, {}, [x, String.raw` \frac{a}{b}`])));
-}",
+        r#"export default function Doc() {
+	return <NotaDoc><Tex>{x}{String.raw` \frac{a}{b}`}</Tex></NotaDoc>;
+}
+"#,
     );
     // The un-armed input is now fully literal content (the `@` no longer interpolates).
     assert!(
@@ -351,16 +377,13 @@ fn math_armed_paren_then_raw_tex() {
 fn verbatim_interp_then_raw_backslash() {
     // A verbatim `|@x` interpolation resumes the raw scan by parking (Raw region), so the trailing
     // `\b` stays a raw run, not a JS escape.
-    nota_expr(r#"@pre|{a |@x \b}|"#, r#"h("pre", {}, [String.raw`a `, x, String.raw` \b`])"#);
+    nota_expr(r#"@pre|{a |@x \b}|"#, r#"<pre>{String.raw`a `}{x}{String.raw` \b`}</pre>"#);
 }
 
 #[test]
 fn verbatim_element_then_raw_backslash() {
     // A verbatim `|@em{x}` element exit parks (Raw region); the trailing `\raw` stays a raw run.
-    nota_expr(
-        r#"@pre|{|@em{x} \raw}|"#,
-        r#"h("pre", {}, [h("em", {}, ["x"]), String.raw` \raw`])"#,
-    );
+    nota_expr(r#"@pre|{|@em{x} \raw}|"#, r#"<pre><em>{"x"}</em>{String.raw` \raw`}</pre>"#);
 }
 
 // ===============================================================================================
@@ -371,62 +394,53 @@ fn verbatim_element_then_raw_backslash() {
 #[test]
 fn ws_single_line_spaces_kept() {
     // `@foo{·bar·}` → ⟦ "·bar·" ⟧
-    nota_expr("@foo{ bar }", r#"h("foo", {}, [" bar "])"#);
+    nota_expr("@foo{ bar }", r#"<foo>{" bar "}</foo>"#);
 }
 
 #[test]
 fn ws_leading_trailing_newline_dropped() {
     // `@foo{⏎··bar⏎}` → ⟦ "bar" ⟧  (drop newline after `{` / before `}`; strip common indent)
-    nota_expr("@foo{\n  bar\n}", r#"h("foo", {}, ["bar"])"#);
+    nota_expr("@foo{\n  bar\n}", r#"<foo>{"bar"}</foo>"#);
 }
 
 #[test]
 fn ws_interior_indent_and_newlines() {
     // `@foo{⏎··begin⏎····x⏎··end}` → ⟦ "begin", "⏎", "··x", "⏎", "end" ⟧
     // Kept indentation (past the common strip) stays joined with its line's content (notation.md).
-    nota_expr(
-        "@foo{\n  begin\n    x\n  end}",
-        r#"h("foo", {}, ["begin", "\n", "  x", "\n", "end"])"#,
-    );
+    nota_expr("@foo{\n  begin\n    x\n  end}", r#"<foo>{"begin\n  x\nend"}</foo>"#);
 }
 
 #[test]
 fn ws_blank_line_is_two_newlines() {
     // CRITICAL: a blank source line → ≥2 adjacent "\n" (the para-break marker).
     // `@foo{⏎··bar⏎⏎··baz⏎}` → ⟦ "bar", "⏎", "⏎", "baz" ⟧
-    nota_expr("@foo{\n  bar\n\n  baz\n}", r#"h("foo", {}, ["bar", "\n", "\n", "baz"])"#);
+    nota_expr("@foo{\n  bar\n\n  baz\n}", r#"<foo>{"bar\n\nbaz"}</foo>"#);
 }
 
 #[test]
 fn ws_leading_and_trailing_blank_lines() {
     // `@foo{⏎⏎··bar⏎⏎}` → ⟦ "⏎", "bar", "⏎" ⟧
-    nota_expr("@foo{\n\n  bar\n\n}", r#"h("foo", {}, ["\n", "bar", "\n"])"#);
+    nota_expr("@foo{\n\n  bar\n\n}", r#"<foo>{"\nbar\n"}</foo>"#);
 }
 
 #[test]
 fn ws_body_only_newlines() {
     // `@foo{⏎}` → ⟦ "⏎" ⟧ (only-newlines body preserved, not dropped to []).
-    nota_expr("@foo{\n}", r#"h("foo", {}, ["\n"])"#);
+    nota_expr("@foo{\n}", r#"<foo>{"\n"}</foo>"#);
     // Three newlines → three "\n".
-    nota_expr("@foo{\n\n\n}", r#"h("foo", {}, ["\n", "\n", "\n"])"#);
+    nota_expr("@foo{\n\n\n}", r#"<foo>{"\n\n\n"}</foo>"#);
 }
 
 #[test]
 fn ws_common_indent_strip_keeps_leftover() {
     // `@foo{bar⏎·······baz⏎·····bbb}` → ⟦ "bar","⏎","··baz","⏎","bbb" ⟧ (kept indent joined to content)
-    nota_expr(
-        "@foo{bar\n       baz\n     bbb}",
-        r#"h("foo", {}, ["bar", "\n", "  baz", "\n", "bbb"])"#,
-    );
+    nota_expr("@foo{bar\n       baz\n     bbb}", r#"<foo>{"bar\n  baz\nbbb"}</foo>"#);
 }
 
 #[test]
 fn ws_element_on_following_line() {
     // `@foo{bar @baz{3}⏎·····blah}` → ⟦ "bar ", h("baz",{},["3"]), "⏎", "blah" ⟧
-    nota_expr(
-        "@foo{bar @baz{3}\n     blah}",
-        r#"h("foo", {}, ["bar ", h("baz", {}, ["3"]), "\n", "blah"])"#,
-    );
+    nota_expr("@foo{bar @baz{3}\n     blah}", r#"<foo>{"bar "}<baz>{"3"}</baz>{"\nblah"}</foo>"#);
 }
 
 #[test]
@@ -434,7 +448,7 @@ fn ws_nested_element_independent() {
     // Each element body's whitespace is computed independently.
     nota_expr(
         "@text{Some @b{bold\n  text}, and\n  more text.}",
-        r#"h("text", {}, ["Some ", h("b", {}, ["bold", "\n", "text"]), ", and", "\n", "more text."])"#,
+        r#"<text>{"Some "}<b>{"bold\ntext"}</b>{", and\nmore text."}</text>"#,
     );
 }
 
@@ -444,12 +458,12 @@ fn ws_nested_element_independent() {
 
 #[test]
 fn doc_basic() {
-    // A file → `export default function Doc() { return decode(Fragment(...)); }`.
+    // A file → `export default function Doc() { return <NotaDoc>…</NotaDoc>; }`.
     let js = nota_doc("@h1{Hello}\n@p{Welcome to @em{Nota}.}\n");
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-  return decode(Fragment(h("h1", {}, ["Hello"]), "\n", h("p", {}, ["Welcome to ", h("em", {}, ["Nota"]), "."])));
+  return <NotaDoc><h1>{"Hello"}</h1>{"\n"}<p>{"Welcome to "}<em>{"Nota"}</em>{"."}</p></NotaDoc>;
 }"#,
     );
 }
@@ -479,10 +493,10 @@ fn doc_fence_statements() {
 
 #[test]
 fn doc_component_binding_stays_document_local_with_name() {
-    // A top-level `%const X = inlineComponent(...)` is an ordinary lexical statement
-    // — it prepends into Doc (document-local, NOT hoisted or exported; replay hydration recovers
-    // its closure client-side) — and is passed its binding name "X" as the 2nd arg (the debug-
-    // manifest name).
+    // A top-level `%const X = inlineComponent(...)` is an ordinary lexical statement — it
+    // prepends into Doc (document-local, NOT hoisted or exported; the document hydrates as one
+    // Solid app, so the closure is the program's own). The old debug-manifest name-attach is
+    // GONE: the reader no longer special-cases the constructor call at all.
     let js = nota_doc("%const Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
     assert!(!js.contains("export const Card"), "component NOT exported: {js}");
     assert!(!js.contains("export let Card"), "component NOT exported: {js}");
@@ -490,34 +504,31 @@ fn doc_component_binding_stays_document_local_with_name() {
     let doc_pos = js.find("export default function Doc()").expect("Doc present");
     let bind_pos = js.find("const Card = inlineComponent").expect("binding present");
     assert!(bind_pos > doc_pos, "binding is inside Doc, not module scope: {js}");
-    assert!(js.contains(r#", "Card")"#), "component name passed as 2nd arg: {js}");
+    assert!(!js.contains(r#", "Card")"#), "no name-attach — the call is the user's own: {js}");
 }
 
 #[test]
 fn doc_export_component_binding_keeps_export_and_gets_name() {
-    // `%export let C = inlineComponent(...)` is the author's opt-in to module scope
-    // — the export hoists verbatim AND gets the same name attach (previously the `%export` arm got
-    // no name; fixed).
+    // `%export let C = inlineComponent(...)` is the author's opt-in to module scope — the export
+    // hoists verbatim. No name-attach (gone with the manifest), no body wrap of any kind.
     let js =
         nota_doc("%export let Card = inlineComponent((children) => @span{@children})\n@Card{hi}\n");
     assert!(js.contains("export let Card = inlineComponent"), "export kept + hoisted: {js}");
-    assert!(js.contains(r#", "Card")"#), "component name passed as 2nd arg: {js}");
-    // No decode wrap is injected into the component body (dead at ▸=true): the expression-
-    // bodied arrow lowers to bare `h("span", …)`, not `decode(h("span", …))`.
-    assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
+    assert!(!js.contains(r#", "Card")"#), "no name-attach — the call is the user's own: {js}");
+    assert!(!js.contains("decode("), "no decode wrap anywhere in the emit: {js}");
 }
 
 #[test]
 fn colon_sugar_inline() {
     // At a markup-body start (a line start) the glued `:` fires: `@foo: …` → `@foo{…}`.
-    nota_expr("@{@foo: hello world}", r#"Fragment(h("foo", {}, ["hello world"]))"#);
+    nota_expr("@{@foo: hello world}", r#"<><foo>{"hello world"}</foo></>"#);
     // Mid-line (NOT a line start) the colon is now DEAD under the positional rule: `@foo`
     // interpolates and `: …` is literal text. (Previously `nota_expr_err("@foo: hello world")` —
     // colon sugar outside a body was a hard diagnostic; the positional rule supersedes that.
     // NB: bare `parse_expression("@foo: hi")` reads one expression and silently *drops* the
     // trailing `: hi` with no error — a pre-existing property of that entry, not colon-specific —
     // so the literal tail is asserted inside a real markup host here.)
-    nota_expr("@{x @foo: hi}", r#"Fragment("x ", foo, ": hi")"#);
+    nota_expr("@{x @foo: hi}", r#"<>{"x "}{foo}{": hi"}</>"#);
 }
 
 // ===============================================================================================
@@ -530,11 +541,11 @@ fn colon_sugar_inline() {
 fn colon_positional_mid_body_is_dead() {
     // Mid markup body (not a line start): `@head:` does NOT sugar — the head interpolates, `: …`
     // is literal. A bare `@Bar` stays a value interpolation (no auto-invocation of a component).
-    nota_expr("@{*foo @Bar: baz*}", r#"Fragment(h("strong", {}, ["foo ", Bar, ": baz"]))"#);
+    nota_expr("@{*foo @Bar: baz*}", r#"<><strong>{"foo "}{Bar}{": baz"}</strong></>"#);
     // Mid-line document text: same rule.
-    nota_expr("@{x @a: y}", r#"Fragment("x ", a, ": y")"#);
+    nota_expr("@{x @a: y}", r#"<>{"x "}{a}{": y"}</>"#);
     assert!(
-        nota_doc("x @a: y\n").contains(r#"Fragment("x ", a, ": y")"#),
+        nota_doc("x @a: y\n").contains(r#"{"x "}{a}{": y"}"#),
         "mid-line document colon is dead",
     );
 }
@@ -542,20 +553,23 @@ fn colon_positional_mid_body_is_dead() {
 #[test]
 fn colon_positional_line_start_fires() {
     // A braced-body start is a line start: the first child's `:` fires.
-    nota_expr("@p{@a: b}", r#"h("p", {}, [h("a", {}, ["b"])])"#);
+    nota_expr("@p{@a: b}", r#"<p><a>{"b"}</a></p>"#);
     // Colon bodies chain: `@b` sits at `@a`'s colon-body start, itself a line start → `a{b{c}}`.
-    nota_expr("@{@a: @b: c}", r#"Fragment(h("a", {}, [h("b", {}, ["c"])]))"#);
+    nota_expr("@{@a: @b: c}", r#"<><a><b>{"c"}</b></a></>"#);
     // The rule is uniform over head shapes: Capitalized (component) and `@(expr)` (dynamic) heads
     // at a line start fire too.
-    assert!(nota_doc("@Cap: hi\n").contains(r#"h(Cap, {}, ["hi"])"#), "Capitalized head fires");
-    assert!(nota_doc("@(t): hi\n").contains(r#"h(t, {}, ["hi"])"#), "dynamic head fires");
+    assert!(nota_doc("@Cap: hi\n").contains(r#"<Cap>{"hi"}</Cap>"#), "Capitalized head fires");
+    assert!(
+        nota_doc("@(t): hi\n").contains(r#"<Dynamic component={t}>{"hi"}</Dynamic>"#),
+        "dynamic head fires"
+    );
 }
 
 #[test]
 fn colon_indented_line_start_in_braced_body_fires() {
     // An indented literal line start inside a braced body is a line start — the colon fires.
     assert!(
-        nota_doc("@p{\n  @a: b\n}\n").contains(r#"h("p", {}, [h("a", {}, ["b"])])"#),
+        nota_doc("@p{\n  @a: b\n}\n").contains(r#"<p><a>{"b"}</a></p>"#),
         "indented line-start colon inside a braced body fires",
     );
 }
@@ -566,14 +580,14 @@ fn colon_bounded_clip_at_range_end() {
     // escape it. `*@a: bar* rest`: the emphasis close `*` clips `@a`'s body to "bar", and " rest"
     // is a sibling of the emphasis. (Previously double-collected — "bar* rest" inside AND " rest"
     // outside; this is the second bug fixed by this change.)
-    nota_expr("@{*@a: bar* rest}", r#"Fragment(h("strong", {}, [h("a", {}, ["bar"])]), " rest")"#);
+    nota_expr("@{*@a: bar* rest}", r#"<><strong><a>{"bar"}</a></strong>{" rest"}</>"#);
     // A heading's colon child is clipped at the heading's line end; the next line is outer text.
     let js = nota_doc("# @a: t\ncont\n");
     assert!(
-        js.contains(r#"h(Heading, { rank: 1 }, [h("a", {}, ["t"])])"#),
+        js.contains(r#"<Heading rank={1}><a>{"t"}</a></Heading>"#),
         "heading colon child clipped at the line end: {js}",
     );
-    assert!(js.contains(r#""cont""#), "the next line is outer text: {js}");
+    assert!(js.contains(r#"{"\ncont"}"#), "the next line is outer text: {js}");
 }
 
 #[test]
@@ -581,10 +595,10 @@ fn colon_hyphen_head_agrees_with_the_gate() {
     // The hyphen extension (`@my-foo`) reads the same gate: a dead (mid-line) colon is not a
     // trigger, so it does not pull `-foo` into the head — `@my` interpolates and `-foo: bar` is
     // literal (NOT `@my-foo{bar}`).
-    nota_expr("@{t @my-foo: bar}", r#"Fragment("t ", my, "-foo: bar")"#);
+    nota_expr("@{t @my-foo: bar}", r#"<>{"t "}{my}{"-foo: bar"}</>"#);
     // At a line start the same head DOES extend and sugar (a hyphenated custom-element tag).
     assert!(
-        nota_doc("@my-foo: bar\n").contains(r#"h("my-foo", {}, ["bar"])"#),
+        nota_doc("@my-foo: bar\n").contains(r#"<my-foo>{"bar"}</my-foo>"#),
         "at a line start the hyphenated head extends and sugars",
     );
 }
@@ -604,15 +618,15 @@ fn colon_body_brace_handling() {
     // A literal `}` in a top-level colon body is content (no enclosing brace to close → no clip); an
     // escaped `\}` is literal too. But colon sugar nested in a braced body clips at the parent's `}`.
     assert!(
-        nota_doc("@def: a } b\n").contains(r#"["a } b"]"#),
+        nota_doc("@def: a } b\n").contains(r#"{"a } b"}"#),
         "literal }} kept in a top-level colon body"
     );
     assert!(
-        nota_doc("@def: a \\} b\n").contains(r#"["a } b"]"#),
+        nota_doc("@def: a \\} b\n").contains(r#"{"a } b"}"#),
         "escaped \\}} is a literal in a colon body"
     );
     assert!(
-        nota_doc("@p{@a: b}\n").contains(r#"h("p", {}, [h("a", {}, ["b"])])"#),
+        nota_doc("@p{@a: b}\n").contains(r#"<p><a>{"b"}</a></p>"#),
         "colon sugar nested in a braced body clips at the parent brace"
     );
 }
@@ -622,10 +636,7 @@ fn colon_body_props_string_brace_does_not_clip() {
     // A `}` inside an `@`-form's props string on the colon line is embedded JS, not markup — the
     // extent scan must not clip the body there (it previously cut mid-string → a fatal lexer
     // error). The depth-0 `}` after it still closes the enclosing braced body.
-    nota_expr(
-        "@p{@a: @f[x: \"}\"] y}",
-        r#"h("p", {}, [h("a", {}, [h("f", { x: "}" }, []), " y"])])"#,
-    );
+    nota_expr("@p{@a: @f[x: \"}\"] y}", r#"<p><a><f x="}" />{" y"}</a></p>"#);
 }
 
 // ===============================================================================================
@@ -667,7 +678,7 @@ fn err_unterminated_fence() {
 fn unknown_component_is_not_a_reader_error() {
     // `@Unknown{}` is valid to the reader (→ `h(Unknown, …)`); the missing binding is a downstream
     // TS scope error, NOT a reader diagnostic.
-    nota_expr("@Unknown{x}", r#"h(Unknown, {}, ["x"])"#);
+    nota_expr("@Unknown{x}", r#"<Unknown>{"x"}</Unknown>"#);
 }
 
 // ===============================================================================================
@@ -678,40 +689,40 @@ fn unknown_component_is_not_a_reader_error() {
 #[test]
 fn if_single_branch() {
     // `@if (c) {a}` → `c ? Fragment("a") : null`.
-    nota_expr("@if (c) {a}", r#"c ? Fragment("a") : null"#);
+    nota_expr("@if (c) {a}", r#"c ? <>{"a"}</> : null"#);
     // Whitespace after `@if` is insignificant (`@if(c)` ≡ `@if (c)`).
-    nota_expr("@if(c){a}", r#"c ? Fragment("a") : null"#);
+    nota_expr("@if(c){a}", r#"c ? <>{"a"}</> : null"#);
 }
 
 #[test]
 fn if_else() {
     // `@if (c) {a} else {b}` → `c ? Fragment("a") : Fragment("b")`.
-    nota_expr("@if (c) {a} else {b}", r#"c ? Fragment("a") : Fragment("b")"#);
+    nota_expr("@if (c) {a} else {b}", r#"c ? <>{"a"}</> : <>{"b"}</>"#);
 }
 
 #[test]
 fn if_else_if() {
     // `@if (c) {a} else if (d) {b}` → nested ternary, `null` when no branch matches.
-    nota_expr("@if (c) {a} else if (d) {b}", r#"c ? Fragment("a") : d ? Fragment("b") : null"#);
+    nota_expr("@if (c) {a} else if (d) {b}", r#"c ? <>{"a"}</> : d ? <>{"b"}</> : null"#);
 }
 
 #[test]
 fn if_else_if_else() {
     nota_expr(
         "@if (c) {a} else if (d) {b} else {e}",
-        r#"c ? Fragment("a") : d ? Fragment("b") : Fragment("e")"#,
+        r#"c ? <>{"a"}</> : d ? <>{"b"}</> : <>{"e"}</>"#,
     );
 }
 
 #[test]
 fn if_branch_with_markup_and_interp() {
     // Branch bodies nest markup and interpolation.
-    nota_expr("@if (c) {Hi @em{@name}}", r#"c ? Fragment("Hi ", h("em", {}, [name])) : null"#);
+    nota_expr("@if (c) {Hi @em{@name}}", r#"c ? <>{"Hi "}<em>{name}</em></> : null"#);
 }
 
 #[test]
 fn if_condition_is_arbitrary_expr() {
-    nota_expr("@if (a && b.c) {x}", r#"a && b.c ? Fragment("x") : null"#);
+    nota_expr("@if (a && b.c) {x}", r#"a && b.c ? <>{"x"}</> : null"#);
 }
 
 #[test]
@@ -719,16 +730,13 @@ fn else_only_continues_as_next_token() {
     // A blank line between `}` and `else` breaks the continuation: the `else` is literal text in the
     // *following* sibling, so the `@if` has a `null` alternate. (Expression mode reads one form, so
     // here we assert the body-nested behavior via a fragment.)
-    nota_expr(
-        "@{@if (c) {a}\n\nelse text}",
-        r#"Fragment(c ? Fragment("a") : null, "\n", "\n", "else text")"#,
-    );
+    nota_expr("@{@if (c) {a}\n\nelse text}", r#"<>{c ? <>{"a"}</> : null}{"\n\nelse text"}</>"#);
 }
 
 #[test]
 fn else_adjacent_continues() {
     // No blank line ⇒ `else` continues even across a single newline.
-    nota_expr("@if (c) {a}\nelse {b}", r#"c ? Fragment("a") : Fragment("b")"#);
+    nota_expr("@if (c) {a}\nelse {b}", r#"c ? <>{"a"}</> : <>{"b"}</>"#);
 }
 
 #[test]
@@ -736,7 +744,7 @@ fn escaped_else_is_literal() {
     // `\else` right after the if-block forces a literal (not a continuation): `@if` keeps a `null`
     // alternate and the `\else` text surfaces in the surrounding body.
     let js = nota_expr_raw("@{@if (c) {a} \\else text}");
-    assert!(js.contains(r#"Fragment("a") : null"#), "if has null alternate: {js}");
+    assert!(js.contains(r#"<>{"a"}</> : null"#), "if has null alternate: {js}");
     assert!(js.contains("else text") || js.contains(r"\else text"), "else text literal: {js}");
 }
 
@@ -745,24 +753,21 @@ fn if_nested_in_for() {
     // Control flow nests: `@for` body contains an `@if`.
     nota_expr(
         "@for (x of xs) {@if (x) {@x}}",
-        r"xs.map((x, _i) => Fragment({ key: _i }, x ? Fragment(x) : null))",
+        "<For each={xs}>{(x) => <>{x ? <>{x}</> : null}</>}</For>",
     );
 }
 
 #[test]
 fn for_basic() {
     // `@for (x of y) {@li{@x}}` → `y.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))`.
-    nota_expr(
-        "@for (x of y) {@li{@x}}",
-        r#"y.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))"#,
-    );
+    nota_expr("@for (x of y) {@li{@x}}", "<For each={y}>{(x) => <><li>{x}</li></>}</For>");
 }
 
 #[test]
 fn for_array_literal_iter() {
     nota_expr(
         r#"@for (x of ["a", "b"]) {@x}"#,
-        r#"["a", "b"].map((x, _i) => Fragment({ key: _i }, x))"#,
+        r#"<For each={["a", "b"]}>{(x) => <>{x}</>}</For>"#,
     );
 }
 
@@ -771,12 +776,9 @@ fn for_destructuring_bind() {
     // `bind` is any binding pattern.
     nota_expr(
         "@for ([k, v] of pairs) {@k = @v}",
-        r#"pairs.map(([k, v], _i) => Fragment({ key: _i }, k, " = ", v))"#,
+        r#"<For each={pairs}>{([k, v]) => <>{k}{" = "}{v}</>}</For>"#,
     );
-    nota_expr(
-        "@for ({ id } of items) {@id}",
-        r"items.map(({ id }, _i) => Fragment({ key: _i }, id))",
-    );
+    nota_expr("@for ({ id } of items) {@id}", "<For each={items}>{({ id }) => <>{id}</>}</For>");
 }
 
 #[test]
@@ -784,7 +786,7 @@ fn for_multi_child_body() {
     // The body's whitespace pass yields multiple children, all spread after the key prop.
     nota_expr(
         "@for (x of xs) {@b{@x} done}",
-        r#"xs.map((x, _i) => Fragment({ key: _i }, h("b", {}, [x]), " done"))"#,
+        r#"<For each={xs}>{(x) => <><b>{x}</b>{" done"}</>}</For>"#,
     );
 }
 
@@ -793,7 +795,7 @@ fn control_flow_nested_in_markup_body() {
     // `@if`/`@for` are expressions, so they sit as children of an element body.
     nota_expr(
         "@ul{@for (x of xs) {@li{@x}}}",
-        r#"h("ul", {}, [xs.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))])"#,
+        "<ul><For each={xs}>{(x) => <><li>{x}</li></>}</For></ul>",
     );
 }
 
@@ -824,44 +826,41 @@ fn err_for_without_body() {
 
 #[test]
 fn emphasis_strong() {
-    nota_expr("@p{*bold*}", r#"h("p", {}, [h("strong", {}, ["bold"])])"#);
+    nota_expr("@p{*bold*}", r#"<p><strong>{"bold"}</strong></p>"#);
 }
 
 #[test]
 fn emphasis_em() {
-    nota_expr("@p{_italic_}", r#"h("p", {}, [h("em", {}, ["italic"])])"#);
+    nota_expr("@p{_italic_}", r#"<p><em>{"italic"}</em></p>"#);
 }
 
 #[test]
 fn emphasis_nested() {
     // `*a _b_ c*` → <strong>a <em>b</em> c</strong>.
-    nota_expr(
-        "@p{*a _b_ c*}",
-        r#"h("p", {}, [h("strong", {}, ["a ", h("em", {}, ["b"]), " c"])])"#,
-    );
+    nota_expr("@p{*a _b_ c*}", r#"<p><strong>{"a "}<em>{"b"}</em>{" c"}</strong></p>"#);
 }
 
 #[test]
 fn emphasis_intra_word_is_literal() {
     // Typst word-boundary rule: intra-word `_`/`*` are literal without escaping.
-    nota_expr("@p{my_var_name}", r#"h("p", {}, ["my_var_name"])"#);
-    nota_expr("@p{a*b*c}", r#"h("p", {}, ["a*b*c"])"#);
+    nota_expr("@p{my_var_name}", r#"<p>{"my_var_name"}</p>"#);
+    nota_expr("@p{a*b*c}", r#"<p>{"a*b*c"}</p>"#);
 }
 
 #[test]
 fn emphasis_with_surrounding_text() {
-    nota_expr("@p{say *hi* there}", r#"h("p", {}, ["say ", h("strong", {}, ["hi"]), " there"])"#);
+    nota_expr("@p{say *hi* there}", r#"<p>{"say "}<strong>{"hi"}</strong>{" there"}</p>"#);
 }
 
 #[test]
 fn emphasis_contains_interpolation() {
-    nota_expr("@p{*@name*}", r#"h("p", {}, [h("strong", {}, [name])])"#);
+    nota_expr("@p{*@name*}", "<p><strong>{name}</strong></p>");
 }
 
 #[test]
 fn emphasis_unbalanced_is_literal() {
     // No matching close before EOF/paragraph end ⇒ the marker is literal (Typst behavior).
-    nota_expr("@p{a * b}", r#"h("p", {}, ["a * b"])"#);
+    nota_expr("@p{a * b}", r#"<p>{"a * b"}</p>"#);
 }
 
 #[test]
@@ -876,7 +875,7 @@ fn escaped_emphasis_marker_is_literal() {
 fn escaped_hash_dash_at_line_start_not_construct() {
     // `\#`/`\-` at line start: the first char is `\`, not the marker, so no heading/list fires.
     let js = nota_doc("\\# not a heading\n\\- not a list\n");
-    assert!(!js.contains("h(Heading"), "no heading: {js}");
+    assert!(!js.contains("<Heading"), "no heading: {js}");
     assert!(!js.contains(r#"h("nota-ul-li""#), "no list: {js}");
 }
 
@@ -884,8 +883,8 @@ fn escaped_hash_dash_at_line_start_not_construct() {
 fn emphasis_at_document_level() {
     // Sugar works at document level too (hooks the same markup machinery).
     let js = nota_doc("Some *bold* and _italic_ text.\n");
-    assert!(js.contains(r#"h("strong", {}, ["bold"])"#), "{js}");
-    assert!(js.contains(r#"h("em", {}, ["italic"])"#), "{js}");
+    assert!(js.contains(r#"<strong>{"bold"}</strong>"#), "{js}");
+    assert!(js.contains(r#"<em>{"italic"}</em>"#), "{js}");
 }
 
 #[test]
@@ -903,14 +902,14 @@ fn emphasis_clamps_at_newline() {
 #[test]
 fn heading_h1() {
     let js = nota_doc("# Title\n");
-    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Title"])"#), "{js}");
+    assert!(js.contains(r#"<Heading rank={1}>{"Title"}</Heading>"#), "{js}");
 }
 
 #[test]
 fn heading_levels() {
     let js = nota_doc("### Sub *bit*\n");
     // `### Sub *bit*` → h(Heading, { rank: 3 }, ["Sub ", h("strong", {}, ["bit"])]).
-    assert!(js.contains(r#"h(Heading, { rank: 3 }, ["Sub ", h("strong", {}, ["bit"])])"#), "{js}");
+    assert!(js.contains(r#"<Heading rank={3}>{"Sub "}<strong>{"bit"}</strong></Heading>"#), "{js}");
 }
 
 #[test]
@@ -918,7 +917,7 @@ fn heading_all_six_levels() {
     let js = nota_doc("# a\n## b\n### c\n#### d\n##### e\n###### f\n");
     for (n, body) in [(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e"), (6, "f")] {
         assert!(
-            js.contains(&format!(r#"h(Heading, {{ rank: {n} }}, ["{body}"])"#)),
+            js.contains(&format!(r#"<Heading rank={{{n}}}>{{"{body}"}}</Heading>"#)),
             "rank {n}: {js}"
         );
     }
@@ -929,14 +928,14 @@ fn heading_seven_hashes_is_not_heading() {
     // 7+ `#` is not a heading (1–6 only); it stays literal text.
     let js = nota_doc("####### too many\n");
     assert!(!js.contains("rank: 7"), "no rank-7 heading: {js}");
-    assert!(!js.contains("h(Heading"), "no heading at all: {js}");
+    assert!(!js.contains("<Heading"), "no heading at all: {js}");
 }
 
 #[test]
 fn hash_without_space_is_literal() {
     // `#tag` (no space after the run) is not a heading.
     let js = nota_doc("#tag here\n");
-    assert!(!js.contains("h(Heading"), "{js}");
+    assert!(!js.contains("<Heading"), "{js}");
 }
 
 #[test]
@@ -945,8 +944,8 @@ fn heading_sugar_relowers_but_raw_element_stays_host() {
     // prelude), but a raw `@hN{…}` element form stays a plain host tag — the unnumbered/un-Toc'd
     // escape hatch. A document mixing both must emit each form distinctly.
     let js = nota_doc("# Sugar\n@h2{Raw}\n");
-    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Sugar"])"#), "sugar → Heading slot: {js}");
-    assert!(js.contains(r#"h("h2", {}, ["Raw"])"#), "raw @h2 stays a host tag: {js}");
+    assert!(js.contains(r#"<Heading rank={1}>{"Sugar"}</Heading>"#), "sugar → Heading slot: {js}");
+    assert!(js.contains(r#"<h2>{"Raw"}</h2>"#), "raw @h2 stays a host tag: {js}");
     assert!(!js.contains(r#"h("h1""#), "sugar does NOT emit a host h1: {js}");
     assert!(!js.contains("rank: 2"), "the raw @h2 carries no rank prop: {js}");
 }
@@ -958,9 +957,12 @@ fn line_start_constructs_resume_after_footnote_def_sugar() {
     // detection there (the `@head:` forms already had the hook; the sugar arm missed it). A
     // heading and a list directly after the definition are sugar, not literal text.
     let js = nota_doc("[^a]: A def.\n\n## After\n\n- item\n");
-    assert!(js.contains(r#"h(FootnoteText, { label: "a" }, ["A def."])"#), "def parses: {js}");
-    assert!(js.contains(r#"h(Heading, { rank: 2 }, ["After"])"#), "heading resumes: {js}");
-    assert!(js.contains(r#"h("nota-ul-li""#), "list resumes: {js}");
+    assert!(
+        js.contains(r#"<FootnoteText label="a">{"A def."}</FootnoteText>"#),
+        "def parses: {js}"
+    );
+    assert!(js.contains(r#"<Heading rank={2}>{"After"}</Heading>"#), "heading resumes: {js}");
+    assert!(js.contains("<UlLi>"), "list resumes: {js}");
     assert!(!js.contains("## After"), "no literal heading text: {js}");
 }
 
@@ -970,33 +972,32 @@ fn line_start_constructs_resume_after_footnote_def_sugar() {
 fn list_bullet() {
     // `- a` → h("nota-ul-li", {}, ["a"]); the runtime struct coalesces runs into <ul>.
     let js = nota_doc("- a\n- b\n");
-    assert!(js.contains(r#"h("nota-ul-li", {}, ["a"])"#), "{js}");
-    assert!(js.contains(r#"h("nota-ul-li", {}, ["b"])"#), "{js}");
+    assert!(js.contains(r#"<UlLi>{"a"}</UlLi>"#), "{js}");
+    assert!(js.contains(r#"<UlLi>{"b"}</UlLi>"#), "{js}");
 }
 
 #[test]
 fn list_number() {
     let js = nota_doc("+ first\n+ second\n");
-    assert!(js.contains(r#"h("nota-ol-li", {}, ["first"])"#), "{js}");
-    assert!(js.contains(r#"h("nota-ol-li", {}, ["second"])"#), "{js}");
+    assert!(js.contains(r#"<OlLi>{"first"}</OlLi>"#), "{js}");
+    assert!(js.contains(r#"<OlLi>{"second"}</OlLi>"#), "{js}");
 }
 
 #[test]
 fn list_explicit_number_marker() {
     // `N.` is an alternate nota-ol-li marker; the written numbers are ignored.
     let js = nota_doc("1. one\n2. two\n");
-    assert!(js.contains(r#"h("nota-ol-li", {}, ["one"])"#), "{js}");
-    assert!(js.contains(r#"h("nota-ol-li", {}, ["two"])"#), "{js}");
+    assert!(js.contains(r#"<OlLi>{"one"}</OlLi>"#), "{js}");
+    assert!(js.contains(r#"<OlLi>{"two"}</OlLi>"#), "{js}");
 }
 
 #[test]
 fn list_item_with_markup() {
     let js = nota_doc("- a *bold* item\n");
-    // Compare modulo formatting (codegen wraps the >2-element array across lines).
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-  return decode(Fragment(h("nota-ul-li", {}, ["a ", h("strong", {}, ["bold"]), " item"])));
+  return <NotaDoc><UlLi>{"a "}<strong>{"bold"}</strong>{" item"}</UlLi></NotaDoc>;
 }"#,
     );
 }
@@ -1007,13 +1008,13 @@ fn list_nested() {
     //   - a
     //     - b
     //     - c
-    // → h("nota-ul-li", {}, ["a", "\n", h("nota-ul-li",{},["b"]), h("nota-ul-li",{},["c"])]); the runtime `struct`
-    // coalesces the inner `nota-ul-li` run into one nested `<ul>`, and `a`'s item carries it.
+    // → <UlLi>{"a\n"}<UlLi>{"b"}</UlLi><UlLi>{"c"}</UlLi></UlLi>; the runtime Reforest pass
+    // coalesces the inner item run into one nested <ul> inside `a`'s item.
     let js = nota_doc("- a\n  - b\n  - c\n");
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-  return decode(Fragment(h("nota-ul-li", {}, ["a", "\n", h("nota-ul-li", {}, ["b"]), h("nota-ul-li", {}, ["c"])])));
+  return <NotaDoc><UlLi>{"a\n"}<UlLi>{"b"}</UlLi><UlLi>{"c"}</UlLi></UlLi></NotaDoc>;
 }"#,
     );
 }
@@ -1025,14 +1026,14 @@ fn list_continuation_line() {
     assert!(js.contains("first line"), "{js}");
     assert!(js.contains("continued"), "{js}");
     // Both are children of the same nota-ul-li (no second nota-ul-li for "continued").
-    assert_eq!(js.matches(r#"h("nota-ul-li""#).count(), 1, "one nota-ul-li only: {js}");
+    assert_eq!(js.matches("<UlLi>").count(), 1, "one UlLi only: {js}");
 }
 
 #[test]
 fn dash_without_space_is_literal() {
     // `-5` (no space) is not a list marker.
     let js = nota_doc("-5 degrees\n");
-    assert!(!js.contains(r#"h("nota-ul-li""#), "{js}");
+    assert!(!js.contains("<UlLi"), "{js}");
 }
 
 #[test]
@@ -1042,20 +1043,20 @@ fn line_start_sugar_chains_after_a_construct() {
     // line-start constructs (each resumes at a line start that may open the next), at the document
     // start and after a `\n` alike.
     assert!(
-        nota_doc("- a\n- b\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        nota_doc("- a\n- b\n# After\n").contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading after a list (at document start)"
     );
     assert!(
-        nota_doc("intro\n- a\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        nota_doc("intro\n- a\n# After\n").contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading after a list (after a paragraph)"
     );
     assert!(
         nota_doc("%%%\nconst x = 1;\n%%%\n# Title\n")
-            .contains(r#"h(Heading, { rank: 1 }, ["Title"])"#),
+            .contains(r#"<Heading rank={1}>{"Title"}</Heading>"#),
         "heading after a %%% fence"
     );
     assert!(
-        nota_doc("%%%\nconst x = 1;\n%%%\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        nota_doc("%%%\nconst x = 1;\n%%%\n- item\n").contains(r#"<UlLi>{"item"}</UlLi>"#),
         "list after a %%% fence"
     );
 }
@@ -1068,20 +1069,22 @@ fn line_start_sugar_after_a_colon_block() {
     // `Kind::At` arm now runs `consume_line_start_constructs` when it resumes at a line start).
     // The mega-test's `## Nested statements` (after the `@section:` block) was the field failure.
     assert!(
-        nota_doc("@section:\n  body\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        nota_doc("@section:\n  body\n# After\n")
+            .contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading right after a block colon body (dedent ends the body)"
     );
     assert!(
-        nota_doc("@summary: inline\n# After\n").contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        nota_doc("@summary: inline\n# After\n")
+            .contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading right after an inline colon body"
     );
     assert!(
         nota_doc("@section:\n  body\n\n# After\n")
-            .contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+            .contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading after a colon body with an intervening blank line"
     );
     assert!(
-        nota_doc("@section:\n  body\n\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        nota_doc("@section:\n  body\n\n- item\n").contains(r#"<UlLi>{"item"}</UlLi>"#),
         "list after a colon body"
     );
     assert!(
@@ -1091,11 +1094,11 @@ fn line_start_sugar_after_a_colon_block() {
     // Blank lines *inside* the indented body still belong to it.
     let js = nota_doc("@section:\n  a\n\n  b\n\n# After\n");
     assert!(
-        js.contains(r#"h(Heading, { rank: 1 }, ["After"])"#),
+        js.contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
         "heading after internal blanks: {js}"
     );
-    assert_eq!(js.matches(r#"h("section""#).count(), 1, "one section only: {js}");
-    assert!(js.contains("\"a\"") && js.contains("\"b\""), "both body lines kept: {js}");
+    assert_eq!(js.matches("<section").count(), 1, "one section only: {js}");
+    assert!(js.contains(r#""a\n\nb""#), "both body lines kept (coalesced): {js}");
 }
 
 #[test]
@@ -1107,31 +1110,31 @@ fn body_start_is_a_line_start() {
     // The motivating case: a single-line fragment body in JS position.
     let js = nota_doc("% let Foo = () => @{- You're beautiful.}\n\n- You don't know\n@Foo{}\n");
     assert!(
-        js.contains(r#"let Foo = () => Fragment(h("nota-ul-li", {}, ["You're beautiful."]))"#),
+        js.contains(r#"let Foo = () => <><UlLi>{"You're beautiful."}</UlLi></>"#),
         "fragment body opening with a list marker: {js}"
     );
 
     // Element bodies — single-line, and multi-line with the closer on the item's line (the
     // latter used to be a hard error: the item's line extent ate the `}`).
     assert!(
-        nota_doc("@div{- a}\n").contains(r#"h("div", {}, [h("nota-ul-li", {}, ["a"])])"#),
+        nota_doc("@div{- a}\n").contains(r#"<div><Reforest><UlLi>{"a"}</UlLi></Reforest></div>"#),
         "single-line body opening with a marker"
     );
     assert!(
-        nota_doc("@div{\n- a\n- b}\n").contains(r#"h("nota-ul-li", {}, ["b"])"#),
+        nota_doc("@div{\n- a\n- b}\n").contains(r#"<UlLi>{"b"}</UlLi>"#),
         "closer on the last item's line"
     );
     // Headings, colon bodies, emphasis bodies.
     assert!(
-        nota_doc("@div{# T}\n").contains(r#"h(Heading, { rank: 1 }, ["T"])"#),
+        nota_doc("@div{# T}\n").contains(r#"<Heading rank={1}>{"T"}</Heading>"#),
         "heading at body start"
     );
     assert!(
-        nota_doc("@foo: - a\n").contains(r#"h("nota-ul-li", {}, ["a"])"#),
+        nota_doc("@foo: - a\n").contains(r#"<UlLi>{"a"}</UlLi>"#),
         "list at a colon body's start"
     );
     assert!(
-        nota_doc("x *- y* z\n").contains(r#"h("strong", {}, [h("nota-ul-li", {}, ["y"])])"#),
+        nota_doc("x *- y* z\n").contains(r#"<strong><UlLi>{"y"}</UlLi></strong>"#),
         "list at an emphasis body's start (clipped at the close marker)"
     );
     // Literal braces in prose do NOT open a body — `{- x}` mid-paragraph stays text.
@@ -1139,7 +1142,7 @@ fn body_start_is_a_line_start() {
     assert!(!js.contains("nota-ul-li"), "literal braces stay prose: {js}");
     // Balanced literal braces inside an armed item stay literal.
     assert!(
-        nota_doc("@div{- a {b} c}\n").contains(r#"["a {b} c"]"#),
+        nota_doc("@div{- a {b} c}\n").contains(r#"{"a {b} c"}"#),
         "balanced braces inside the item"
     );
 }
@@ -1149,23 +1152,20 @@ fn body_start_is_a_line_start() {
 #[test]
 fn docstate_label_row() {
     // Emit-table row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (Typst-minus-period label).
-    nota_expr("@{<sec_intro>}", r#"Fragment(h(Label, { id: "sec_intro" }, []))"#);
+    nota_expr("@{<sec_intro>}", r#"<><Label id="sec_intro" /></>"#);
 }
 
 #[test]
 fn docstate_ref_row() {
     // Emit-table row: `&sec_intro` ≡ `@Ref[id: "sec_intro"]{}`; ends at the first non-ident char.
-    nota_expr(
-        "@{see &sec_intro, ok}",
-        r#"Fragment("see ", h(Ref, { id: "sec_intro" }, []), ", ok")"#,
-    );
+    nota_expr("@{see &sec_intro, ok}", r#"<>{"see "}<Ref id="sec_intro" />{", ok"}</>"#);
 }
 
 #[test]
 fn docstate_footnote_mark_row() {
     // Emit-table row: `[^note1]` ≡ `@FootnoteMark[label: "note1"]{}`; glues after a word
     // (Markdown-style — `[^` needs no left guard).
-    nota_expr("@{text[^note1]}", r#"Fragment("text", h(FootnoteMark, { label: "note1" }, []))"#);
+    nota_expr("@{text[^note1]}", r#"<>{"text"}<FootnoteMark label="note1" /></>"#);
 }
 
 #[test]
@@ -1175,7 +1175,7 @@ fn docstate_footnote_text_row() {
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-            return decode(Fragment(h(FootnoteText, { label: "note1" }, ["See ", h("strong", {}, ["also"]), " now"])));
+            return <NotaDoc><FootnoteText label="note1">{"See "}<strong>{"also"}</strong>{" now"}</FootnoteText></NotaDoc>;
         }"#,
     );
 }
@@ -1184,7 +1184,7 @@ fn docstate_footnote_text_row() {
 fn docstate_footnote_text_is_line_start_only() {
     // Mid-line `[^x]:` is a footnote *mark*; the `:` stays literal (the positional rule).
     let js = nota_doc("see [^x]: here\n");
-    assert!(js.contains(r#"h(FootnoteMark, { label: "x" }, [])"#), "{js}");
+    assert!(js.contains(r#"<FootnoteMark label="x" />"#), "{js}");
     assert!(!js.contains("FootnoteText"), "no definition mid-line: {js}");
     assert!(js.contains(r#"": here""#), "the colon stays literal text: {js}");
 }
@@ -1198,7 +1198,7 @@ fn docstate_footnote_text_colon_extent() {
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-            return decode(Fragment(h(FootnoteText, { label: "n" }, ["first", "\n", "  cont"]), "after para"));
+            return <NotaDoc><FootnoteText label="n">{"first\n  cont"}</FootnoteText>{"after para"}</NotaDoc>;
         }"#,
     );
 }
@@ -1207,7 +1207,7 @@ fn docstate_footnote_text_colon_extent() {
 fn docstate_footnote_text_at_body_start_clips_at_brace() {
     // A braced body's start is a line start, and the colon body clips at the body's `}`.
     let js = nota_expr_raw("@p{[^n]: note}");
-    assert!(js.contains(r#"h(FootnoteText, { label: "n" }, ["note"])"#), "{js}");
+    assert!(js.contains(r#"<FootnoteText label="n">{"note"}</FootnoteText>"#), "{js}");
 }
 
 #[test]
@@ -1216,7 +1216,7 @@ fn docstate_left_boundary_guard_negatives() {
     // opens are literal everywhere: `< b` (space), `<->` (start restriction — `-` not a label-start,
     // so arrow-like prose stays text), `&$x` (`$` is not a label char), `[^ x]` (space).
     let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x, [^ x]\n");
-    for sugar in ["h(Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
+    for sugar in ["<Label", "<Ref", "<FootnoteMark", "<FootnoteText"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
     assert!(
@@ -1229,23 +1229,20 @@ fn docstate_left_boundary_guard_negatives() {
 fn docstate_left_boundary_guard_positives() {
     // Whitespace / opening punctuation (`(`/`[`/`{`/quotes) before the sigil ⇒ fires.
     let js = nota_doc("a (<x>) \"<y>\" '&z' [&w]\n");
-    assert!(js.contains(r#"h(Label, { id: "x" }, [])"#), "{js}");
-    assert!(js.contains(r#"h(Label, { id: "y" }, [])"#), "{js}");
-    assert!(js.contains(r#"h(Ref, { id: "z" }, [])"#), "{js}");
-    assert!(js.contains(r#"h(Ref, { id: "w" }, [])"#), "{js}");
+    assert!(js.contains(r#"<Label id="x" />"#), "{js}");
+    assert!(js.contains(r#"<Label id="y" />"#), "{js}");
+    assert!(js.contains(r#"<Ref id="z" />"#), "{js}");
+    assert!(js.contains(r#"<Ref id="w" />"#), "{js}");
 }
 
 #[test]
 fn docstate_fires_at_body_and_bounded_starts() {
     // A body/range start counts as a line start: emphasis body, braced body, heading body.
-    nota_expr(
-        "@{*<a>* x}",
-        r#"Fragment(h("strong", {}, [h(Label, { id: "a" }, [])]), " x")"#,
-    );
-    nota_expr("@p{<b>}", r#"h("p", {}, [h(Label, { id: "b" }, [])])"#);
+    nota_expr("@{*<a>* x}", r#"<><strong><Label id="a" /></strong>{" x"}</>"#);
+    nota_expr("@p{<b>}", r#"<p><Label id="b" /></p>"#);
     let js = nota_doc("# Intro <sec_intro>\n");
     assert!(
-        js.contains(r#"h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec_intro" }, [])])"#),
+        js.contains(r#"<Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>"#),
         "{js}"
     );
 }
@@ -1257,13 +1254,13 @@ fn docstate_clips_at_bounded_frame_end() {
     // right across the emphasis-closing `_` and glue the `>` beyond it (→ a bogus `Label`); the
     // frame clip stops the label at the close, so the `<abc` stays literal.
     let js = nota_doc("q _<abc_>_\n");
-    assert!(!js.contains("h(Label"), "no label across the frame: {js}");
-    assert!(js.contains(r#"h("em", {}, ["<abc"])"#), "the em body keeps the literal `<abc`: {js}");
+    assert!(!js.contains("<Label"), "no label across the frame: {js}");
+    assert!(js.contains(r#"<em>{"<abc"}</em>"#), "the em body keeps the literal `<abc`: {js}");
 
     // A footnote definition armed at an emphasis body's start clips its colon body at the frame.
     let js = nota_doc("*[^x]: y* z\n");
     assert!(
-        js.contains(r#"h("strong", {}, [h(FootnoteText, { label: "x" }, ["y"])])"#),
+        js.contains(r#"<strong><FootnoteText label="x">{"y"}</FootnoteText></strong>"#),
         "{js}"
     );
     assert!(js.contains(r#"" z""#), "the tail stays outside: {js}");
@@ -1273,7 +1270,7 @@ fn docstate_clips_at_bounded_frame_end() {
 fn docstate_escapes_are_literal() {
     // `\<`, `\&`, `\[` yield the literal characters via the standard escape machinery.
     let js = nota_doc("\\<sec> \\&ref \\[^n]\n");
-    for sugar in ["h(Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
+    for sugar in ["<Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
     assert!(js.contains("<sec> &ref [^n]"), "escapes drop the backslash: {js}");
@@ -1284,43 +1281,43 @@ fn docstate_ident_charset() {
     // Charset is **Typst minus period** (notation.md §Doc-state references): start `[A-Za-z0-9_]`,
     // continue `[A-Za-z0-9_:-]`, ASCII-only. Kebab/namespaced labels work; digits may start; `.`,
     // `$`, and Unicode are NOT label chars.
-    nota_expr("@{<sec_intro_2>}", r#"Fragment(h(Label, { id: "sec_intro_2" }, []))"#);
+    nota_expr("@{<sec_intro_2>}", r#"<><Label id="sec_intro_2" /></>"#);
     // Kebab: `-` joins now (`<sec-intro>` / `&sec-intro` fire — the emit-table rows).
-    nota_expr("@{<sec-intro>}", r#"Fragment(h(Label, { id: "sec-intro" }, []))"#);
-    nota_expr("@{&sec-intro}", r#"Fragment(h(Ref, { id: "sec-intro" }, []))"#);
+    nota_expr("@{<sec-intro>}", r#"<><Label id="sec-intro" /></>"#);
+    nota_expr("@{&sec-intro}", r#"<><Ref id="sec-intro" /></>"#);
     // `:` joins (namespaced labels) — documented behavior; a trailing `-` also glues.
-    nota_expr("@{&ns:x y}", r#"Fragment(h(Ref, { id: "ns:x" }, []), " y")"#);
-    nota_expr("@{&sec- y}", r#"Fragment(h(Ref, { id: "sec-" }, []), " y")"#);
+    nota_expr("@{&ns:x y}", r#"<><Ref id="ns:x" />{" y"}</>"#);
+    nota_expr("@{&sec- y}", r#"<><Ref id="sec-" />{" y"}</>"#);
     // Digits may start a label (Markdown-style): `<1a>` / `&1x` / `[^1]` fire.
-    nota_expr("@{<1a>}", r#"Fragment(h(Label, { id: "1a" }, []))"#);
-    nota_expr("@{&1x y}", r#"Fragment(h(Ref, { id: "1x" }, []), " y")"#);
-    nota_expr("@{[^1]}", r#"Fragment(h(FootnoteMark, { label: "1" }, []))"#);
+    nota_expr("@{<1a>}", r#"<><Label id="1a" /></>"#);
+    nota_expr("@{&1x y}", r#"<><Ref id="1x" />{" y"}</>"#);
+    nota_expr("@{[^1]}", r#"<><FootnoteMark label="1" /></>"#);
     // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."), so a ref never glues sentence
     // punctuation.
-    nota_expr("@{&sec. and}", r#"Fragment(h(Ref, { id: "sec" }, []), ". and")"#);
+    nota_expr("@{&sec. and}", r#"<><Ref id="sec" />{". and"}</>"#);
     // `$` and Unicode are NOT label chars: `&$x` stays literal, and a would-be `<café>` label breaks
     // at `é` (no glued `>`), so the whole `<` stays literal text. (The element forms are
     // charset-free: `@Label[id: "café"]{}` still accepts any string.)
-    nota_expr("@{&$x}", r#"Fragment("&$x")"#);
-    nota_expr("@{<café>}", r#"Fragment("<café>")"#);
-    nota_expr("@{<λ>}", r#"Fragment("<λ>")"#);
+    nota_expr("@{&$x}", r#"<>{"&$x"}</>"#);
+    nota_expr("@{<café>}", r#"<>{"<café>"}</>"#);
+    nota_expr("@{<λ>}", r#"<>{"<λ>"}</>"#);
 }
 
 #[test]
 fn docstate_raw_spans_and_embedded_js_stay_raw() {
     // Inside code/math/verbatim the sugars are raw content (the unified raw-span model —
     // notation.md §Verbatim); inside embedded JS they are JS.
-    nota_expr("@{`a <x> &y [^z]`}", r"Fragment(h(CodeInline, {}, [String.raw`a <x> &y [^z]`]))");
-    nota_expr("@{$m <x> &y$}", r"Fragment(h(Tex, {}, [String.raw`m <x> &y`]))");
-    nota_expr("@code|{<x> &y}|", r#"h("code", {}, [String.raw`<x> &y`])"#);
-    nota_expr("@a[x: 1 < 2, y: p & q]{}", r#"h("a", { x: 1 < 2, y: p & q }, [])"#);
+    nota_expr("@{`a <x> &y [^z]`}", "<><CodeInline>{String.raw`a <x> &y [^z]`}</CodeInline></>");
+    nota_expr("@{$m <x> &y$}", "<><Tex>{String.raw`m <x> &y`}</Tex></>");
+    nota_expr("@code|{<x> &y}|", "<code>{String.raw`<x> &y`}</code>");
+    nota_expr("@a[x: 1 < 2, y: p & q]{}", "<a x={1 < 2} y={p & q} />");
 }
 
 #[test]
 fn docstate_unclosed_label_is_literal() {
     // `<ident` with no `>` on the line stays literal (matching the inline-span line clamp).
     let js = nota_doc("a <abc\nand b> c\n");
-    assert!(!js.contains("h(Label"), "{js}");
+    assert!(!js.contains("<Label"), "{js}");
     assert!(js.contains("a <abc"), "{js}");
 }
 
@@ -1334,14 +1331,7 @@ fn docstate_mixed_document() {
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-            return decode(Fragment(
-                h(Heading, { rank: 1 }, ["Intro ", h(Label, { id: "sec_intro" }, [])]),
-                "\n", "\n",
-                "See ", h(Ref, { id: "sec_intro" }, []),
-                " for Vec<T> and R&D details", h(FootnoteMark, { label: "note1" }, []), ".",
-                "\n", "\n",
-                h(FootnoteText, { label: "note1" }, ["The ", h("strong", {}, ["fine"]), " print."])
-            ));
+            return <NotaDoc><Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>{"\n\nSee "}<Ref id="sec_intro" />{" for Vec<T> and R&D details"}<FootnoteMark label="note1" />{".\n\n"}<FootnoteText label="note1">{"The "}<strong>{"fine"}</strong>{" print."}</FootnoteText></NotaDoc>;
         }"#,
     );
 }
@@ -1357,11 +1347,11 @@ fn percent_statement_region_rules() {
     // `;`-delimited, single newline: the next line is markup — list AND heading (the heading used
     // to die on a stale lexer-lookahead artifact: `#·` is not lexable JS).
     assert!(
-        nota_doc("% const x = 1;\n- item\n").contains(r#"h("nota-ul-li", {}, ["item"])"#),
+        nota_doc("% const x = 1;\n- item\n").contains(r#"<UlLi>{"item"}</UlLi>"#),
         "list after a `;`-delimited statement"
     );
     assert!(
-        nota_doc("% const x = 1;\n# Head\n").contains(r#"h(Heading, { rank: 1 }, ["Head"])"#),
+        nota_doc("% const x = 1;\n# Head\n").contains(r#"<Heading rank={1}>{"Head"}</Heading>"#),
         "heading after a `;`-delimited statement"
     );
 
@@ -1369,9 +1359,9 @@ fn percent_statement_region_rules() {
     // `const x = 1 - item`).
     let js = nota_doc("% const x = 1\n\n- item\n");
     assert!(js.contains("const x = 1;"), "statement ends at the blank line: {js}");
-    assert!(js.contains(r#"h("nota-ul-li", {}, ["item"])"#), "list after the blank line: {js}");
+    assert!(js.contains(r#"<UlLi>{"item"}</UlLi>"#), "list after the blank line: {js}");
     assert!(
-        nota_doc("% const x = 1\n\n# Head\n").contains(r#"h(Heading, { rank: 1 }, ["Head"])"#),
+        nota_doc("% const x = 1\n\n# Head\n").contains(r#"<Heading rank={1}>{"Head"}</Heading>"#),
         "heading after a blank line"
     );
 
@@ -1435,17 +1425,16 @@ fn nota_doc_no_validity(source: &str) -> String {
 const CANONICAL_STAGE3: &str = r#"export default function Doc() {
   let Colorized = inlineComponent((children) => {
     let [color, setColor] = useState("red");
-    return h("span", { onClick: () => setColor("green"), style: { color } }, [children]);
-  }, "Colorized");
-  return decode(Fragment(["a", "b"].map((x, _i) => Fragment({ key: _i }, h("nota-ul-li", {}, [h(Colorized, {}, [x])])))));
+    return <span onClick={() => setColor("green")} style={{ color }}>{children}</span>;
+  });
+  return <NotaDoc><For each={["a", "b"]}>{(x) => <><UlLi><Colorized>{x}</Colorized></UlLi></>}</For></NotaDoc>;
 }"#;
 
 #[test]
 fn canonical_golden_matches_stage3() {
     // THE capstone: stage-1 `.nota` compiles to a module equal (modulo formatting) to stage-3 —
-    // incl. the inline component (document-local binding + name 2nd-arg, no body
-    // decode-wrap), the keyed `Fragment({ key: _i }, …)`, the `["a", "b"].map((x, _i) => …)` loop
-    // lowering, and the `-` → `h("nota-ul-li", …)` list sentinel. Also valid JS (re-parses under
+    // incl. the inline component (a document-local binding, the constructor call untouched),
+    // `@for` → `<For each={…}>`, and the `-` marker → `<UlLi>`. Also valid JSX (re-parses under
     // stock oxc — the validity invariant), now that nothing is un-lowered.
     let js = nota_doc(CANONICAL_NOTA);
     assert_js_eq(&js, CANONICAL_STAGE3);
@@ -1463,11 +1452,10 @@ fn canonical_golden_minus_phase_d_is_valid() {
 ";
     let js = nota_doc(src); // asserts validity (re-parses under stock oxc)
     assert!(js.contains(r"inlineComponent((children) => {"), "{js}");
-    // The component body's return is NOT decode-wrapped (dead at ▸=true).
-    assert!(js.contains(r#"return h("span", { style: { color } }, [children]);"#), "{js}");
-    assert!(!js.contains(r#"decode(h("span""#), "no body decode-wrap: {js}");
-    assert!(js.contains(r#", "Colorized")"#), "component name: {js}");
-    assert!(js.contains(r#"h(Colorized, {}, ["a"])"#), "component use: {js}");
+    assert!(js.contains(r#"return <span style={{ color }}>{children}</span>;"#), "{js}");
+    assert!(!js.contains("decode("), "no decode wrap anywhere: {js}");
+    assert!(!js.contains(r#", "Colorized")"#), "no name-attach: {js}");
+    assert!(js.contains(r#"<Colorized>{"a"}</Colorized>"#), "component use: {js}");
     // The binding is document-local — not exported, inside Doc.
     assert!(!js.contains("export let Colorized"), "not exported: {js}");
 }
@@ -1485,7 +1473,7 @@ fn doc_backslash_percent_line_start_not_statement() {
     let js = nota_doc_no_validity("\\% literal\n");
     // It is treated as markup text (a `%` statement would have hoisted/prepended a JS statement).
     assert!(!js.contains("export let"), "should not be hoisted as a component: {js}");
-    assert!(js.contains("Fragment("), "{js}");
+    assert!(js.contains("<NotaDoc>"), "{js}");
 }
 
 #[test]
@@ -1495,7 +1483,7 @@ fn nested_percent_statement_wraps_rest_in_iife() {
     // The IIFE: `(() => { const n = count(); return Fragment(...); })()`
     assert!(js.contains("const n = count();"), "{js}");
     assert!(js.contains("=> {"), "IIFE present: {js}");
-    assert!(js.contains("return Fragment("), "IIFE returns a Fragment: {js}");
+    assert!(js.contains("return <>"), "IIFE returns a fragment: {js}");
     // "Intro." is a sibling BEFORE the `%`, so it stays outside the IIFE. (A pre-existing 1-space
     // leftover indent now joins it as " Intro." since kept indent merges with its line's content.)
     assert!(js.contains("Intro."), "Intro. stays outside the IIFE: {js}");
@@ -1503,11 +1491,10 @@ fn nested_percent_statement_wraps_rest_in_iife() {
 
 #[test]
 fn doc_paragraph_break_is_double_newline() {
-    // End-to-end: a blank line between two top-level paragraphs surfaces as ≥2 adjacent "\n"
-    // (the runtime's paragraph-break marker `/\n[^\S\n]*\n/`), never coalesced.
+    // End-to-end: a blank line between two top-level paragraphs surfaces as `"\n\n"` INSIDE one
+    // coalesced text child — Reforest's paragraph-break marker (design/solid.md).
     let js = nota_doc("@p{one}\n\n@p{two}\n");
-    // Between the two `h("p", …)` there must be at least two "\n" string children.
-    assert!(js.contains(r#""\n", "\n""#), "expected adjacent newlines for the para break: {js}");
+    assert!(js.contains(r#"{"\n\n"}"#), "expected the coalesced para-break marker: {js}");
 }
 
 // ===============================================================================================
@@ -1522,27 +1509,27 @@ fn doc_paragraph_break_is_double_newline() {
 #[test]
 fn escape_general_chars_literal_backslash_dropped() {
     // `\<c>` → literal `<c>`, the backslash dropped. `@ { } * _ $ : [ ] | and \\` all escapable.
-    nota_expr(r"@p{\@}", r#"h("p", {}, ["@"])"#);
-    nota_expr(r"@p{\{}", r#"h("p", {}, ["{"])"#);
-    nota_expr(r"@p{\}}", r#"h("p", {}, ["}"])"#);
-    nota_expr(r"@p{\$}", r#"h("p", {}, ["$"])"#);
-    nota_expr(r"@p{\|}", r#"h("p", {}, ["|"])"#);
-    nota_expr(r"@p{a\\b}", r#"h("p", {}, ["a\\b"])"#); // `\\` → one literal backslash
+    nota_expr(r"@p{\@}", r#"<p>{"@"}</p>"#);
+    nota_expr(r"@p{\{}", r#"<p>{"{"}</p>"#);
+    nota_expr(r"@p{\}}", r#"<p>{"}"}</p>"#);
+    nota_expr(r"@p{\$}", r#"<p>{"$"}</p>"#);
+    nota_expr(r"@p{\|}", r#"<p>{"|"}</p>"#);
+    nota_expr(r"@p{a\\b}", r#"<p>{"a\\b"}</p>"#); // `\\` → one literal backslash
 }
 
 #[test]
 fn escape_star_keeps_literal_no_marker() {
     // `\*` is the literal `*` (NOT emphasis, and the backslash is dropped).
     // Two escaped markers → two literal stars, no `<strong>`.
-    nota_expr(r"@p{\*hi\*}", r#"h("p", {}, ["*hi*"])"#);
-    nota_expr(r"@p{a \_b\_ c}", r#"h("p", {}, ["a _b_ c"])"#);
+    nota_expr(r"@p{\*hi\*}", r#"<p>{"*hi*"}</p>"#);
+    nota_expr(r"@p{a \_b\_ c}", r#"<p>{"a _b_ c"}</p>"#);
 }
 
 #[test]
 fn escape_backtick_and_at_in_prose() {
     // `\@`/`` \` `` keep their char literal, backslash dropped (so prose can mention `@foo` literally).
-    nota_expr(r"@p{see \@foo}", r#"h("p", {}, ["see @foo"])"#);
-    nota_expr(r"@p{a \` b}", r#"h("p", {}, ["a ` b"])"#);
+    nota_expr(r"@p{see \@foo}", r#"<p>{"see @foo"}</p>"#);
+    nota_expr(r"@p{a \` b}", r#"<p>{"a ` b"}</p>"#);
 }
 
 // --- Verbatim `|{ … }|` ------------------------------------------------------------------------
@@ -1551,13 +1538,13 @@ fn escape_backtick_and_at_in_prose() {
 fn verbatim_raw_body() {
     // `@code|{@foo{x}}|` → `h("code", {}, [String.raw`@foo{x}`])`. Sigils off, braces literal —
     // `@foo{x}` is raw text, NOT a child.
-    nota_expr(r"@code|{@foo{x}}|", r#"h("code", {}, [String.raw`@foo{x}`])"#);
+    nota_expr(r"@code|{@foo{x}}|", "<code>{String.raw`@foo{x}`}</code>");
 }
 
 #[test]
 fn verbatim_keeps_backslash_and_braces() {
     // Raw: backslashes and braces survive verbatim into the `String.raw`.
-    nota_expr(r"@code|{a\b {c} d}|", r#"h("code", {}, [String.raw`a\b {c} d`])"#);
+    nota_expr(r"@code|{a\b {c} d}|", r#"<code>{String.raw`a\b {c} d`}</code>"#);
 }
 
 #[test]
@@ -1565,7 +1552,11 @@ fn verbatim_armed_reentry() {
     // Multi-line verbatim: `|@` splits a raw run and a Nota child. The newline right after `|{` and
     // right before `}|` are dropped (the brace rule); the interior `\n` + 4-space indent survive raw.
     let src = "@code|{\ndef f(x):\n    return |@hl{x}\n}|";
-    nota_expr(src, "h(\"code\", {}, [String.raw`def f(x):\n    return `, h(\"hl\", {}, [\"x\"])])");
+    nota_expr(
+        src,
+        r#"<code>{String.raw`def f(x):
+    return `}<hl>{"x"}</hl></code>"#,
+    );
 }
 
 #[test]
@@ -1576,34 +1567,34 @@ fn verbatim_armed_then_following_content() {
     // verbatim. The exit now resumes via `resume_past_park_at` (guarding on `fatal_error` only,
     // like code/math spans). All content following the armed verbatim must survive.
     let js = nota_doc("## one\n\n@pre|{\nx |@name y\n}|\n\n## two\n");
-    assert!(js.contains(r#"h(Heading, { rank: 2 }, ["one"])"#), "heading before: {js}");
+    assert!(js.contains(r#"<Heading rank={2}>{"one"}</Heading>"#), "heading before: {js}");
     assert!(js.contains("String.raw`x `"), "armed verbatim parts: {js}");
     assert!(
-        js.contains(r#"h(Heading, { rank: 2 }, ["two"])"#),
+        js.contains(r#"<Heading rank={2}>{"two"}</Heading>"#),
         "heading AFTER the armed verbatim: {js}"
     );
     // Same shape with an armed *element* part and inline (single-line) geometry.
     let js = nota_doc("@pre|{ |@b{c} }|\ntail text\n");
-    assert!(js.contains(r#"h("b", {}, ["c"])"#), "armed element part: {js}");
+    assert!(js.contains(r#"<b>{"c"}</b>"#), "armed element part: {js}");
     assert!(js.contains("tail text"), "text after the inline armed verbatim: {js}");
 }
 
 #[test]
 fn verbatim_component_tag() {
     // A verbatim body on a component tag.
-    nota_expr(r"@Pre|{x@y}|", r"h(Pre, {}, [String.raw`x@y`])");
+    nota_expr(r"@Pre|{x@y}|", "<Pre>{String.raw`x@y`}</Pre>");
 }
 
 #[test]
 fn verbatim_braces_literal_not_close() {
     // A bare `}` (not `}|`) is literal raw content; only `}|` closes.
-    nota_expr(r"@code|{ {a} {b} }|", r#"h("code", {}, [String.raw` {a} {b} `])"#);
+    nota_expr(r"@code|{ {a} {b} }|", "<code>{String.raw` {a} {b} `}</code>");
 }
 
 #[test]
 fn verbatim_armed_interpolation() {
     // `|@name` re-arms an *interpolation* (not just elements) as a sibling child.
-    nota_expr(r"@code|{a|@x b}|", r#"h("code", {}, [String.raw`a`, x, String.raw` b`])"#);
+    nota_expr(r"@code|{a|@x b}|", "<code>{String.raw`a`}{x}{String.raw` b`}</code>");
 }
 
 // --- Inline & fenced code ---------------------------------------------------------------------
@@ -1611,19 +1602,19 @@ fn verbatim_armed_interpolation() {
 #[test]
 fn code_inline() {
     // `` `@x` `` → `h(CodeInline, {}, [String.raw`@x`])`. Fully raw (the `@` is literal).
-    nota_expr("@p{`@x`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`@x`])])"#);
-    nota_expr("@p{`a + b`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`a + b`])])"#);
+    nota_expr("@p{`@x`}", "<p><CodeInline>{String.raw`@x`}</CodeInline></p>");
+    nota_expr("@p{`a + b`}", "<p><CodeInline>{String.raw`a + b`}</CodeInline></p>");
 }
 
 #[test]
 fn code_inline_keeps_backslash() {
-    nota_expr(r"@p{`a\n`}", r#"h("p", {}, [h(CodeInline, {}, [String.raw`a\n`])])"#);
+    nota_expr(r"@p{`a\n`}", r#"<p><CodeInline>{String.raw`a\n`}</CodeInline></p>"#);
 }
 
 #[test]
 fn code_inline_unterminated_is_literal() {
     // A backtick with no close is literal text.
-    nota_expr("@p{a ` b}", r#"h("p", {}, ["a ` b"])"#);
+    nota_expr("@p{a ` b}", r#"<p>{"a ` b"}</p>"#);
 }
 
 #[test]
@@ -1632,27 +1623,31 @@ fn code_inline_clamps_at_newline() {
     // `- `foo⏎- bar` is two bullets with literal backticks, not one bullet with a code span.
     let js = nota_doc("- `foo\n- bar`\n");
     assert!(!js.contains("CodeInline"), "no code span across lines: {js}");
-    assert!(js.contains(r#"h("nota-ul-li", {}, ["`foo"])"#), "{js}");
-    assert!(js.contains(r#"h("nota-ul-li", {}, ["bar`"])"#), "{js}");
+    assert!(js.contains(r#"<UlLi>{"`foo"}</UlLi>"#), "{js}");
+    assert!(js.contains(r#"<UlLi>{"bar`"}</UlLi>"#), "{js}");
 }
 
 #[test]
 fn code_fenced_with_lang() {
     // ```` ```python⏎f(x)⏎``` ```` → `h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])`.
     let src = "@d{```python\nf(x)\n```}";
-    nota_expr(src, r#"h("d", {}, [h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])])"#);
+    nota_expr(src, r#"<d><CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock></d>"#);
 }
 
 #[test]
 fn code_fenced_no_lang() {
     let src = "@d{```\nf(x)\n```}";
-    nota_expr(src, r#"h("d", {}, [h(CodeBlock, {}, [String.raw`f(x)`])])"#);
+    nota_expr(src, "<d><CodeBlock>{String.raw`f(x)`}</CodeBlock></d>");
 }
 
 #[test]
 fn code_fenced_multiline_body() {
     let src = "@d{```\nline 1\nline 2\n```}";
-    nota_expr(src, "h(\"d\", {}, [h(CodeBlock, {}, [String.raw`line 1\nline 2`])])");
+    nota_expr(
+        src,
+        "<d><CodeBlock>{String.raw`line 1
+line 2`}</CodeBlock></d>",
+    );
 }
 
 #[test]
@@ -1661,7 +1656,7 @@ fn code_inline_armed_form() {
     // `String.raw` (a bare `@` is literal — see `code_inline`).
     nota_expr(
         "@p{`a |@em{x} b`}",
-        r#"h("p", {}, [h(CodeInline, {}, [String.raw`a `, h("em", {}, ["x"]), String.raw` b`])])"#,
+        r#"<p><CodeInline>{String.raw`a `}<em>{"x"}</em>{String.raw` b`}</CodeInline></p>"#,
     );
 }
 
@@ -1669,44 +1664,41 @@ fn code_inline_armed_form() {
 fn code_fenced_armed_on_body_line() {
     // A `|@` on a fenced-code body line arms a sibling form; the language tag stays.
     let src = "@d{```python\ndef |@f{g}\n```}";
-    nota_expr(
-        src,
-        r#"h("d", {}, [h(CodeBlock, { lang: "python" }, [String.raw`def `, h("f", {}, ["g"])])])"#,
-    );
+    nota_expr(src, r#"<d><CodeBlock lang="python">{String.raw`def `}<f>{"g"}</f></CodeBlock></d>"#);
 }
 
 // --- Math --------------------------------------------------------------------------------------
 
 #[test]
 fn math_inline_plain() {
-    nota_expr(r"@p{$x^2$}", r#"h("p", {}, [h(Tex, {}, [String.raw`x^2`])])"#);
+    nota_expr(r"@p{$x^2$}", "<p><Tex>{String.raw`x^2`}</Tex></p>");
 }
 
 #[test]
 fn math_inline_at_is_literal() {
     // A bare `@` in math is raw text now (no direct interpolation); `$E = @energy$` is fully
     // literal content.
-    nota_expr(r"@p{$a_@i$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a_@i`])])"#);
-    nota_expr(r"@p{$E = @energy$}", r#"h("p", {}, [h(Tex, {}, [String.raw`E = @energy`])])"#);
+    nota_expr(r"@p{$a_@i$}", "<p><Tex>{String.raw`a_@i`}</Tex></p>");
+    nota_expr(r"@p{$E = @energy$}", "<p><Tex>{String.raw`E = @energy`}</Tex></p>");
 }
 
 #[test]
 fn math_inline_armed_interp() {
     // Only `|@` arms an interpolation, spliced as a sibling part (the raw runs stay `String.raw`).
-    nota_expr(r"@p{$a_|@i$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a_`, i])])"#);
-    nota_expr(r"@p{$E = |@energy$}", r#"h("p", {}, [h(Tex, {}, [String.raw`E = `, energy])])"#);
+    nota_expr(r"@p{$a_|@i$}", "<p><Tex>{String.raw`a_`}{i}</Tex></p>");
+    nota_expr(r"@p{$E = |@energy$}", "<p><Tex>{String.raw`E = `}{energy}</Tex></p>");
 }
 
 #[test]
 fn math_keeps_latex_backslash() {
     // `\sum` survives; `\@` keeps its backslash (the `@` is literal raw text regardless).
-    nota_expr(r"@p{$\sum x$}", r#"h("p", {}, [h(Tex, {}, [String.raw`\sum x`])])"#);
-    nota_expr(r"@p{$a \@ b$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a \@ b`])])"#);
+    nota_expr(r"@p{$\sum x$}", r#"<p><Tex>{String.raw`\sum x`}</Tex></p>"#);
+    nota_expr(r"@p{$a \@ b$}", r#"<p><Tex>{String.raw`a \@ b`}</Tex></p>"#);
     // The TeX exception: the dollar close scan skips `\<c>` pairs, so `\$` stays content and the
     // span closes at the real (unescaped) terminator — the one place dollar and backtick diverge.
-    nota_expr(r"@p{$a \$ b$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a \$ b`])])"#);
+    nota_expr(r"@p{$a \$ b$}", r#"<p><Tex>{String.raw`a \$ b`}</Tex></p>"#);
     // A `\$` right before the real close: the escaped `$` is content, the next `$` closes.
-    nota_expr(r"@p{$x\$$}", r#"h("p", {}, [h(Tex, {}, [String.raw`x\$`])])"#);
+    nota_expr(r"@p{$x\$$}", r#"<p><Tex>{String.raw`x\$`}</Tex></p>"#);
 }
 
 #[test]
@@ -1714,40 +1706,34 @@ fn math_display_fence() {
     // Display math is the fence form: a standalone `$$` line, TeX body lines, a closing `$$` line.
     // The body between the fences is the raw content (leading/trailing fence lines dropped).
     let src = "@p{$$\n\\sum x\n$$}";
-    nota_expr(src, "h(\"p\", {}, [h(Tex, { display: true }, [String.raw`\\sum x`])])");
+    nota_expr(src, r#"<p><Tex display>{String.raw`\sum x`}</Tex></p>"#);
     // `|@` arms an interpolation inside the fence body.
     let src = "@p{$$\n\\sum_|@n x\n$$}";
-    nota_expr(
-        src,
-        "h(\"p\", {}, [h(Tex, { display: true }, [String.raw`\\sum_`, n, String.raw` x`])])",
-    );
+    nota_expr(src, r#"<p><Tex display>{String.raw`\sum_`}{n}{String.raw` x`}</Tex></p>"#);
 }
 
 #[test]
 fn math_dollar_dollar_in_paragraph_is_inline_run2() {
     // `$$x^2$$` in a paragraph is now INLINE math with run-2 delimiters (a nonempty opener-line
     // tail forbids the fence) and NO display prop. Display math is exactly the standalone fence.
-    nota_expr(r"@p{$$x^2$$}", r#"h("p", {}, [h(Tex, {}, [String.raw`x^2`])])"#);
+    nota_expr(r"@p{$$x^2$$}", "<p><Tex>{String.raw`x^2`}</Tex></p>");
     // A single `$` inside a run-2 span is literal content (mirrors the backtick fence-length rule).
-    nota_expr(r"@p{$$a$b$$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a$b`])])"#);
+    nota_expr(r"@p{$$a$b$$}", "<p><Tex>{String.raw`a$b`}</Tex></p>");
 }
 
 #[test]
 fn math_run_length_ge_rule() {
     // Mirrors the backtick `≥`-rule: a run of 1 opens and closes at the FIRST `$` of the next
     // `≥1` run, resuming past ONE `$`. So `$a$$b$` is TWO inline spans (`a` then `b`), not one.
-    nota_expr(
-        r"@p{$a$$b$}",
-        r#"h("p", {}, [h(Tex, {}, [String.raw`a`]), h(Tex, {}, [String.raw`b`])])"#,
-    );
+    nota_expr(r"@p{$a$$b$}", "<p><Tex>{String.raw`a`}</Tex><Tex>{String.raw`b`}</Tex></p>");
     // `$$a$$` inline is run-2 (already covered above); here the run-2 opener/closer over `a`.
-    nota_expr(r"@p{$$a$$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a`])])"#);
+    nota_expr(r"@p{$$a$$}", "<p><Tex>{String.raw`a`}</Tex></p>");
 }
 
 #[test]
 fn math_armed_paren_expr() {
     // `|@(expr)` arms a parenthesized-expression interpolation.
-    nota_expr(r"@p{$a_|@(i + 1)$}", r#"h("p", {}, [h(Tex, {}, [String.raw`a_`, i + 1])])"#);
+    nota_expr(r"@p{$a_|@(i + 1)$}", "<p><Tex>{String.raw`a_`}{i + 1}</Tex></p>");
 }
 
 #[test]
@@ -1757,12 +1743,12 @@ fn math_armed_interp_with_template_breaker_falls_back_to_cooked() {
     // while the armed interpolation stays a sibling part.
     let js = nota_expr_raw("@p{$a`b_|@i$}");
     assert!(!js.contains("String.raw`a`b_`"), "breaker run must not use String.raw: {js}");
-    assert_js_eq(&js, r#"h("p", {}, [h(Tex, {}, ["a`b_", i])])"#);
+    assert_js_eq(&js, r#"<p><Tex>{"a`b_"}{i}</Tex></p>"#);
 }
 
 #[test]
 fn dollar_unterminated_is_literal() {
-    nota_expr(r"@p{costs $5 today}", r#"h("p", {}, ["costs $5 today"])"#);
+    nota_expr(r"@p{costs $5 today}", r#"<p>{"costs $5 today"}</p>"#);
 }
 
 #[test]
@@ -1770,7 +1756,7 @@ fn math_inline_clamps_at_newline() {
     // Inline `$` never crosses a newline; both dollars stay literal. (Display `$$` is multi-line
     // by design — see math_display_interp.)
     let js = nota_doc("$a\nb$\n");
-    assert!(!js.contains("h(Tex"), "no cross-line inline math: {js}");
+    assert!(!js.contains("<Tex"), "no cross-line inline math: {js}");
     assert!(js.contains("$a"), "opener literal: {js}");
 }
 
@@ -1778,10 +1764,10 @@ fn math_inline_clamps_at_newline() {
 fn escape_full_list() {
     // The whole backslash-escape list: `` \@ \{ \} \| \$ \* \_ \: \[ \] \` `` and `\\`.
     // Each → its literal char, backslash dropped.
-    nota_expr(r"@p{\:}", r#"h("p", {}, [":"])"#);
-    nota_expr(r"@p{\[}", r#"h("p", {}, ["["])"#);
-    nota_expr(r"@p{\]}", r#"h("p", {}, ["]"])"#);
-    nota_expr(r"@p{\_}", r#"h("p", {}, ["_"])"#);
+    nota_expr(r"@p{\:}", r#"<p>{":"}</p>"#);
+    nota_expr(r"@p{\[}", r#"<p>{"["}</p>"#);
+    nota_expr(r"@p{\]}", r#"<p>{"]"}</p>"#);
+    nota_expr(r"@p{\_}", r#"<p>{"_"}</p>"#);
 }
 
 #[test]
@@ -1790,7 +1776,7 @@ fn escape_colon_in_body_is_literal() {
     // — making `@foo` interpolate before a literal `:` — is a known gap: the JS lexer eats the `\`
     // right after a bare-identifier head. That is separate from the general body escape exercised
     // here. Body-position `\:` works.)
-    nota_expr(r"@p{a\: b}", r#"h("p", {}, ["a: b"])"#);
+    nota_expr(r"@p{a\: b}", r#"<p>{"a: b"}</p>"#);
 }
 
 #[test]
@@ -1816,7 +1802,7 @@ fn math_dollar_brace_validity() {
     // A literal `${` in LaTeX would open a template substitution; codegen escapes it (`\${`) to keep
     // the template valid JS. Validity invariant is the assertion (inside nota_expr_raw).
     let js = nota_expr_raw(r"@p{$a ${b}$}");
-    assert!(js.contains("h(Tex"), "{js}");
+    assert!(js.contains("<Tex"), "{js}");
 }
 
 // --- Document-mode raw spans (the sugar machinery hooks the document body too) -----------------
@@ -1826,7 +1812,7 @@ fn doc_fenced_code_block() {
     // A fenced block at document level → `h(CodeBlock, { lang }, [String.raw`…`])`.
     let js = nota_doc("```python\nf(x)\n```\n");
     assert!(
-        js.contains(r#"h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])"#),
+        js.contains(r#"<CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock>"#),
         "fenced block at doc level: {js}"
     );
 }
@@ -1834,23 +1820,25 @@ fn doc_fenced_code_block() {
 #[test]
 fn doc_inline_code_and_math() {
     let js = nota_doc("Use `f(x)` and $x^2$ here.\n");
-    assert!(js.contains(r"h(CodeInline, {}, [String.raw`f(x)`])"), "{js}");
-    assert!(js.contains(r"h(Tex, {}, [String.raw`x^2`])"), "{js}");
+    assert!(js.contains(r"<CodeInline>{String.raw`f(x)`}</CodeInline>"), "{js}");
+    assert!(js.contains(r"<Tex>{String.raw`x^2`}</Tex>"), "{js}");
 }
 
 #[test]
 fn doc_verbatim_block() {
     let js = nota_doc("@code|{@raw{stuff}}|\n");
-    assert!(js.contains(r#"h("code", {}, [String.raw`@raw{stuff}`])"#), "{js}");
+    assert!(js.contains("<code>{String.raw`@raw{stuff}`}</code>"), "{js}");
 }
 
 #[test]
 fn doc_escape_line_start_percent_and_hash() {
     // `\%`/`\#` at line start: the `\` is dropped, the char is literal (no statement / no heading).
     let js = nota_doc("\\% not a statement\n\\# not a heading\n");
-    assert!(!js.contains("export let") && !js.contains("h(Heading"), "{js}");
-    assert!(js.contains(r#""% not a statement""#), "literal %: {js}");
-    assert!(js.contains(r##""# not a heading""##), "literal #: {js}");
+    assert!(!js.contains("export let") && !js.contains("<Heading"), "{js}");
+    assert!(
+        js.contains(r##""% not a statement\n# not a heading""##),
+        "literal % and # in one coalesced text: {js}"
+    );
 }
 
 #[test]
@@ -1858,7 +1846,7 @@ fn code_and_math_nest_in_emphasis() {
     // Raw spans nest inside emphasis bodies (the byte-peek arms are wired into all three collectors).
     nota_expr(
         "@p{*see `x`*}",
-        r#"h("p", {}, [h("strong", {}, ["see ", h(CodeInline, {}, [String.raw`x`])])])"#,
+        r#"<p><strong>{"see "}<CodeInline>{String.raw`x`}</CodeInline></strong></p>"#,
     );
 }
 
@@ -1866,8 +1854,8 @@ fn code_and_math_nest_in_emphasis() {
 fn verbatim_in_list_item() {
     // A verbatim/code span inside a list-item body (block-body collector).
     let js = nota_doc("- item with `code`\n");
-    assert!(js.contains(r"h(CodeInline, {}, [String.raw`code`])"), "{js}");
-    assert!(js.contains(r#"h("nota-ul-li""#), "{js}");
+    assert!(js.contains(r"<CodeInline>{String.raw`code`}</CodeInline>"), "{js}");
+    assert!(js.contains("<UlLi>"), "{js}");
 }
 
 #[test]
@@ -1894,13 +1882,10 @@ fn emphasis_close_skips_raw_spans() {
     // marker-valid candidate, which a naive scan would (wrongly) take as the close.
     nota_expr(
         "@p{*a `b * c` d*}",
-        r#"h("p", {}, [h("strong", {}, ["a ", h(CodeInline, {}, [String.raw`b * c`]), " d"])])"#,
+        r#"<p><strong>{"a "}<CodeInline>{String.raw`b * c`}</CodeInline>{" d"}</strong></p>"#,
     );
     // Math `$…$` containing a `_` (LaTeX subscript) inside `_emph_`.
-    nota_expr(
-        "@p{_x $a_b$ y_}",
-        r#"h("p", {}, [h("em", {}, ["x ", h(Tex, {}, [String.raw`a_b`]), " y"])])"#,
-    );
+    nota_expr("@p{_x $a_b$ y_}", r#"<p><em>{"x "}<Tex>{String.raw`a_b`}</Tex>{" y"}</em></p>"#);
 }
 
 #[test]
@@ -1910,9 +1895,9 @@ fn emphasis_close_skips_embedded_expression() {
     // same way it steps over raw spans. Adversarial: spaces around the inner `*` make it a
     // marker-valid candidate that a naive scan (with no `@` arm) wrongly takes as the close, leaking
     // the rest of the line (` y) b*`) as literal text.
-    nota_expr("@p{*a @(x * y) b*}", r#"h("p", {}, [h("strong", {}, ["a ", x * y, " b"])])"#);
+    nota_expr("@p{*a @(x * y) b*}", r#"<p><strong>{"a "}{x * y}{" b"}</strong></p>"#);
     // Underscore emphasis with a `_` inside the embedded expression.
-    nota_expr("@p{_a @(b_c) d_}", r#"h("p", {}, [h("em", {}, ["a ", b_c, " d"])])"#);
+    nota_expr("@p{_a @(b_c) d_}", r#"<p><em>{"a "}{b_c}{" d"}</em></p>"#);
 }
 
 #[test]
@@ -1943,13 +1928,16 @@ fn id(x: i32) -> i32 { x }
 @figure|{verbatim @keep{raw}}|
 ";
     let js = nota_doc(src);
-    assert!(js.contains(r#"h(Heading, { rank: 1 }, ["Demo"])"#), "heading: {js}");
-    assert!(js.contains(r"h(CodeInline, {}, [String.raw`id`])"), "inline code: {js}");
+    assert!(js.contains(r#"<Heading rank={1}>{"Demo"}</Heading>"#), "heading: {js}");
+    assert!(js.contains(r"<CodeInline>{String.raw`id`}</CodeInline>"), "inline code: {js}");
     // Math `|@i` arms an interpolation as a sibling part (a bare `@` would be literal now).
-    assert!(js.contains(r"h(Tex, {}, [String.raw`a_`, i])"), "math armed interp: {js}");
+    assert!(js.contains(r"<Tex>{String.raw`a_`}{i}</Tex>"), "math armed interp: {js}");
     assert!(js.contains("cost is $5 and"), "escaped dollar → literal `$` in prose: {js}");
-    assert!(js.contains(r#"h(CodeBlock, { lang: "rust" }"#), "fenced: {js}");
-    assert!(js.contains(r#"h("figure", {}, [String.raw`verbatim @keep{raw}`])"#), "verbatim: {js}");
+    assert!(js.contains(r#"<CodeBlock lang="rust">"#), "fenced: {js}");
+    assert!(
+        js.contains(r"<figure><Reforest>{String.raw`verbatim @keep{raw}`}</Reforest></figure>"),
+        "verbatim: {js}"
+    );
 }
 
 // ===============================================================================================
@@ -1990,7 +1978,8 @@ mod fuzz_findings {
     /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
     fn reparses(js: &str) -> bool {
         let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+        let source_type = SourceType::default().with_module(true).with_jsx(true);
+        let ret = Parser::new(&allocator, js, source_type).parse();
         !ret.panicked && ret.errors.is_empty()
     }
 
@@ -2054,7 +2043,7 @@ mod fuzz_findings {
     fn empty_emphasis_markers_should_be_literal() {
         let js = nota_expr_raw("@p{** __ ****}");
         assert!(
-            !js.contains(r#"h("strong", {}, [])"#) && !js.contains(r#"h("em", {}, [])"#),
+            !js.contains("<strong />") && !js.contains("<em />"),
             "empty markers should be literal text, not empty elements: {js}"
         );
     }
@@ -2063,7 +2052,7 @@ mod fuzz_findings {
     #[test]
     fn triple_emphasis_markers_should_not_make_empty_strongs() {
         let js = nota_expr_raw("@p{***benefit***}");
-        assert!(!js.contains(r#"h("strong", {}, [])"#), "no empty <strong> from ***x***: {js}");
+        assert!(!js.contains("<strong />"), "no empty <strong> from ***x***: {js}");
     }
 
     // `* foo *` (space after the opening `*`) stays literal.
@@ -2083,7 +2072,7 @@ mod fuzz_findings {
     #[test]
     fn colon_sugar_props_line_should_not_break_dedent() {
         let js = nota_doc("@foo:\n  | x: 1\n  hello\n");
-        assert!(js.contains(r#"["hello"]"#), "colon-sugar body should dedent to \"hello\": {js}");
+        assert!(js.contains(r#"{"hello"}"#), "colon-sugar body should dedent to \"hello\": {js}");
     }
 
     // --- 7. [MEDIUM] Hyphenated (custom-element) tag names are host tags (FIXED) -----------------
@@ -2094,7 +2083,7 @@ mod fuzz_findings {
     fn hyphenated_tag_should_be_a_host_tag() {
         let js = nota_doc("@my-widget{hi}\n");
         assert!(
-            js.contains(r#"h("my-widget", {}, ["hi"])"#),
+            js.contains(r#"<my-widget>{"hi"}</my-widget>"#),
             "custom-element tag should be a host tag: {js}"
         );
     }
@@ -2154,7 +2143,8 @@ mod fuzz_findings_2 {
     /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
     fn reparses(js: &str) -> bool {
         let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, js, SourceType::default().with_module(true)).parse();
+        let source_type = SourceType::default().with_module(true).with_jsx(true);
+        let ret = Parser::new(&allocator, js, source_type).parse();
         !ret.panicked && ret.errors.is_empty()
     }
 
@@ -2263,9 +2253,11 @@ mod fuzz_findings_2 {
     #[test]
     fn fuzz2_user_binding_should_not_shadow_runtime_h() {
         assert!(
-            !doc_lowers_clean("%let h = 1\n@p{x}\n"),
-            "a user `h` binding must be diagnosed (it shadows the runtime import the markup calls)"
+            !doc_lowers_clean("%let NotaDoc = 1\n@p{x}\n"),
+            "a user `NotaDoc` binding must be diagnosed (it shadows the structural reference)"
         );
+        // `h` is an ordinary name now — the h-call surface is gone.
+        assert!(doc_lowers_clean("%let h = 1\n@p{x}\n"), "`h` is not reserved anymore");
     }
 
     // [INVALID-JS] a DESTRUCTURED user binding (`%const { h } = …`, `%const [Doc] = …`) shadows a
@@ -2273,8 +2265,8 @@ mod fuzz_findings_2 {
     #[test]
     fn fuzz2_destructured_binding_should_be_diagnosed() {
         assert!(
-            !doc_lowers_clean("%const { h } = lib\n@p{x}\n"),
-            "a destructured `h` must be diagnosed (it shadows the runtime import)"
+            !doc_lowers_clean("%const { NotaDoc } = lib\n@p{x}\n"),
+            "a destructured `NotaDoc` must be diagnosed (it shadows the structural reference)"
         );
         assert!(
             !doc_lowers_clean("%const [Doc] = xs\n@p{x}\n"),
@@ -2389,7 +2381,7 @@ mod fuzz_findings_2 {
     fn fuzz2_nested_list_dedent_should_not_duplicate() {
         let js = emit_doc_unchecked("- a\n  - b\n- c\n");
         assert_eq!(
-            js.matches("[\"c\"]").count(),
+            js.matches(r#"{"c"}"#).count(),
             1,
             "a dedented nested-list item is duplicated: {js}"
         );
@@ -2407,7 +2399,7 @@ mod fuzz_findings_2 {
     fn fuzz2_colon_block_should_recognize_line_start_sugar() {
         let js = emit_doc_unchecked("@section:\n  # Title\n  body\n");
         assert!(
-            js.contains("h(Heading"),
+            js.contains("<Heading"),
             "line-start sugar not recognized in a colon-block body: {js}"
         );
     }
@@ -2483,8 +2475,8 @@ mod fuzz_findings_2 {
     fn fuzz2_kept_indent_should_join_content() {
         let js = emit_doc_unchecked("@foo{\n  begin\n    x\n  end\n}");
         assert!(
-            js.contains(r#""  x""#),
-            "kept indentation is split from the content (spec joins it): {js}"
+            js.contains(r#""begin\n  x\nend""#),
+            "kept indentation joins its line inside the coalesced text: {js}"
         );
     }
 
@@ -2492,7 +2484,7 @@ mod fuzz_findings_2 {
     #[test]
     fn fuzz2_unicode_line_separator_should_break() {
         let js = emit_doc_unchecked("a\u{2028}b");
-        assert!(js.contains(r#""a", "\n", "b""#), "U+2028 is not treated as a line break: {js}");
+        assert!(js.contains(r#""a\nb""#), "U+2028 is not treated as a line break: {js}");
     }
 
     // [WHITESPACE] a control-flow branch leaks the author's readability spaces (`{ a }` → " a ").
@@ -2500,7 +2492,7 @@ mod fuzz_findings_2 {
     fn fuzz2_control_flow_branch_should_trim_surrounding_space() {
         let js = nota_expr_raw("@if(x){ a }");
         assert!(
-            !js.contains(r#"Fragment(" a ")"#),
+            !js.contains(r#"<>{" a "}</>"#),
             "a control-flow branch leaks surrounding spaces: {js}"
         );
     }
@@ -2513,7 +2505,7 @@ mod fuzz_findings_2 {
     fn fuzz2_indented_heading_should_be_recognized() {
         let js = emit_doc_unchecked("  # H\n");
         assert!(
-            js.contains("h(Heading"),
+            js.contains("<Heading"),
             "an indented heading is not recognized (indented lists are): {js}"
         );
     }
@@ -2523,7 +2515,7 @@ mod fuzz_findings_2 {
     fn fuzz2_tab_after_hash_should_be_a_heading() {
         let js = emit_doc_unchecked("#\tH\n");
         assert!(
-            js.contains("h(Heading"),
+            js.contains("<Heading"),
             "heading sugar requires a literal space, rejects a tab: {js}"
         );
     }
@@ -2571,14 +2563,12 @@ mod fuzz_findings_2 {
         );
     }
 
-    // [name-attach] the reader keeps a user-supplied component-name arg instead of overriding it with
-    // the binding name, so the island debug-manifest's `comp` can mismatch the authored binding.
+    // [name-attach — RETIRED] the debug-manifest name-attach is gone with the manifest itself:
+    // the reader no longer touches an `inlineComponent(...)` call at all, so a user-supplied
+    // second argument passes through untouched (and is ignored by the compat shim).
     #[test]
     fn fuzz2_component_name_should_use_binding_name() {
         let js = emit_doc_unchecked("%let C = inlineComponent((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
-        assert!(
-            !js.contains("\"ZZZ\""),
-            "name-attach should pass the binding name, not the user's name arg: {js}"
-        );
+        assert!(js.contains("\"ZZZ\""), "the user's arg passes through untouched: {js}");
     }
 }

@@ -1,10 +1,10 @@
-//! Nota AST → hyperscript lowering — a standalone pass over the parsed `Program`.
+//! Nota AST → Solid JSX lowering — a standalone pass over the parsed `Program`.
 //!
 //! The reader ([`oxc_parser`]'s nota module) leaves a document as a single
 //! `Expression::NotaMarkup(Document)` statement and every embedded `@`-form in place as
-//! `Expression::NotaMarkup`. This pass lowers those to the hyperscript `h`/`Fragment`/`decode`
-//! `Expression` AST: [`NotaLowering::lower_document_program`] rebuilds the document `Program`
-//! (Doc skeleton, `%` routing + component name-attach), then a [`VisitMut`] walk replaces
+//! `Expression::NotaMarkup`. This pass lowers those to **JSX** `Expression` AST (design/solid.md
+//! §The pipeline): [`NotaLowering::lower_document_program`] rebuilds the document `Program`
+//! (Doc skeleton, `%` routing), then a [`VisitMut`] walk replaces
 //! each remaining embedded `NotaMarkup` bottom-up (the lowered result is re-walked, so a `@`-form
 //! nested inside embedded JS inside another `@`-form lowers too). Lowering *consumes* owned Nota
 //! nodes via `unbox()`. The emit primitives live in [`super::build`]; the whitespace algorithm in
@@ -17,6 +17,7 @@ use oxc_ast_visit::{VisitMut, walk_mut};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
 
+use super::build;
 use super::mapping::{NotaMappingKind, NotaMappingMark};
 use super::scribble;
 
@@ -222,60 +223,55 @@ impl<'a> NotaLowering<'a> {
 
     fn lower_element(&mut self, el: NotaElement<'a>) -> Expression<'a> {
         let NotaElement { span, tag, props, children, is_colon, props_recovery, .. } = el;
-        let props = self.lower_props(props);
+        let props = self.lower_attrs(props);
         // The whitespace regime follows the body syntax: a brace body keeps the spaces between
         // `{`/`}` and text as content; a colon body trims its edges like a document/block.
         let children = self.lower_children(children, !is_colon);
-        // EOF error-recovery completion anchor: for an unclosed `[props]` group, give the props
-        // object a *real* span (the source `[`) so codegen logs its position, and record a
-        // `PropsAnchor` mark the join turns into a zero-width prop-completion anchor just inside
-        // `{ | }`. Well-formed elements keep the unmapped `Span::empty` object.
-        let props_span = match props_recovery {
-            Some(bracket) => {
-                self.record_nota_mapping(bracket, NotaMappingKind::PropsAnchor);
-                bracket
-            }
-            None => Span::empty(span.start),
-        };
-        self.lower_tagged(span, tag, props, children, props_span)
+        // EOF error-recovery completion anchor: for an unclosed `[props]` group, give the JSX
+        // opening element a *real* span (the source `[`) so codegen logs its position, and record
+        // a `PropsAnchor` mark the join turns into a zero-width attribute-completion anchor just
+        // inside the opening tag. Well-formed elements keep the unmapped `Span::empty` opening.
+        let recovery_span = props_recovery.inspect(|bracket| {
+            self.record_nota_mapping(*bracket, NotaMappingKind::PropsAnchor);
+        });
+        self.lower_tagged(span, tag, props, children, recovery_span)
     }
 
-    /// Shared host/component/dynamic tag dispatch: `h(tag, { props }, [children])` — `tag` is a
-    /// string literal, a component identifier, or (dynamic) the head expression verbatim. `h` is a
-    /// plain function, so any expression is valid in argument position; no binding is needed.
-    /// `props_span` spans the emitted props object (`Span::empty` except for a recovery anchor).
+    /// Shared host/component/dynamic tag dispatch into [`super::build::JsxTag`] — a host tag is a
+    /// lowercase intrinsic JSX name, a component tag an identifier reference, and a dynamic head
+    /// rides on `<Dynamic component={expr}>`. `recovery_span` is the unclosed `[`'s span on the
+    /// EOF-recovery path (the prop-completion anchor), else `None`.
     fn lower_tagged(
         &mut self,
         span: Span,
         tag: NotaTag<'a>,
-        props: ArenaVec<'a, ObjectPropertyKind<'a>>,
+        props: ArenaVec<'a, JSXAttributeItem<'a>>,
         children: ArenaVec<'a, Expression<'a>>,
-        props_span: Span,
+        recovery_span: Option<Span>,
     ) -> Expression<'a> {
-        match tag {
+        let tag = match tag {
             NotaTag::Host(h) => {
                 let h = h.unbox();
-                let tag = self.ast.expression_string_literal(h.span, h.name.as_str(), None);
-                self.build_h(span, tag, props, children, props_span)
+                build::JsxTag::Host { name: h.name.as_str(), span: h.span }
             }
             NotaTag::Component(id) => {
                 let id = id.unbox();
                 self.record_nota_mapping(id.span, NotaMappingKind::ComponentIdentifier);
-                let tag = Expression::Identifier(self.ast.alloc(id));
-                self.build_h(span, tag, props, children, props_span)
+                build::JsxTag::Component(id)
             }
             NotaTag::Dynamic(d) => {
                 let expr = d.unbox().expression;
                 self.record_nota_mapping(expr.span(), NotaMappingKind::EmbeddedJs);
-                self.build_h(span, expr, props, children, props_span)
+                build::JsxTag::Dynamic(expr)
             }
-        }
+        };
+        self.build_element(span, tag, props, children, recovery_span)
     }
 
-    fn lower_props(
+    fn lower_attrs(
         &mut self,
         props: ArenaVec<'a, NotaProp<'a>>,
-    ) -> ArenaVec<'a, ObjectPropertyKind<'a>> {
+    ) -> ArenaVec<'a, JSXAttributeItem<'a>> {
         let mut out = self.ast.vec_with_capacity(props.len());
         for prop in props {
             out.push(match prop {
@@ -290,21 +286,21 @@ impl<'a> NotaLowering<'a> {
                         // A markup-valued prop (`key: @em{..}`) — the inherited form variants.
                         form => self.lower_form(form.into_nota_form()),
                     };
-                    // `obj_prop` picks a bare vs string-literal key (`data-x`) by ident validity.
-                    self.obj_prop(span, name.span, name.name.as_str(), value, false)
+                    self.jsx_attr(span, name.span, name.name.as_str(), Some(value))
                 }
                 NotaProp::Shorthand(s) => {
+                    // `[foo]` shorthand: the prop takes the in-scope binding — `foo={foo}` (NOT a
+                    // bare JSX boolean attribute, which would mean `foo={true}`).
                     let id = s.unbox().name;
                     let (name, key_span) = (id.name.as_str(), id.span);
                     self.record_nota_mapping(key_span, NotaMappingKind::EmbeddedJs);
                     let value = Expression::Identifier(self.ast.alloc(id));
-                    self.obj_prop(key_span, key_span, name, value, true)
+                    self.jsx_attr(key_span, key_span, name, Some(value))
                 }
                 NotaProp::Spread(sp) => {
                     let NotaSpreadProp { span, argument, .. } = sp.unbox();
                     self.record_nota_mapping(argument.span(), NotaMappingKind::EmbeddedJs);
-                    let spread = self.ast.spread_element(span, argument);
-                    ObjectPropertyKind::SpreadProperty(self.ast.alloc(spread))
+                    self.jsx_spread_attr(span, argument)
                 }
             });
         }
@@ -340,15 +336,15 @@ impl<'a> NotaLowering<'a> {
         self.ast.expression_conditional(span, test, cons, alt)
     }
 
-    /// `@for (bind of iter) {body}` → `iter.map((bind, _i) => Fragment({ key: _i }, ...body))` —
-    /// the keyed `@for` emit: the reader injects the map index as the wrapping Fragment's fresh
-    /// `_i` key (decode.md §struct, Keyed fragments).
+    /// `@for (bind of iter) {body}` → `<For each={iter}>{(bind) => <>…body…</>}</For>` — Solid's
+    /// keyed list rendering (design/solid.md; the old map-index Fragment key is gone: Solid has
+    /// no `key` prop, `<For>` reconciles by item identity).
     fn lower_for(&mut self, n: NotaFor<'a>) -> Expression<'a> {
         let NotaFor { span, binding, iterable, body, .. } = n;
         self.record_nota_mapping(binding.span(), NotaMappingKind::EmbeddedJs);
         self.record_nota_mapping(iterable.span(), NotaMappingKind::EmbeddedJs);
         let children = self.lower_children(body.unbox().children, false);
-        self.build_for_map(span, binding, iterable, children)
+        self.build_for(span, binding, iterable, children)
     }
 
     // ===========================================================================================
@@ -383,32 +379,32 @@ impl<'a> NotaLowering<'a> {
             let mut props = self.ast.vec();
             if let Some(lang) = lang {
                 let val = self.ast.expression_string_literal(Span::empty(0), lang.as_str(), None);
-                props.push(self.obj_prop(Span::empty(0), Span::empty(0), "lang", val, false));
+                props.push(self.jsx_attr(Span::empty(0), Span::empty(0), "lang", Some(val)));
             }
-            self.build_raw_element(span, super::CODE_BLOCK, props, children)
+            self.build_named_element(span, super::CODE_BLOCK, props, children)
         } else {
-            self.build_raw_element(span, super::CODE_INLINE, self.ast.vec(), children)
+            self.build_named_element(span, super::CODE_INLINE, self.ast.vec(), children)
         }
     }
 
     fn lower_math(&mut self, m: NotaMath<'a>) -> Expression<'a> {
         let NotaMath { span, block, parts, .. } = m;
         let children = self.lower_raw_parts(parts);
-        // The runtime prop is `display` (the AST field renamed to `block` to mirror `NotaCode`).
+        // The runtime prop is `display` (the AST field renamed to `block` to mirror `NotaCode`);
+        // a bare JSX attribute is `display={true}` — exactly the `$$` fence's meaning.
         let mut props = self.ast.vec();
         if block {
-            let val = self.ast.expression_boolean_literal(Span::empty(0), true);
-            props.push(self.obj_prop(Span::empty(0), Span::empty(0), "display", val, false));
+            props.push(self.jsx_attr(Span::empty(0), Span::empty(0), "display", None));
         }
-        self.build_raw_element(span, super::MATH, props, children)
+        self.build_named_element(span, super::MATH, props, children)
     }
 
     fn lower_verbatim(&mut self, v: NotaVerbatim<'a>) -> Expression<'a> {
         let NotaVerbatim { span, tag, props, parts, .. } = v;
-        let props = self.lower_props(props);
+        let props = self.lower_attrs(props);
         let children = self.lower_raw_parts(parts);
-        // A verbatim body cannot leave an unclosed `[props]` group, so no anchor: unmapped object.
-        self.lower_tagged(span, tag, props, children, Span::empty(span.start))
+        // A verbatim body cannot leave an unclosed `[props]` group, so no recovery anchor.
+        self.lower_tagged(span, tag, props, children, None)
     }
 
     // ===========================================================================================
@@ -422,15 +418,19 @@ impl<'a> NotaLowering<'a> {
             NotaEmphasisMarker::Em => "em",
         };
         let children = self.lower_children(children, true);
-        let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
-        self.build_h(span, tag, self.ast.vec(), children, Span::empty(span.start))
+        self.build_element(
+            span,
+            build::JsxTag::Host { name: tag_name, span: Span::empty(span.start) },
+            self.ast.vec(),
+            children,
+            None,
+        )
     }
 
-    /// `#` heading *sugar* → `h(Heading, { rank: N }, [children])` (decode.md §Doc-state): `Heading` is an
-    /// ambient-prelude slot referenced as a free identifier (mirroring `Tex`/`CodeInline`), `rank`
-    /// the level as a numeric literal. The default `Heading` marks + queries the concrete `hN` at
-    /// decode time. Raw `@hN{…}` element forms lower via [`Self::lower_element`] and stay plain host
-    /// tags — the unnumbered/un-Toc'd escape hatch.
+    /// `#` heading *sugar* → `<Heading rank={N}>…</Heading>`: `Heading` is an ambient-prelude
+    /// component referenced as a free identifier (mirroring `Tex`/`CodeInline`), `rank` the level
+    /// as a numeric literal. Raw `@hN{…}` element forms lower via [`Self::lower_element`] and stay
+    /// plain host tags — the unnumbered/un-Toc'd escape hatch.
     fn lower_heading(&mut self, h: NotaHeading<'a>) -> Expression<'a> {
         let NotaHeading { span, level, children, .. } = h;
         let children = self.lower_children(children, false);
@@ -440,22 +440,20 @@ impl<'a> NotaLowering<'a> {
             None,
             NumberBase::Decimal,
         );
-        let props = self.ast.vec1(self.obj_prop(
+        let props = self.ast.vec1(self.jsx_attr(
             Span::empty(span.start),
             Span::empty(span.start),
             "rank",
-            rank,
-            false,
+            Some(rank),
         ));
-        self.build_raw_element(span, super::HEADING, props, children)
+        self.build_named_element(span, super::HEADING, props, children)
     }
 
-    /// Doc-state sugar (notation.md §Doc-state references) → `h(<Slot>, { <key>: "<label>" },
-    /// [children])`, the same ambient-slot pattern as
-    /// `Heading`: the slot is an ambient-prelude free identifier (no import emitted), the
-    /// `id`/`label` prop is reader-synthesized boilerplate (empty spans — unmapped, like
-    /// `Heading`/`rank`). Only `FootnoteText` has children (its colon body); the three leaf sugars
-    /// emit an empty child array.
+    /// Doc-state sugar (notation.md §Doc-state references) → `<Slot key="label">children</Slot>`,
+    /// the same ambient pattern as `Heading`: the component is an ambient-prelude free identifier
+    /// (no import emitted), the `id`/`label` attribute reader-synthesized boilerplate (empty spans
+    /// — unmapped). Only `FootnoteText` has children (its colon body); the three leaf sugars
+    /// self-close.
     fn lower_doc_state(&mut self, d: NotaDocState<'a>) -> Expression<'a> {
         let NotaDocState { span, kind, label, children, .. } = d;
         let (slot, key) = match kind {
@@ -468,18 +466,17 @@ impl<'a> NotaLowering<'a> {
         let children = self.lower_children(children, false);
         let value =
             self.ast.expression_string_literal(Span::empty(span.start), label.as_str(), None);
-        let props = self.ast.vec1(self.obj_prop(
+        let props = self.ast.vec1(self.jsx_attr(
             Span::empty(span.start),
             Span::empty(span.start),
             key,
-            value,
-            false,
+            Some(value),
         ));
-        self.build_raw_element(span, slot, props, children)
+        self.build_named_element(span, slot, props, children)
     }
 
-    /// One `nota-ul-li`/`nota-ol-li` sentinel per item — the runtime `struct` pass coalesces runs
-    /// into `<ul>`/`<ol>` (decode.md §struct).
+    /// One `<UlLi>`/`<OlLi>` item per marker — runs coalesce into `<ul>`/`<ol>` in the runtime's
+    /// Reforest pass (design/solid.md).
     fn lower_list_item(&mut self, li: NotaListItem<'a>) -> Expression<'a> {
         let NotaListItem { span, kind, children, .. } = li;
         let tag_name = match kind {
@@ -487,8 +484,13 @@ impl<'a> NotaLowering<'a> {
             NotaListKind::Ordered => "nota-ol-li",
         };
         let children = self.lower_children(children, false);
-        let tag = self.ast.expression_string_literal(Span::empty(span.start), tag_name, None);
-        self.build_h(span, tag, self.ast.vec(), children, Span::empty(span.start))
+        self.build_element(
+            span,
+            build::JsxTag::Host { name: tag_name, span: Span::empty(span.start) },
+            self.ast.vec(),
+            children,
+            None,
+        )
     }
 
     // ===========================================================================================
@@ -496,9 +498,8 @@ impl<'a> NotaLowering<'a> {
     // ===========================================================================================
 
     /// Lower a whole document: route `%`/`%%%` statements (`import`/`export` hoist; everything
-    /// else — component bindings included — prepends into Doc), Scribble the
-    /// markup siblings, and assemble
-    /// `export default function Doc() { …prelude…; return decode(Fragment(...)); }`.
+    /// else prepends into Doc), Scribble the markup siblings, and assemble
+    /// `export default function Doc() { …prelude…; return <NotaDoc>…</NotaDoc>; }`.
     fn lower_document(&mut self, doc: NotaDocument<'a>) -> Program<'a> {
         let mut module_items = self.ast.vec();
         let mut doc_prelude = self.ast.vec();
