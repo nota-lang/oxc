@@ -153,6 +153,7 @@ impl<'a> NotaLowering<'a> {
             NotaChild::ThematicBreak(t) => self.lower_thematic_break(&t),
             NotaChild::Link(l) => self.lower_link(l.unbox()),
             NotaChild::Image(i) => self.lower_image(&i),
+            NotaChild::Attrs(a) => self.lower_attrs_marker(a.unbox()),
             NotaChild::Text(_) | NotaChild::Statement(_) => {
                 unreachable!("Text/Statement handled by lower_children")
             }
@@ -438,12 +439,42 @@ impl<'a> NotaLowering<'a> {
         )
     }
 
+    /// A flow-position attrs group (notation.md §Attrs) → the ambient `<Attrs …/>` marker, which
+    /// the runtime's Reforest pass strips and applies to the paragraph it is forming. (Trailing
+    /// groups in heading/list-item bodies never reach here — [`Self::take_trailing_attrs`] hoists
+    /// them onto the construct.)
+    fn lower_attrs_marker(&mut self, a: NotaAttrs<'a>) -> Expression<'a> {
+        let props = self.lower_attrs(a.props);
+        self.build_named_element(a.span, super::ATTRS, props, self.ast.vec())
+    }
+
+    /// Detach a **trailing** attrs child (the last child modulo whitespace-only text) from a
+    /// sugar construct's body, for hoisting onto the construct's own element.
+    fn take_trailing_attrs(
+        &self,
+        children: &mut ArenaVec<'a, NotaChild<'a>>,
+    ) -> Option<oxc_allocator::Box<'a, NotaAttrs<'a>>> {
+        let idx = children.iter().rposition(|c| match c {
+            NotaChild::Text(t) => !t.value.as_str().trim().is_empty(),
+            _ => true,
+        })?;
+        if matches!(children[idx], NotaChild::Attrs(_)) {
+            let NotaChild::Attrs(a) = children.remove(idx) else { unreachable!() };
+            Some(a)
+        } else {
+            None
+        }
+    }
+
     /// `#` heading *sugar* → `<Heading rank={N}>…</Heading>`: `Heading` is an ambient-prelude
     /// component referenced as a free identifier (mirroring `Tex`/`CodeInline`), `rank` the level
     /// as a numeric literal. Raw `@hN{…}` element forms lower via [`Self::lower_element`] and stay
-    /// plain host tags — the unnumbered/un-Toc'd escape hatch.
+    /// plain host tags — the unnumbered/un-Toc'd escape hatch. A trailing attrs group
+    /// (`# Title [id: "intro"]`) hoists onto the `<Heading>` call after `rank` — the prelude
+    /// forwards `id` and spreads the rest onto the rendered `<hN>`.
     fn lower_heading(&mut self, h: NotaHeading<'a>) -> Expression<'a> {
-        let NotaHeading { span, level, children, .. } = h;
+        let NotaHeading { span, level, mut children, .. } = h;
+        let attrs = self.take_trailing_attrs(&mut children);
         let children = self.lower_children(children, false);
         let rank = self.ast.expression_numeric_literal(
             Span::empty(span.start),
@@ -451,12 +482,15 @@ impl<'a> NotaLowering<'a> {
             None,
             NumberBase::Decimal,
         );
-        let props = self.ast.vec1(self.jsx_attr(
+        let mut props = self.ast.vec1(self.jsx_attr(
             Span::empty(span.start),
             Span::empty(span.start),
             "rank",
             Some(rank),
         ));
+        if let Some(attrs) = attrs {
+            props.extend(self.lower_attrs(attrs.unbox().props));
+        }
         self.build_named_element(span, super::HEADING, props, children)
     }
 
@@ -558,18 +592,24 @@ impl<'a> NotaLowering<'a> {
     }
 
     /// One `<UlLi>`/`<OlLi>` item per marker — runs coalesce into `<ul>`/`<ol>` in the runtime's
-    /// Reforest pass (design/solid.md).
+    /// Reforest pass (design/solid.md). A trailing attrs group (`- item [class: "hot"]`) hoists
+    /// onto the item's element — `UlLi`/`OlLi` spread it onto the `<li>` they render.
     fn lower_list_item(&mut self, li: NotaListItem<'a>) -> Expression<'a> {
-        let NotaListItem { span, kind, children, .. } = li;
+        let NotaListItem { span, kind, mut children, .. } = li;
         let tag_name = match kind {
             NotaListKind::Unordered => "nota-ul-li",
             NotaListKind::Ordered => "nota-ol-li",
+        };
+        let attrs = self.take_trailing_attrs(&mut children);
+        let props = match attrs {
+            Some(attrs) => self.lower_attrs(attrs.unbox().props),
+            None => self.ast.vec(),
         };
         let children = self.lower_children(children, false);
         self.build_element(
             span,
             build::JsxTag::Host { name: tag_name, span: Span::empty(span.start) },
-            self.ast.vec(),
+            props,
             children,
             None,
         )

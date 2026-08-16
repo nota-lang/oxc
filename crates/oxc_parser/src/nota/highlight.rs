@@ -459,6 +459,15 @@ impl<'a> Visit<'a> for Highlighter<'a> {
         }
     }
 
+    fn visit_nota_attrs(&mut self, it: &NotaAttrs<'a>) {
+        // The bare `[` / `]` are sigils; the entries paint via the normal prop visitors.
+        self.emit(it.span.start, it.span.start + 1, NotaHighlightKind::Sigil);
+        self.emit(it.span.end - 1, it.span.end, NotaHighlightKind::Sigil);
+        for prop in &it.props {
+            self.visit_nota_prop(prop);
+        }
+    }
+
     fn visit_nota_prop_name(&mut self, it: &NotaPropName<'a>) {
         self.emit(it.span.start, it.span.end, NotaHighlightKind::PropName);
     }

@@ -236,6 +236,7 @@ pub enum AstNodes<'a> {
     NotaEmphasis(&'a AstNode<'a, NotaEmphasis<'a>>),
     NotaHeading(&'a AstNode<'a, NotaHeading<'a>>),
     NotaListItem(&'a AstNode<'a, NotaListItem<'a>>),
+    NotaAttrs(&'a AstNode<'a, NotaAttrs<'a>>),
     NotaLink(&'a AstNode<'a, NotaLink<'a>>),
     NotaImage(&'a AstNode<'a, NotaImage<'a>>),
     NotaThematicBreak(&'a AstNode<'a, NotaThematicBreak>),
@@ -456,6 +457,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(n) => n.span(),
             Self::NotaHeading(n) => n.span(),
             Self::NotaListItem(n) => n.span(),
+            Self::NotaAttrs(n) => n.span(),
             Self::NotaLink(n) => n.span(),
             Self::NotaImage(n) => n.span(),
             Self::NotaThematicBreak(n) => n.span(),
@@ -676,6 +678,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(n) => n.parent(),
             Self::NotaHeading(n) => n.parent(),
             Self::NotaListItem(n) => n.parent(),
+            Self::NotaAttrs(n) => n.parent(),
             Self::NotaLink(n) => n.parent(),
             Self::NotaImage(n) => n.parent(),
             Self::NotaThematicBreak(n) => n.parent(),
@@ -896,6 +899,7 @@ impl AstNodes<'_> {
             Self::NotaEmphasis(_) => "NotaEmphasis",
             Self::NotaHeading(_) => "NotaHeading",
             Self::NotaListItem(_) => "NotaListItem",
+            Self::NotaAttrs(_) => "NotaAttrs",
             Self::NotaLink(_) => "NotaLink",
             Self::NotaImage(_) => "NotaImage",
             Self::NotaThematicBreak(_) => "NotaThematicBreak",
@@ -10897,6 +10901,12 @@ impl<'a> AstNode<'a, NotaChild<'a>> {
                 allocator: self.allocator,
                 following_span_start: self.following_span_start,
             })),
+            NotaChild::Attrs(s) => AstNodes::NotaAttrs(self.allocator.alloc(AstNode {
+                inner: s.as_ref(),
+                parent,
+                allocator: self.allocator,
+                following_span_start: self.following_span_start,
+            })),
             it @ match_nota_form!(NotaChild) => {
                 return self
                     .allocator
@@ -11734,6 +11744,33 @@ impl<'a> AstNode<'a, NotaListItem<'a>> {
             inner: &self.inner.children,
             allocator: self.allocator,
             parent: AstNodes::NotaListItem(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    pub fn format_leading_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_leading_comments(self.span()).fmt(f);
+    }
+
+    pub fn format_trailing_comments(&self, f: &mut Formatter<'_, 'a>) {
+        format_trailing_comments(self.parent.span(), self.inner.span(), self.following_span_start)
+            .fmt(f);
+    }
+}
+
+impl<'a> AstNode<'a, NotaAttrs<'a>> {
+    #[inline]
+    pub fn node_id(&self) -> NodeId {
+        self.inner.node_id()
+    }
+
+    #[inline]
+    pub fn props(&self) -> &AstNode<'a, Vec<'a, NotaProp<'a>>> {
+        let following_span_start = self.following_span_start;
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.props,
+            allocator: self.allocator,
+            parent: AstNodes::NotaAttrs(transmute_self(self)),
             following_span_start,
         })
     }

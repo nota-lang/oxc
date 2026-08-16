@@ -689,6 +689,51 @@ pub fn lex_link_span(source: &str, lbrack: u32, limit: u32) -> Option<LinkSpans>
 }
 
 // ================================================================================================
+// Attrs groups: a trailing bare `[props]` in markup text position (notation.md §Attrs)
+// ================================================================================================
+
+/// Detect a **trailing bare attrs group** `[k: v, …]` at `lbrack`. Two gates keep prose honest:
+///
+/// 1. **First-entry shape**: the interior must open (modulo whitespace) with `...spread`, a
+///    quoted key, or `ident` glued to a `:` — so `see [1]` and `[just words]` stay literal.
+/// 2. **Trailing position**: after the group's `]` (balanced, string/comment-aware), only inline
+///    whitespace may follow on the closing line up to the line end / `limit` — or, when
+///    `closer_ok`, the enclosing body's `}`.
+///
+/// The whole group must sit within `limit` (a bounded frame's clip). Returns the offset one past
+/// the `]`, or `None` (not an attrs group — the `[` falls through to literal text).
+pub fn attrs_group_at(source: &str, lbrack: u32, limit: u32, closer_ok: bool) -> Option<u32> {
+    // Gate 1: the first-entry shape.
+    let mut s = Scan::new(source, lbrack + 1);
+    s.skip_inline_ws();
+    let gate_ok = match s.peek()? {
+        b'.' => s.peek_at(1) == Some(b'.') && s.peek_at(2) == Some(b'.'),
+        b'"' | b'\'' => true, // quoted key (`["data-x": v]`) — the props parse validates the `:`
+        b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+            s.skip_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'));
+            s.skip_inline_ws();
+            s.peek() == Some(b':')
+        }
+        _ => false,
+    };
+    if !gate_ok {
+        return None;
+    }
+    // The balanced group extent (strings/comments opaque), clamped to the frame.
+    let mut g = Scan::new(source, lbrack);
+    g.skip_balanced();
+    let after = g.pos();
+    if after <= lbrack + 1 || byte_at(source, after - 1) != Some(b']') || after > limit {
+        return None;
+    }
+    // Gate 2: trailing on the group's closing line.
+    let line_end = line_content_end(source, after).min(limit);
+    let mut t = Scan::new(source, after);
+    t.skip_inline_ws();
+    if t.pos() >= line_end || (closer_ok && t.peek() == Some(b'}')) { Some(after) } else { None }
+}
+
+// ================================================================================================
 // Comments (`//` line, `/* … */` block — Typst/C style, in markup text position)
 // ================================================================================================
 
@@ -1702,6 +1747,42 @@ mod tests {
             panic!("display fence scans across newlines")
         };
         assert!(is_block);
+    }
+
+    /// Attrs-group scans: the first-entry gate, the trailing rule, the `}`-closer allowance, the
+    /// balanced/string-aware extent, and the `limit` clip.
+    #[test]
+    fn attrs_group_scans() {
+        let at = |src: &str, closer: bool| attrs_group_at(src, 0, src.len() as u32, closer);
+
+        // The happy shapes: `ident:` first entry, quoted key, spread.
+        assert_eq!(at("[id: \"x\"]", false), Some(9));
+        assert_eq!(at("[id: \"x\", class: y]  ", false), Some(19)); // trailing ws ok
+        assert_eq!(at("[\"data-x\": 1]", false), Some(13));
+        assert_eq!(at("[...rest]", false), Some(9));
+
+        // Gate 1 rejects prose-shaped interiors.
+        assert!(at("[1]", false).is_none());
+        assert!(at("[just words]", false).is_none());
+        assert!(at("[x]", false).is_none()); // bare shorthand: no `:` → literal prose
+        assert!(at("[x , y]", false).is_none());
+
+        // Gate 2: trailing only — content after the `]` on its line kills it; a depth-0 `}`
+        // is allowed only when the caller says the body closes there.
+        assert!(at("[k: 1] tail", false).is_none());
+        assert!(at("[k: 1]}", false).is_none());
+        assert_eq!(at("[k: 1]}", true), Some(6));
+        assert_eq!(at("[k: 1] }", true), Some(6));
+
+        // The extent is string-aware and must close within the limit.
+        let src = "[k: \"]\"]";
+        assert_eq!(at(src, false), Some(src.len() as u32));
+        assert!(at("[k: 1", false).is_none()); // unterminated
+        assert!(attrs_group_at("[k: 1]", 0, 5, false).is_none()); // clipped by the frame
+
+        // A multi-line group is trailing on its *closing* line.
+        assert_eq!(at("[k: 1,\n m: 2]", false), Some(13));
+        assert!(at("[k: 1,\n m: 2] t", false).is_none());
     }
 
     /// Link scans: the `[text](url)` shape, nesting/escapes/skips, the glued `](`, the line

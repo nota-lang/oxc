@@ -2665,6 +2665,11 @@ pub trait Traverse<'a> {
     fn exit_nota_list_item(&mut self, node: &mut NotaListItem<'a>, ctx: &mut TraverseCtx<'a>) {}
 
     #[inline]
+    fn enter_nota_attrs(&mut self, node: &mut NotaAttrs<'a>, ctx: &mut TraverseCtx<'a>) {}
+    #[inline]
+    fn exit_nota_attrs(&mut self, node: &mut NotaAttrs<'a>, ctx: &mut TraverseCtx<'a>) {}
+
+    #[inline]
     fn enter_nota_link(&mut self, node: &mut NotaLink<'a>, ctx: &mut TraverseCtx<'a>) {}
     #[inline]
     fn exit_nota_link(&mut self, node: &mut NotaLink<'a>, ctx: &mut TraverseCtx<'a>) {}

@@ -15946,6 +15946,18 @@ impl<'a> AstBuilder<'a> {
         NotaChild::Image(self.alloc_nota_image(span, alt, alt_span, src, src_span))
     }
 
+    /// Build a [`NotaChild::Attrs`].
+    ///
+    /// This node contains a [`NotaAttrs`] that will be stored in the memory arena.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `props`
+    #[inline]
+    pub fn nota_child_attrs(self, span: Span, props: Vec<'a, NotaProp<'a>>) -> NotaChild<'a> {
+        NotaChild::Attrs(self.alloc_nota_attrs(span, props))
+    }
+
     /// Build a [`NotaText`].
     ///
     /// If you want the built node to be allocated in the memory arena,
@@ -16857,6 +16869,36 @@ impl<'a> AstBuilder<'a> {
         children: Vec<'a, NotaChild<'a>>,
     ) -> Box<'a, NotaListItem<'a>> {
         Box::new_in(self.nota_list_item(span, kind, children), self.allocator)
+    }
+
+    /// Build a [`NotaAttrs`].
+    ///
+    /// If you want the built node to be allocated in the memory arena,
+    /// use [`AstBuilder::alloc_nota_attrs`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `props`
+    #[inline]
+    pub fn nota_attrs(self, span: Span, props: Vec<'a, NotaProp<'a>>) -> NotaAttrs<'a> {
+        NotaAttrs { node_id: Default::default(), span, props }
+    }
+
+    /// Build a [`NotaAttrs`], and store it in the memory arena.
+    ///
+    /// Returns a [`Box`] containing the newly-allocated node.
+    /// If you want a stack-allocated node, use [`AstBuilder::nota_attrs`] instead.
+    ///
+    /// ## Parameters
+    /// * `span`: The [`Span`] covering this node
+    /// * `props`
+    #[inline]
+    pub fn alloc_nota_attrs(
+        self,
+        span: Span,
+        props: Vec<'a, NotaProp<'a>>,
+    ) -> Box<'a, NotaAttrs<'a>> {
+        Box::new_in(self.nota_attrs(span, props), self.allocator)
     }
 
     /// Build a [`NotaLink`].

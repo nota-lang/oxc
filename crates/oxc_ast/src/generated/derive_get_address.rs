@@ -850,6 +850,7 @@ impl GetAddress for NotaChild<'_> {
             Self::ThematicBreak(it) => GetAddress::address(it),
             Self::Link(it) => GetAddress::address(it),
             Self::Image(it) => GetAddress::address(it),
+            Self::Attrs(it) => GetAddress::address(it),
             Self::Element(it) => GetAddress::address(it),
             Self::Fragment(it) => GetAddress::address(it),
             Self::Interpolation(it) => GetAddress::address(it),

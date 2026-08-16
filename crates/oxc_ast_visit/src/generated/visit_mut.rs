@@ -1342,6 +1342,11 @@ pub trait VisitMut<'a>: Sized {
     }
 
     #[inline]
+    fn visit_nota_attrs(&mut self, it: &mut NotaAttrs<'a>) {
+        walk_nota_attrs(self, it);
+    }
+
+    #[inline]
     fn visit_nota_link(&mut self, it: &mut NotaLink<'a>) {
         walk_nota_link(self, it);
     }
@@ -4704,6 +4709,7 @@ pub mod walk_mut {
             NotaChild::ThematicBreak(it) => visitor.visit_nota_thematic_break(it),
             NotaChild::Link(it) => visitor.visit_nota_link(it),
             NotaChild::Image(it) => visitor.visit_nota_image(it),
+            NotaChild::Attrs(it) => visitor.visit_nota_attrs(it),
             match_nota_form!(NotaChild) => visitor.visit_nota_form(it.to_nota_form_mut()),
         }
     }
@@ -4958,6 +4964,15 @@ pub mod walk_mut {
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
         visitor.visit_nota_children(&mut it.children);
+        visitor.leave_node(kind);
+    }
+
+    #[inline]
+    pub fn walk_nota_attrs<'a, V: VisitMut<'a>>(visitor: &mut V, it: &mut NotaAttrs<'a>) {
+        let kind = AstType::NotaAttrs;
+        visitor.enter_node(kind);
+        visitor.visit_span(&mut it.span);
+        visitor.visit_nota_props(&mut it.props);
         visitor.leave_node(kind);
     }
 

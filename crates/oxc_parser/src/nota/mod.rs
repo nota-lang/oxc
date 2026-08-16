@@ -34,13 +34,13 @@ use crate::{
     lexer::Kind,
     lexer::nota::{
         ArmedBoundary, CodeScan, ElsePeek, LinkSpans, MarkupTrigger, MathScan, VerbatimBoundary,
-        armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
-        colon_prop_line_at, docstate_left_guard, else_peek, escape_span, find_emphasis_close,
-        find_fence_close, find_strike_close, footnote_sugar_at, heading_at, is_ident_start_at,
-        is_statement_line, label_sugar_at, lex_code_span, lex_comment, lex_link_span,
-        lex_math_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
-        markup_trigger, next_line_start, percent_line_is_empty, ref_sugar_at, scan_hyphen_tail,
-        statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
+        armed_boundary, at_line_start_in_frame, attrs_group_at, brace_clip_on_line, byte_at,
+        colon_block_extent, colon_prop_line_at, docstate_left_guard, else_peek, escape_span,
+        find_emphasis_close, find_fence_close, find_strike_close, footnote_sugar_at, heading_at,
+        is_ident_start_at, is_statement_line, label_sugar_at, lex_code_span, lex_comment,
+        lex_link_span, lex_math_span, line_content_end, line_indent_of, list_item_extent,
+        list_marker_at, markup_trigger, next_line_start, percent_line_is_empty, ref_sugar_at,
+        scan_hyphen_tail, statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -629,7 +629,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.parse_ref_sugar(self.cur_token().start());
                 }
                 Kind::LBrack => {
-                    self.parse_bracket_sugar(self.cur_token().start());
+                    self.parse_bracket_sugar(self.cur_token().start(), depth);
                     // A `[^x]: body` definition reuses the colon-body extent machinery, so it can
                     // resume at a line start exactly like an `@head:` form — same hook (else a
                     // heading/list/`%` after the definition lexes as literal text; the mid-line
@@ -1330,16 +1330,40 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// Dispatch a markup `[` at `open` between the bracket sugars, in fixed precedence
     /// (notation.md §Links): the footnote digraph `[^mark]` / `[^label]: body` first, then a
     /// `[text](url)` link, else a literal `[`.
-    fn parse_bracket_sugar(&mut self, open: u32) {
+    fn parse_bracket_sugar(&mut self, open: u32, depth: u32) {
         let limit = self.docstate_scan_limit();
+        // A depth-0 `}` may sit in an attrs group's trailing position only where it closes the
+        // enclosing braced body.
+        let closer_ok = matches!(self.nota_body_mode(), BodyMode::Body) && depth == 0;
         if let Some(label_span) = footnote_sugar_at(self.nota_scan_source(), open, limit) {
             self.parse_footnote_sugar(open, label_span, limit);
         } else if let Some(link) = lex_link_span(self.nota_scan_source(), open, limit) {
             self.parse_link(open, &link);
+        } else if attrs_group_at(self.nota_scan_source(), open, limit, closer_ok).is_some() {
+            self.parse_attrs_group(open);
         } else {
             self.push_text(open, open + 1);
             self.nota_seek_markup(open + 1);
         }
+    }
+
+    /// A trailing bare `[props]` **attrs group** at `open` (notation.md §Attrs) — the shape was
+    /// validated by [`attrs_group_at`], so the group now parses with the ordinary props machinery
+    /// (a parse error past the gate is a real diagnostic, not a literal fallback). The node is a
+    /// faithful child; the lowering hoists it onto its heading/list-item, or emits the `<Attrs/>`
+    /// marker the runtime's Reforest pass attaches to the enclosing paragraph.
+    fn parse_attrs_group(&mut self, open: u32) {
+        let mut props = self.ast.vec();
+        self.nota_seek_to(open); // lex the `[` as a JS token for the props parser
+        debug_assert!(self.at(Kind::LBrack), "attrs group entered not at `[`");
+        self.parse_props_group(&mut props);
+        if self.has_fatal_error() {
+            return;
+        }
+        let end = self.cur_token().end(); // one past the validated `]`
+        let node = self.ast.nota_attrs(Span::new(open, end), props);
+        self.push_nota_item(NotaChild::Attrs(self.ast.alloc(node)));
+        self.nota_seek_markup(end);
     }
 
     /// `[text](url)` at `open` — an inline link (notation.md §Links) ≡ `@a[href: "url"]{text}`.

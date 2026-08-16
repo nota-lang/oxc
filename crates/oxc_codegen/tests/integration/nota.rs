@@ -1947,6 +1947,69 @@ fn id(x: i32) -> i32 { x }
 }
 
 // ===============================================================================================
+// Attrs groups (notation.md §Attrs): a trailing bare `[props]` attaches to its construct — a
+// heading or list item hoists it onto its own element; a flow position lowers to the ambient
+// `<Attrs …/>` marker Reforest applies to the paragraph it is forming.
+// ===============================================================================================
+
+#[test]
+fn attrs_hoist_onto_heading_and_list_item() {
+    let js = nota_doc("# Title [id: \"intro\", class: \"x\"]\n");
+    assert!(
+        js.contains(r#"<Heading rank={1} id="intro" class="x">{"Title"}</Heading>"#),
+        "heading attrs hoist: {js}"
+    );
+    let js = nota_doc("- item [class: \"hot\"]\n- plain\n");
+    assert!(js.contains(r#"<UlLi class="hot">{"item"}</UlLi>"#), "item attrs hoist: {js}");
+    assert!(js.contains(r#"<UlLi>{"plain"}</UlLi>"#), "plain item unchanged: {js}");
+}
+
+#[test]
+fn attrs_marker_in_flow_positions() {
+    // Paragraph position: the marker child survives for Reforest to claim.
+    let js = nota_doc("Some text. [class: \"note\"]\n");
+    assert!(js.contains(r#"{"Some text. "}<Attrs class="note" />"#), "marker: {js}");
+
+    // Expression values, quoted keys (the data-attr spelling), and spreads ride through like
+    // element props. (A bare hyphenated key is not a prop key anywhere in Nota — quote it.)
+    let js = nota_doc("para [k: 1 + 2, \"data-n\": \"x\", ...rest]\n");
+    assert!(js.contains(r#"<Attrs k={1 + 2} data-n="x" {...rest} />"#), "expr props: {js}");
+}
+
+#[test]
+fn attrs_non_shapes_stay_literal() {
+    // Not trailing / prose-shaped interiors / no colon → literal prose.
+    nota_expr("@p{a [k: 1] b}", r#"<p>{"a [k: 1] b"}</p>"#);
+    nota_expr("@p{see [1] and [words]}", r#"<p>{"see [1] and [words]"}</p>"#);
+    nota_expr(r"@p{end \[k: 1]}", r#"<p>{"end [k: 1]"}</p>"#);
+    // A trailing group inside a braced body fires (the `}` is the body's own closer) — the
+    // marker sits in the element (unstripped outside flow contexts; use native props there).
+    nota_expr("@p{text [k: \"v\"]}", r#"<p>{"text "}<Attrs k="v" /></p>"#);
+}
+
+#[test]
+fn attrs_group_parse_errors_are_loud() {
+    // Past the first-entry gate, a malformed group is a diagnostic, not silent prose.
+    nota_expr_err("@p{x [k: ]}");
+}
+
+#[test]
+fn attrs_reserved_name_collision() {
+    // `Attrs` joined the reserved emit surface: a user binding of it is diagnosed at lowering.
+    let allocator = Allocator::default();
+    let src = "% const Attrs = 1;\nx\n";
+    let mut program =
+        Parser::new(&allocator, src, SourceType::nota()).parse_nota_document().expect("parses");
+    let ret = oxc_transformer::NotaLowering::new(&allocator, src, false)
+        .lower_document_program(&mut program);
+    assert!(
+        ret.diagnostics.iter().any(|d| d.to_string().contains("Attrs")),
+        "collision diagnosed: {:?}",
+        ret.diagnostics
+    );
+}
+
+// ===============================================================================================
 // Links `[text](url)` → `<a href>` and images `![alt](src)` → `<img/>` (notation.md §Links).
 // Inline links only — no autolinks, no reference links, no titles. The whole shape closes on its
 // opening line; text is markup, url/alt are raw (escapes cooked, targets trimmed).

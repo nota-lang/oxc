@@ -2045,6 +2045,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
             NotaChild::ListItem(it) => self.visit_nota_list_item(it),
             NotaChild::DocState(it) => self.visit_nota_doc_state(it),
             NotaChild::Link(it) => self.visit_nota_link(it),
+            NotaChild::Attrs(it) => self.visit_nota_attrs(it),
             NotaChild::Element(it) => self.visit_nota_element(it),
             NotaChild::Fragment(it) => self.visit_nota_fragment(it),
             NotaChild::Interpolation(it) => self.visit_nota_interpolation(it),
@@ -2211,6 +2212,11 @@ impl<'a> Visit<'a> for ChildScopeCollector {
     #[inline]
     fn visit_nota_list_item(&mut self, it: &NotaListItem<'a>) {
         self.visit_nota_children(&it.children);
+    }
+
+    #[inline]
+    fn visit_nota_attrs(&mut self, it: &NotaAttrs<'a>) {
+        self.visit_nota_props(&it.props);
     }
 
     #[inline]

@@ -351,8 +351,9 @@ pub(crate) enum AncestorType {
     NotaEmphasisChildren = 327,
     NotaHeadingChildren = 328,
     NotaListItemChildren = 329,
-    NotaLinkChildren = 330,
-    NotaDocStateChildren = 331,
+    NotaAttrsProps = 330,
+    NotaLinkChildren = 331,
+    NotaDocStateChildren = 332,
 }
 
 /// Ancestor type used in AST traversal.
@@ -976,6 +977,7 @@ pub enum Ancestor<'a, 't> {
         AncestorType::NotaHeadingChildren as u16,
     NotaListItemChildren(NotaListItemWithoutChildren<'a, 't>) =
         AncestorType::NotaListItemChildren as u16,
+    NotaAttrsProps(NotaAttrsWithoutProps<'a, 't>) = AncestorType::NotaAttrsProps as u16,
     NotaLinkChildren(NotaLinkWithoutChildren<'a, 't>) = AncestorType::NotaLinkChildren as u16,
     NotaDocStateChildren(NotaDocStateWithoutChildren<'a, 't>) =
         AncestorType::NotaDocStateChildren as u16,
@@ -2079,6 +2081,11 @@ impl<'a, 't> Ancestor<'a, 't> {
     }
 
     #[inline]
+    pub fn is_nota_attrs(self) -> bool {
+        matches!(self, Self::NotaAttrsProps(_))
+    }
+
+    #[inline]
     pub fn is_nota_link(self) -> bool {
         matches!(self, Self::NotaLinkChildren(_))
     }
@@ -2468,7 +2475,10 @@ impl<'a, 't> Ancestor<'a, 't> {
 
     #[inline]
     pub fn is_parent_of_nota_prop(self) -> bool {
-        matches!(self, Self::NotaElementProps(_) | Self::NotaVerbatimProps(_))
+        matches!(
+            self,
+            Self::NotaElementProps(_) | Self::NotaVerbatimProps(_) | Self::NotaAttrsProps(_)
+        )
     }
 
     #[inline]
@@ -2823,6 +2833,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::NotaEmphasisChildren(a) => a.address(),
             Self::NotaHeadingChildren(a) => a.address(),
             Self::NotaListItemChildren(a) => a.address(),
+            Self::NotaAttrsProps(a) => a.address(),
             Self::NotaLinkChildren(a) => a.address(),
             Self::NotaDocStateChildren(a) => a.address(),
         }
@@ -19922,6 +19933,36 @@ impl<'a, 't> NotaListItemWithoutChildren<'a, 't> {
 }
 
 impl<'a, 't> GetAddress for NotaListItemWithoutChildren<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
+
+pub(crate) const OFFSET_NOTA_ATTRS_NODE_ID: usize = offset_of!(NotaAttrs, node_id);
+pub(crate) const OFFSET_NOTA_ATTRS_SPAN: usize = offset_of!(NotaAttrs, span);
+pub(crate) const OFFSET_NOTA_ATTRS_PROPS: usize = offset_of!(NotaAttrs, props);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaAttrsWithoutProps<'a, 't>(
+    pub(crate) *const NotaAttrs<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaAttrsWithoutProps<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ATTRS_NODE_ID) as *const Cell<NodeId>) }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_ATTRS_SPAN) as *const Span) }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaAttrsWithoutProps<'a, 't> {
     #[inline]
     fn address(&self) -> Address {
         unsafe { Address::from_ptr(self.0) }

@@ -17,7 +17,7 @@ use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
-use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI};
+use super::{ATTRS, DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI};
 
 /// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
 /// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
@@ -44,7 +44,7 @@ const FLOW_TAGS: &[&str] = &[
 /// dynamic tags) as free identifiers the integrator binds; a colliding binding is diagnosed
 /// rather than silently shadowed.
 fn is_reserved_emit_name(name: &str) -> bool {
-    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | SHOW | DYNAMIC)
+    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | SHOW | DYNAMIC | ATTRS)
 }
 
 /// Diagnostic for a user module binding that shadows a reader-injected emit-surface name.
@@ -52,9 +52,9 @@ fn reserved_name_collision(name: &str, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!(
         "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` \
          (the default-export document component) and references \
-         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Show`/`Dynamic`, which the lowered markup \
-         uses; a module binding of the same name shadows them and breaks the emit. Rename the \
-         binding."
+         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Show`/`Dynamic`/`Attrs`, which the lowered \
+         markup uses; a module binding of the same name shadows them and breaks the emit. Rename \
+         the binding."
     ))
     .with_label(span)
 }

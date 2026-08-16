@@ -3625,6 +3625,19 @@ impl<'a> Dummy<'a> for NotaListKind {
     }
 }
 
+impl<'a> Dummy<'a> for NotaAttrs<'a> {
+    /// Create a dummy [`NotaAttrs`].
+    ///
+    /// Does not allocate any data into arena.
+    fn dummy(allocator: &'a Allocator) -> Self {
+        Self {
+            node_id: Dummy::dummy(allocator),
+            span: Dummy::dummy(allocator),
+            props: Dummy::dummy(allocator),
+        }
+    }
+}
+
 impl<'a> Dummy<'a> for NotaLink<'a> {
     /// Create a dummy [`NotaLink`].
     ///

@@ -162,6 +162,9 @@ pub enum NotaChild<'a> {
     Link(Box<'a, NotaLink<'a>>) = 15,
     /// `![alt](src)` — an image → `<img src alt />`.
     Image(Box<'a, NotaImage<'a>>) = 16,
+    /// A trailing bare `[props]` **attrs group** — attaches to its heading/list-item (hoisted at
+    /// lowering) or, in flow positions, to the enclosing paragraph (via the `<Attrs/>` marker).
+    Attrs(Box<'a, NotaAttrs<'a>>) = 17,
     // `NotaForm` variants added here by `inherit_variants!` macro
     @inherit NotaForm
 }
@@ -529,6 +532,22 @@ pub enum NotaListKind {
     Unordered = 0,
     /// `+` or `N.`.
     Ordered = 1,
+}
+
+/// A trailing bare `[props]` **attrs group** (notation.md §Attrs) — `# Title [id: "intro"]`,
+/// `- item [class: "hot"]`, `…paragraph. [class: "note"]`.
+///
+/// The props reuse the element `[props]` machinery verbatim. Attachment is the lowering's /
+/// runtime's: a trailing group in a heading or list-item body hoists onto that construct's
+/// element; elsewhere it lowers to the ambient `<Attrs …/>` marker, which the Reforest pass
+/// strips and applies to the paragraph it is forming.
+#[ast(visit)]
+#[derive(Debug)]
+#[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
+pub struct NotaAttrs<'a> {
+    pub node_id: Cell<NodeId>,
+    pub span: Span,
+    pub props: Vec<'a, NotaProp<'a>>,
 }
 
 /// `[text](url)` — an inline link (notation.md §Links) → `<a href="url">text…</a>`.

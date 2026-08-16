@@ -2019,6 +2019,13 @@ const _: () = {
     assert!(align_of::<NotaListKind>() == 1);
 
     // Padding: 4 bytes
+    assert!(size_of::<NotaAttrs>() == 40);
+    assert!(align_of::<NotaAttrs>() == 8);
+    assert!(offset_of!(NotaAttrs, span) == 0);
+    assert!(offset_of!(NotaAttrs, node_id) == 8);
+    assert!(offset_of!(NotaAttrs, props) == 16);
+
+    // Padding: 4 bytes
     assert!(size_of::<NotaLink>() == 64);
     assert!(align_of::<NotaLink>() == 8);
     assert!(offset_of!(NotaLink, span) == 0);
@@ -4067,6 +4074,13 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
 
     assert!(size_of::<NotaListKind>() == 1);
     assert!(align_of::<NotaListKind>() == 1);
+
+    // Padding: 0 bytes
+    assert!(size_of::<NotaAttrs>() == 28);
+    assert!(align_of::<NotaAttrs>() == 4);
+    assert!(offset_of!(NotaAttrs, span) == 0);
+    assert!(offset_of!(NotaAttrs, node_id) == 8);
+    assert!(offset_of!(NotaAttrs, props) == 12);
 
     // Padding: 0 bytes
     assert!(size_of::<NotaLink>() == 44);

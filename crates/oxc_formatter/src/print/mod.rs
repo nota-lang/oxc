@@ -1015,6 +1015,7 @@ nota_format_unreachable!(
     NotaDocState,
     NotaLink,
     NotaImage,
+    NotaAttrs,
 );
 
 // `NotaThematicBreak` is lifetime-free, so it sits outside the macro (which appends `<'a>`).

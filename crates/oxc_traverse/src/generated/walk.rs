@@ -5835,6 +5835,7 @@ unsafe fn walk_nota_child<'a, State, Tr: Traverse<'a, State>>(
         }
         NotaChild::Link(node) => walk_nota_link(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Image(node) => walk_nota_image(traverser, (&mut **node) as *mut _, ctx),
+        NotaChild::Attrs(node) => walk_nota_attrs(traverser, (&mut **node) as *mut _, ctx),
         NotaChild::Element(_)
         | NotaChild::Fragment(_)
         | NotaChild::Interpolation(_)
@@ -6316,6 +6317,23 @@ unsafe fn walk_nota_list_item<'a, State, Tr: Traverse<'a, State>>(
     }
     ctx.pop_stack(pop_token);
     traverser.exit_nota_list_item(&mut *node, ctx);
+}
+
+unsafe fn walk_nota_attrs<'a, State, Tr: Traverse<'a, State>>(
+    traverser: &mut Tr,
+    node: *mut NotaAttrs<'a>,
+    ctx: &mut TraverseCtx<'a, State>,
+) {
+    traverser.enter_nota_attrs(&mut *node, ctx);
+    let pop_token = ctx
+        .push_stack(Ancestor::NotaAttrsProps(ancestor::NotaAttrsWithoutProps(node, PhantomData)));
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_ATTRS_PROPS) as *mut Vec<NotaProp>)
+    {
+        walk_nota_prop(traverser, item as *mut _, ctx);
+    }
+    ctx.pop_stack(pop_token);
+    traverser.exit_nota_attrs(&mut *node, ctx);
 }
 
 unsafe fn walk_nota_link<'a, State, Tr: Traverse<'a, State>>(

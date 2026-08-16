@@ -8655,6 +8655,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             Self::ThematicBreak(it) => NotaChild::ThematicBreak(CloneIn::clone_in(it, allocator)),
             Self::Link(it) => NotaChild::Link(CloneIn::clone_in(it, allocator)),
             Self::Image(it) => NotaChild::Image(CloneIn::clone_in(it, allocator)),
+            Self::Attrs(it) => NotaChild::Attrs(CloneIn::clone_in(it, allocator)),
             Self::Element(it) => NotaChild::Element(CloneIn::clone_in(it, allocator)),
             Self::Fragment(it) => NotaChild::Fragment(CloneIn::clone_in(it, allocator)),
             Self::Interpolation(it) => NotaChild::Interpolation(CloneIn::clone_in(it, allocator)),
@@ -8689,6 +8690,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaChild<'_> {
             }
             Self::Link(it) => NotaChild::Link(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Image(it) => NotaChild::Image(CloneIn::clone_in_with_semantic_ids(it, allocator)),
+            Self::Attrs(it) => NotaChild::Attrs(CloneIn::clone_in_with_semantic_ids(it, allocator)),
             Self::Element(it) => {
                 NotaChild::Element(CloneIn::clone_in_with_semantic_ids(it, allocator))
             }
@@ -9336,6 +9338,26 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaListKind {
     #[inline(always)]
     fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
         *self
+    }
+}
+
+impl<'new_alloc> CloneIn<'new_alloc> for NotaAttrs<'_> {
+    type Cloned = NotaAttrs<'new_alloc>;
+
+    fn clone_in(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaAttrs {
+            node_id: Default::default(),
+            span: CloneIn::clone_in(&self.span, allocator),
+            props: CloneIn::clone_in(&self.props, allocator),
+        }
+    }
+
+    fn clone_in_with_semantic_ids(&self, allocator: &'new_alloc Allocator) -> Self::Cloned {
+        NotaAttrs {
+            node_id: CloneIn::clone_in_with_semantic_ids(&self.node_id, allocator),
+            span: CloneIn::clone_in_with_semantic_ids(&self.span, allocator),
+            props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
+        }
     }
 }
 

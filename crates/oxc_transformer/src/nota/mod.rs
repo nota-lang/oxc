@@ -57,3 +57,6 @@ const LABEL: &str = "Label";
 const REF: &str = "Ref";
 const FOOTNOTE_MARK: &str = "FootnoteMark";
 const FOOTNOTE_TEXT: &str = "FootnoteText";
+/// The `@nota-lang/solid` attrs marker (notation.md §Attrs): a flow-position attrs group lowers
+/// to `<Attrs …/>`, which the Reforest pass strips and applies to the paragraph it is forming.
+const ATTRS: &str = "Attrs";
