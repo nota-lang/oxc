@@ -51,7 +51,9 @@ static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b 
     || b == b'&'
     || b == b'['
     // Comment openers (`//` line, `/* … */` block — Typst/C style); a lone `/` stays 1-byte text.
-    || b == b'/');
+    || b == b'/'
+    // Strikethrough `~~` (two-byte emphasis marker); a lone `~` stays 1-byte text.
+    || b == b'~');
 
 impl<C: Config> Lexer<'_, C> {
     /// Pull one Nota markup-body *child token* at the current source position.
@@ -113,6 +115,18 @@ impl<C: Config> Lexer<'_, C> {
                 };
                 self.consume_char();
                 return self.finish_re_lex(kind);
+            }
+            // Strikethrough `~~`: a 2-byte marker token only at a valid opener (the emphasis
+            // word-boundary rule judged across the pair); otherwise the `~` is a 1-byte text
+            // token. The matching close is resolved by the parser via `find_strike_close`.
+            Some(b'~') => {
+                if strike_can_open(self.source.whole(), start) {
+                    self.consume_char();
+                    self.consume_char();
+                    return self.finish_re_lex(Kind::Tilde);
+                }
+                self.consume_char();
+                return self.finish_re_lex(Kind::MarkupText);
             }
             // Comments (Typst/C style): a marker token only at a valid opener (an unescaped `/`
             // directly followed by `/` or `*`); otherwise the `/` is a 1-byte text token. The
@@ -892,22 +906,37 @@ fn emphasis_can_open(source: &str, off: u32, marker: u8) -> bool {
     matches!(byte_at(source, off + 1), Some(b) if !b.is_ascii_whitespace() && b != marker)
 }
 
-/// Is the `*`/`_` at `marker_off` a significant marker (unescaped, not intra-word)?
-fn is_marker(source: &str, marker_off: u32) -> bool {
+/// Is the `len`-byte marker run at `marker_off` significant (unescaped, not intra-word — the
+/// word-boundary chars are the ones just outside the whole run)?
+fn is_marker(source: &str, marker_off: u32, len: u32) -> bool {
     !(is_escaped(source, marker_off)
-        || is_wordy(char_before(source, marker_off)) && is_wordy(char_at(source, marker_off + 1)))
+        || is_wordy(char_before(source, marker_off)) && is_wordy(char_at(source, marker_off + len)))
 }
 
-/// Can a `*`/`_` at `off` **close** an emphasis span? A marker immediately preceded by content
-/// (a non-whitespace byte), so `foo *` does not close.
-fn can_close(source: &str, off: u32) -> bool {
-    if !is_marker(source, off) {
+/// Can the `len`-byte marker run at `off` **close** its span? A marker immediately preceded by
+/// content (a non-whitespace byte), so `foo *` / `foo ~~` do not close.
+fn can_close(source: &str, off: u32, len: u32) -> bool {
+    if !is_marker(source, off, len) {
         return false;
     }
     match (off as usize).checked_sub(1).and_then(|p| source.as_bytes().get(p)) {
         Some(&b) => !b.is_ascii_whitespace(),
         None => false,
     }
+}
+
+/// Can a `~~` at byte `off` **open** a strikethrough span (notation.md §Markup sugar)? Mirrors
+/// [`emphasis_can_open`] with a two-byte marker: unescaped, the `~~` digraph, not intra-word (the
+/// word-boundary rule judged across the pair), and immediately followed by content — a
+/// non-whitespace byte that is not another `~` (so runs `~~~` and `a~~b` stay literal).
+pub fn strike_can_open(source: &str, off: u32) -> bool {
+    if byte_at(source, off + 1) != Some(b'~') || is_escaped(source, off) {
+        return false;
+    }
+    if is_wordy(char_before(source, off)) && is_wordy(char_at(source, off + 2)) {
+        return false;
+    }
+    matches!(byte_at(source, off + 2), Some(b) if !b.is_ascii_whitespace() && b != b'~')
 }
 
 /// The embedded-JS / raw-span skips: extent walkers step *over* these regions so their contents
@@ -1037,13 +1066,25 @@ impl Scan<'_> {
 }
 
 /// Find the matching close marker for an emphasis opened at `open`, or `None` (then the opener is
-/// literal). Scans forward for the next valid close, bounded by the emphasis *scope*: the end of
-/// the opening line (an inline span never crosses a newline — the CommonMark-style clamp), the `}`
-/// closing the enclosing body, or EOF. Balanced `{…}`, raw spans, and `@`-forms are skipped so
-/// their inner `*`/`_` cannot close; a skip that crosses the line end kills the span too.
+/// literal). See [`find_marker_close`].
 pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
+    find_marker_close(source, open, marker, 1)
+}
+
+/// Find the matching `~~` close for a strikethrough opened at `open`, or `None` (then both opener
+/// bytes are literal). The emphasis scan with a two-byte marker run — see [`find_marker_close`].
+pub fn find_strike_close(source: &str, open: u32) -> Option<u32> {
+    find_marker_close(source, open, b'~', 2)
+}
+
+/// Scan forward from a `len`-byte marker run opened at `open` for the next valid close, bounded
+/// by the span's *scope*: the end of the opening line (an inline span never crosses a newline —
+/// the CommonMark-style clamp), the `}` closing the enclosing body, or EOF. Balanced `{…}`, raw
+/// spans, comments, and `@`-forms are skipped so their inner marker bytes cannot close; a skip
+/// that crosses the line end kills the span too.
+fn find_marker_close(source: &str, open: u32, marker: u8, len: u32) -> Option<u32> {
     let bound = line_content_end(source, open);
-    let mut s = Scan::new(source, open + 1);
+    let mut s = Scan::new(source, open + len);
     let mut depth = 0i32;
     while let Some(b) = s.peek() {
         if s.pos() >= bound {
@@ -1070,7 +1111,8 @@ pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
             b'/' if s.peek_at(1) == Some(b'/') => return None,
             b'/' if s.peek_at(1) == Some(b'*') => s.skip_markup_block_comment(),
             _ if b == marker && depth == 0 => {
-                if s.pos() > open + 1 && can_close(source, s.pos()) {
+                let run_ok = len == 1 || s.peek_at(1) == Some(marker);
+                if run_ok && s.pos() > open + len && can_close(source, s.pos(), len) {
                     return Some(s.pos());
                 }
                 s.bump();
@@ -1559,6 +1601,30 @@ mod tests {
         let scan = lex_comment("/* a", 0, 4);
         assert!(scan.block && !scan.terminated);
         assert_eq!(scan.end, 4);
+    }
+
+    /// Strikethrough `~~` scans: the two-byte opener (word-boundary rule across the pair,
+    /// content required, runs literal) and the two-byte close matching.
+    #[test]
+    fn strike_scans() {
+        // Openers.
+        assert!(strike_can_open("~~x~~", 0));
+        assert!(strike_can_open("a ~~x~~", 2));
+        assert!(!strike_can_open("~x", 0)); // no digraph
+        assert!(!strike_can_open("~~ x", 0)); // whitespace after the pair
+        assert!(!strike_can_open("~~~x", 0)); // a third `~` is not content
+        assert!(!strike_can_open("a~~b~~", 1)); // intra-word (wordy on both sides of the pair)
+        assert!(!strike_can_open(r"\~~x", 1)); // escaped
+        assert!(!strike_can_open("~~", 0)); // EOF after the pair
+
+        // Closes: the first `~~` run preceded by content, two-byte aware.
+        assert_eq!(find_strike_close("~~x~~", 0), Some(3));
+        assert_eq!(find_strike_close("~~a b~~ c", 0), Some(5));
+        assert_eq!(find_strike_close("~~a ~ b~~", 0), Some(7)); // single `~` is content
+        assert_eq!(find_strike_close("~~a ~~", 0), None); // whitespace before: cannot close
+        assert_eq!(find_strike_close("~~a\nb~~", 0), None); // the line clamp
+        assert_eq!(find_strike_close("~~a `x~~y` b~~", 0), Some(12)); // raw span skipped
+        assert_eq!(find_strike_close(r"~~a \~~ b~~", 0), Some(9)); // escaped pair cannot close
     }
 
     #[test]

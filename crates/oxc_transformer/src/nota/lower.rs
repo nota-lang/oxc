@@ -424,6 +424,7 @@ impl<'a> NotaLowering<'a> {
         let tag_name = match marker {
             NotaEmphasisMarker::Strong => "strong",
             NotaEmphasisMarker::Em => "em",
+            NotaEmphasisMarker::Strike => "s",
         };
         let children = self.lower_children(children, true);
         self.build_element(

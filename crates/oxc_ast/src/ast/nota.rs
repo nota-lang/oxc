@@ -469,7 +469,7 @@ pub enum NotaVerbatimPart<'a> {
 // Surface sugar (faithful; lowered to host elements)
 // ===============================================================================================
 
-/// `*strong*` / `_em_` emphasis.
+/// `*strong*` / `_em_` / `~~strike~~` emphasis.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
@@ -489,6 +489,8 @@ pub enum NotaEmphasisMarker {
     Strong = 0,
     /// `_…_` → `<em>`.
     Em = 1,
+    /// `~~…~~` → `<s>` (strikethrough; the one two-byte marker).
+    Strike = 2,
 }
 
 /// `#`..`######` heading.

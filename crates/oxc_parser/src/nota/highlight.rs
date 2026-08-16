@@ -109,13 +109,15 @@ pub enum NotaHighlightKind {
     /// A markup comment (`// …` / `/* … */`, notation.md §Comments), delimiters included.
     /// (Embedded-JS comments stay [`Self::JsComment`], via the re-lex pump.)
     Comment = 24,
+    /// A whole `~~…~~` span (under-layer), like [`Self::EmphasisStrong`].
+    EmphasisStrike = 25,
 }
 
 impl NotaHighlightKind {
     /// Every kind, in discriminant order (index = discriminant, test-guarded). Clients build
     /// kind→name/style tables from this — the *names* are client-side (the wasm bindings own the
     /// kebab-case table their `highlightKindNames()` serves; this crate only owns the wire enum).
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::Sigil,
         Self::TagHost,
         Self::TagComponent,
@@ -141,6 +143,7 @@ impl NotaHighlightKind {
         Self::JsOperator,
         Self::StyleText,
         Self::Comment,
+        Self::EmphasisStrike,
     ];
 }
 
@@ -600,13 +603,14 @@ impl<'a> Visit<'a> for Highlighter<'a> {
     }
 
     fn visit_nota_emphasis(&mut self, it: &NotaEmphasis<'a>) {
-        let kind = match it.marker {
-            NotaEmphasisMarker::Strong => NotaHighlightKind::EmphasisStrong,
-            NotaEmphasisMarker::Em => NotaHighlightKind::EmphasisEm,
+        let (kind, marker_len) = match it.marker {
+            NotaEmphasisMarker::Strong => (NotaHighlightKind::EmphasisStrong, 1),
+            NotaEmphasisMarker::Em => (NotaHighlightKind::EmphasisEm, 1),
+            NotaEmphasisMarker::Strike => (NotaHighlightKind::EmphasisStrike, 2),
         };
         self.emit(it.span.start, it.span.end, kind); // under-layer (incl. the marker bytes)
-        self.emit(it.span.start, it.span.start + 1, NotaHighlightKind::Sigil);
-        self.emit(it.span.end - 1, it.span.end, NotaHighlightKind::Sigil);
+        self.emit(it.span.start, it.span.start + marker_len, NotaHighlightKind::Sigil);
+        self.emit(it.span.end - marker_len, it.span.end, NotaHighlightKind::Sigil);
         self.visit_nota_children(&it.children);
     }
 
@@ -830,6 +834,14 @@ mod tests {
 
     fn has(spans: &[(K, String)], kind: K, text: &str) -> bool {
         spans.iter().any(|(k, t)| *k == kind && t == text)
+    }
+
+    #[test]
+    fn strike_and_thematic_break_spans() {
+        let spans = hl("a ~~x~~ b\n\n---\n");
+        assert!(has(&spans, K::EmphasisStrike, "~~x~~"));
+        assert!(has(&spans, K::Sigil, "~~"));
+        assert!(has(&spans, K::ListMarker, "---"));
     }
 
     /// Markup comments surface as `Comment` spans (delimiters included); embedded-JS comments

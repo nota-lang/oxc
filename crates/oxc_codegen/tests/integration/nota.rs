@@ -1947,6 +1947,30 @@ fn id(x: i32) -> i32 { x }
 }
 
 // ===============================================================================================
+// Strikethrough `~~…~~` → `<s>` — the emphasis machinery with a two-byte marker (word
+// boundaries, the line clamp, nesting).
+// ===============================================================================================
+
+#[test]
+fn strike_basic_and_nesting() {
+    nota_expr("@p{~~x~~}", r#"<p><s>{"x"}</s></p>"#);
+    nota_expr("@p{a ~~b *c*~~ d}", r#"<p>{"a "}<s>{"b "}<strong>{"c"}</strong></s>{" d"}</p>"#);
+    nota_expr("@p{*a ~~b~~*}", r#"<p><strong>{"a "}<s>{"b"}</s></strong></p>"#);
+}
+
+#[test]
+fn strike_literal_cases() {
+    // A lone `~` is text; intra-word `~~` is text (the word-boundary rule); no close → literal.
+    nota_expr("@p{a ~ b}", r#"<p>{"a ~ b"}</p>"#);
+    nota_expr("@p{a~~b~~c}", r#"<p>{"a~~b~~c"}</p>"#);
+    nota_expr("@p{~~a b}", r#"<p>{"~~a b"}</p>"#);
+    // The line clamp: no same-line close → both opener bytes literal.
+    nota_expr("@p{~~a\nb~~ c}", r#"<p>{"~~a\nb~~ c"}</p>"#);
+    // Escapes: `\~` neutralizes the digraph.
+    nota_expr(r"@p{\~~a~~ b}", r#"<p>{"~~a~~ b"}</p>"#);
+}
+
+// ===============================================================================================
 // Thematic break: a line-start run of 3+ `-` with a whitespace-only tail → `<hr />` (a block:
 // the runtime's Reforest pass breaks paragraphs around it). Inline `---` stays literal text
 // (smart-dash material at the decode stage).

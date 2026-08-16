@@ -323,6 +323,7 @@ fn highlight_kind_name(kind: NotaHighlightKind) -> &'static str {
         NotaHighlightKind::JsOperator => "js-operator",
         NotaHighlightKind::StyleText => "style-text",
         NotaHighlightKind::Comment => "comment",
+        NotaHighlightKind::EmphasisStrike => "emphasis-strike",
     }
 }
 

@@ -3583,6 +3583,7 @@ impl ESTree for NotaEmphasisMarker {
         match self {
             Self::Strong => JsonSafeString("strong").serialize(serializer),
             Self::Em => JsonSafeString("em").serialize(serializer),
+            Self::Strike => JsonSafeString("strike").serialize(serializer),
         }
     }
 }

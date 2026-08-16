@@ -36,11 +36,11 @@ use crate::{
         ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
         armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
         colon_prop_line_at, docstate_left_guard, else_peek, escape_span, find_emphasis_close,
-        find_fence_close, footnote_sugar_at, heading_at, is_ident_start_at, is_statement_line,
-        label_sugar_at, lex_code_span, lex_comment, lex_math_span, line_content_end,
-        line_indent_of, list_item_extent, list_marker_at, markup_trigger, next_line_start,
-        percent_line_is_empty, ref_sugar_at, scan_hyphen_tail, statement_bound, statement_kind,
-        thematic_break_at, verbatim_boundary,
+        find_fence_close, find_strike_close, footnote_sugar_at, heading_at, is_ident_start_at,
+        is_statement_line, label_sugar_at, lex_code_span, lex_comment, lex_math_span,
+        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
+        next_line_start, percent_line_is_empty, ref_sugar_at, scan_hyphen_tail, statement_bound,
+        statement_kind, thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -647,6 +647,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // notation.md §Comments). A comment is trivia — no child.
                     self.parse_nota_comment(self.cur_token().start(), depth);
                 }
+                Kind::Tilde => {
+                    // The lexer emits `Tilde` (a 2-byte `~~` token) only at a valid opener;
+                    // close-matching still decides marker-vs-literal, like emphasis.
+                    self.parse_strike(self.cur_token().start());
+                }
                 Kind::Eof => return MarkupClose::Eof,
                 _ => {
                     // Defensive: lexing resumed in JS mode (shouldn't happen mid-body). Re-enter
@@ -1157,6 +1162,22 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         } else {
             self.push_text(open, open + 1);
             self.nota_seek_markup(open + 1);
+        }
+    }
+
+    /// Parse a `~~…~~` strikethrough span opened at `open` (notation.md §Markup sugar) — the
+    /// emphasis machinery with a two-byte marker, lowering to `<s>`. With no matching close in
+    /// scope both opener bytes are literal.
+    fn parse_strike(&mut self, open: u32) {
+        if let Some(close) = find_strike_close(self.nota_scan_source(), open) {
+            let children = self.collect_markup_range(open + 2, close);
+            let span = Span::new(open, close + 2);
+            let element = self.ast.nota_emphasis(span, NotaEmphasisMarker::Strike, children);
+            self.push_nota_item(NotaChild::Emphasis(self.ast.alloc(element)));
+            self.nota_seek_markup(close + 2);
+        } else {
+            self.push_text(open, open + 2);
+            self.nota_seek_markup(open + 2);
         }
     }
 
