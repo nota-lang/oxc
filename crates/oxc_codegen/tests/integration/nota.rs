@@ -1,12 +1,14 @@
-//! Nota reader end-to-end fixtures: `.nota` source → Nota parse → codegen JS string.
+//! Nota reader end-to-end fixtures: `.nota` source → Nota parse → lower → codegen JS string.
 //!
-//! These are the golden/snapshot tests for the Nota reader. Two emit modes:
-//! * **expression mode** (`nota_expr`) — elides the `Doc` wrapper and injected imports
-//!   (`@p{Hello}` → `h("p", {}, ["Hello"])`); the bulk of fixtures.
-//! * **document mode** (`nota_doc`) — the full module incl. `export default function Doc()`,
-//!   hoisted `import`/`export`, the Doc-body `decode(...)` wrap, and document-local inline
-//!   components (bindings prepend into Doc, name-attached, no hoist/export — decode.md §The
-//!   worked example).
+//! These are the golden/snapshot tests for the Nota reader. The emit is **Solid JSX**
+//! (design/solid.md §The pipeline; surface → emit table in design/notation.md). Two emit modes:
+//! * **expression mode** (`nota_expr`) — a single form, no `Doc` wrapper
+//!   (`@p{Hello}` → `<p>{"Hello"}</p>`); the bulk of fixtures.
+//! * **document mode** (`nota_doc`) — the full module: `export default function Doc()`
+//!   returning `<NotaDoc>…</NotaDoc>`, `%`-statement routing (`import`/`export` hoist to module
+//!   scope; everything else prepends into `Doc` — document-local, no hoist, no name-attach), and
+//!   the structural names (`NotaDoc`/`Reforest`/`UlLi`/…) as free identifiers the compiler shim
+//!   binds — the reader emits no imports.
 //!
 //! Every fixture also asserts the *validity invariant*: the emitted JS re-parses cleanly under the
 //! STOCK oxc parser.
@@ -17,7 +19,7 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 
 /// Reformat a JS string by re-parsing and re-printing it through `Codegen`, so two strings that
-/// differ only in formatting (e.g. the codegen wraps a >2-element array across lines) compare equal.
+/// differ only in formatting (e.g. the codegen's own line-wrapping choices) compare equal.
 /// This is how the fixtures compare "modulo formatting".
 #[track_caller]
 fn reformat(js: &str) -> String {
@@ -113,8 +115,9 @@ fn nota_doc_err(source: &str) {
 }
 
 /// Assert the emitted JS re-parses cleanly under the stock oxc parser (the validity invariant).
+/// (`pub`: the shared-fixture tests in `nota_fixtures.rs` reuse it.)
 #[track_caller]
-fn assert_valid_js(js: &str) {
+pub fn assert_valid_js(js: &str) {
     let allocator = Allocator::default();
     // TSX module source type: the emit is Solid JSX (document mode may hoist `import`/`export`;
     // the virtual paths preserve embedded TS, so tsx covers every fixture).
@@ -224,10 +227,29 @@ fn self_closing_with_props_no_body() {
 }
 
 #[test]
+fn jsx_unsafe_string_prop_rides_expression_container() {
+    // JSX attribute strings are escape-less and entity-decoded, so a reader-synthesized string
+    // prop containing any of `"` `&` `<` `>` cannot ride one — it goes through an expression
+    // container, whose JS string escaping is exact (`jsx_string_safe` in the lowering; `<`/`>`
+    // are kept out conservatively for downstream tooling).
+    nota_expr(r#"@a[href: "a&b<c"]{go}"#, r#"<a href={"a&b<c"}>{"go"}</a>"#);
+    // Each trigger char individually forces the container; a plain string stays a JSX attribute
+    // string.
+    nota_expr(
+        r#"@a[t1: "x\"y", t2: "x<y", t3: "x>y", t4: "x&y", t5: "plain"]{}"#,
+        r#"<a t1={"x\"y"} t2={"x<y"} t3={"x>y"} t4={"x&y"} t5="plain" />"#,
+    );
+    // Doc-state-relevant: an element-form label id with an `&` must not entity-decode (a JSX
+    // attribute string would turn `"a&amp;b"`-style content into different runtime bytes).
+    nota_expr(r#"@Label[id: "a&b"]{}"#, r#"<Label id={"a&b"} />"#);
+}
+
+#[test]
 fn dynamic_tag_direct() {
-    // Every `@(expr)` head emits directly as `h`'s first argument — `h` is a plain function, so
-    // there is no grammatical restriction on what may sit in tag position (unlike JSX, which needs
-    // a bound identifier there). Capitalized ident, static member, and arbitrary expression alike.
+    // Every `@(expr)` head lowers to `<Dynamic component={expr}>` — Solid's `Dynamic` takes an
+    // arbitrary expression, so there is no grammatical restriction on what may sit in tag position
+    // (a plain JSX tag needs a bound identifier there). Capitalized ident, static member, and
+    // arbitrary expression alike.
     nota_expr("@(Box){hi}", r#"<Dynamic component={Box}>{"hi"}</Dynamic>"#);
     nota_expr("@(ui.Card){hi}", r#"<Dynamic component={ui.Card}>{"hi"}</Dynamic>"#);
     nota_expr("@(getTag()){hi}", r#"<Dynamic component={getTag()}>{"hi"}</Dynamic>"#);
@@ -439,7 +461,7 @@ fn ws_common_indent_strip_keeps_leftover() {
 
 #[test]
 fn ws_element_on_following_line() {
-    // `@foo{bar @baz{3}⏎·····blah}` → ⟦ "bar ", h("baz",{},["3"]), "⏎", "blah" ⟧
+    // `@foo{bar @baz{3}⏎·····blah}` → ⟦ "bar ", <baz>{"3"}</baz>, "⏎", "blah" ⟧
     nota_expr("@foo{bar @baz{3}\n     blah}", r#"<foo>{"bar "}<baz>{"3"}</baz>{"\nblah"}</foo>"#);
 }
 
@@ -453,7 +475,7 @@ fn ws_nested_element_independent() {
 }
 
 // ===============================================================================================
-// Document mode: decode wrap, statements/hoisting/inline components, colon sugar
+// Document mode: the NotaDoc wrap, statements/hoisting/inline components, colon sugar
 // ===============================================================================================
 
 #[test]
@@ -637,6 +659,32 @@ fn colon_body_props_string_brace_does_not_clip() {
     nota_expr("@p{@a: @f[x: \"}\"] y}", r#"<p><a><f x="}" />{" y"}</a></p>"#);
 }
 
+#[test]
+fn colon_pipe_props_line_supplies_props() {
+    // A leading `| props` line of a colon body supplies the element's `[…]` props (notation.md
+    // §Colon & block sugar); entries on the line accumulate like a bracket group's, and the body
+    // below dedents normally.
+    assert_js_eq(
+        &nota_doc("@section:\n  | class: \"tip\", id: \"t\"\n  body text\n  more\n"),
+        r#"export default function Doc() {
+  return <NotaDoc><section class="tip" id="t"><Reforest>{"body text\nmore"}</Reforest></section></NotaDoc>;
+}"#,
+    );
+}
+
+#[test]
+#[ignore = "BUG (2026-08-16): a RUN of `|` prop lines mis-parses — the 2nd line's `|` is consumed \
+            as a JS binary-or into the 1st line's value expression, emitting \
+            <section class={\"tip\" | id} id=\"t\"> (valid JS, silently wrong). Spec: notation.md \
+            §Colon — 'Leading `|` lines of the body supply the `[…]` props (multiple accumulate)'."]
+fn colon_pipe_props_lines_should_accumulate() {
+    let js = nota_doc("@section:\n  | class: \"tip\"\n  | id: \"t\"\n  body\n");
+    assert!(
+        js.contains(r#"<section class="tip" id="t">"#),
+        "each `|` line contributes its own props: {js}"
+    );
+}
+
 // ===============================================================================================
 // Diagnostics
 // ===============================================================================================
@@ -674,8 +722,8 @@ fn err_unterminated_fence() {
 
 #[test]
 fn unknown_component_is_not_a_reader_error() {
-    // `@Unknown{}` is valid to the reader (→ `h(Unknown, …)`); the missing binding is a downstream
-    // TS scope error, NOT a reader diagnostic.
+    // `@Unknown{}` is valid to the reader (→ `<Unknown>`, a free identifier reference); the
+    // missing binding is a downstream TS scope error, NOT a reader diagnostic.
     nota_expr("@Unknown{x}", r#"<Unknown>{"x"}</Unknown>"#);
 }
 
@@ -765,7 +813,8 @@ fn if_nested_in_for() {
 
 #[test]
 fn for_basic() {
-    // `@for (x of y) {@li{@x}}` → `y.map((x, _i) => Fragment({ key: _i }, h("li", {}, [x])))`.
+    // `@for (x of y) {@li{@x}}` → `<For each={y}>{(x) => <><li>{x}</li></>}</For>` — the callback
+    // takes exactly the user's bind (no injected index param).
     nota_expr("@for (x of y) {@li{@x}}", "<For each={y}>{(x) => <><li>{x}</li></>}</For>");
 }
 
@@ -827,7 +876,7 @@ fn err_for_without_body() {
 
 // ===============================================================================================
 // Markup sugar. Emphasis (`*`/`_`), headings (`#`), lists (`-`/`+`/`N.`). Each lowers to an
-// ordinary element; the runtime `struct` does the grouping.
+// ordinary element; the runtime Reforest pass does the grouping (design/solid.md).
 // ===============================================================================================
 
 #[test]
@@ -873,7 +922,7 @@ fn emphasis_unbalanced_is_literal() {
 fn escaped_emphasis_marker_is_literal() {
     // `\*` suppresses the emphasis marker; the `\` is dropped so the literal `*` remains.
     let js = nota_expr_raw(r"@p{\*not bold\*}");
-    assert!(!js.contains(r#"h("strong""#), "no strong: {js}");
+    assert!(!js.contains("<strong"), "no strong: {js}");
     assert!(js.contains(r#""*not bold*""#), "literal stars, backslash dropped: {js}");
 }
 
@@ -882,7 +931,7 @@ fn escaped_hash_dash_at_line_start_not_construct() {
     // `\#`/`\-` at line start: the first char is `\`, not the marker, so no heading/list fires.
     let js = nota_doc("\\# not a heading\n\\- not a list\n");
     assert!(!js.contains("<Heading"), "no heading: {js}");
-    assert!(!js.contains(r#"h("nota-ul-li""#), "no list: {js}");
+    assert!(!js.contains("<UlLi"), "no list: {js}");
 }
 
 #[test]
@@ -898,7 +947,7 @@ fn emphasis_clamps_at_newline() {
     // The CommonMark-style line clamp: an inline span never crosses a newline, so a soft-wrapped
     // `*foo⏎bar*` keeps both markers literal.
     let js = nota_doc("*foo\nbar*\n");
-    assert!(!js.contains(r#"h("strong""#), "no cross-line emphasis: {js}");
+    assert!(!js.contains("<strong"), "no cross-line emphasis: {js}");
     assert!(js.contains("*foo"), "opener literal: {js}");
     assert!(js.contains("bar*"), "closer literal: {js}");
 }
@@ -914,7 +963,7 @@ fn heading_h1() {
 #[test]
 fn heading_levels() {
     let js = nota_doc("### Sub *bit*\n");
-    // `### Sub *bit*` → h(Heading, { rank: 3 }, ["Sub ", h("strong", {}, ["bit"])]).
+    // `### Sub *bit*` → `<Heading rank={3}>{"Sub "}<strong>{"bit"}</strong></Heading>`.
     assert!(js.contains(r#"<Heading rank={3}>{"Sub "}<strong>{"bit"}</strong></Heading>"#), "{js}");
 }
 
@@ -933,7 +982,7 @@ fn heading_all_six_levels() {
 fn heading_seven_hashes_is_not_heading() {
     // 7+ `#` is not a heading (1–6 only); it stays literal text.
     let js = nota_doc("####### too many\n");
-    assert!(!js.contains("rank: 7"), "no rank-7 heading: {js}");
+    assert!(!js.contains("rank={7}"), "no rank-7 heading: {js}");
     assert!(!js.contains("<Heading"), "no heading at all: {js}");
 }
 
@@ -952,8 +1001,8 @@ fn heading_sugar_relowers_but_raw_element_stays_host() {
     let js = nota_doc("# Sugar\n@h2{Raw}\n");
     assert!(js.contains(r#"<Heading rank={1}>{"Sugar"}</Heading>"#), "sugar → Heading slot: {js}");
     assert!(js.contains(r#"<h2>{"Raw"}</h2>"#), "raw @h2 stays a host tag: {js}");
-    assert!(!js.contains(r#"h("h1""#), "sugar does NOT emit a host h1: {js}");
-    assert!(!js.contains("rank: 2"), "the raw @h2 carries no rank prop: {js}");
+    assert!(!js.contains("<h1"), "sugar does NOT emit a host h1: {js}");
+    assert!(!js.contains("rank={2}"), "the raw @h2 carries no rank prop: {js}");
 }
 
 #[test]
@@ -976,7 +1025,8 @@ fn line_start_constructs_resume_after_footnote_def_sugar() {
 
 #[test]
 fn list_bullet() {
-    // `- a` → h("nota-ul-li", {}, ["a"]); the runtime struct coalesces runs into <ul>.
+    // `- a` → `<UlLi>{"a"}</UlLi>` (a reference-named item); the runtime Reforest pass coalesces
+    // item runs into a `<ul>`.
     let js = nota_doc("- a\n- b\n");
     assert!(js.contains(r#"<UlLi>{"a"}</UlLi>"#), "{js}");
     assert!(js.contains(r#"<UlLi>{"b"}</UlLi>"#), "{js}");
@@ -991,7 +1041,8 @@ fn list_number() {
 
 #[test]
 fn list_explicit_number_marker() {
-    // `N.` is an alternate nota-ol-li marker; the written numbers are ignored.
+    // `N.` is an alternate ordered-list marker (same `<OlLi>` emit); the written numbers are
+    // ignored.
     let js = nota_doc("1. one\n2. two\n");
     assert!(js.contains(r#"<OlLi>{"one"}</OlLi>"#), "{js}");
     assert!(js.contains(r#"<OlLi>{"two"}</OlLi>"#), "{js}");
@@ -1031,7 +1082,7 @@ fn list_continuation_line() {
     let js = nota_doc("- first line\n  continued\n");
     assert!(js.contains("first line"), "{js}");
     assert!(js.contains("continued"), "{js}");
-    // Both are children of the same nota-ul-li (no second nota-ul-li for "continued").
+    // Both are children of the same `<UlLi>` (no second item for "continued").
     assert_eq!(js.matches("<UlLi>").count(), 1, "one UlLi only: {js}");
 }
 
@@ -1145,7 +1196,7 @@ fn body_start_is_a_line_start() {
     );
     // Literal braces in prose do NOT open a body — `{- x}` mid-paragraph stays text.
     let js = nota_doc("a {- b} c\n");
-    assert!(!js.contains("nota-ul-li"), "literal braces stay prose: {js}");
+    assert!(!js.contains("<UlLi"), "literal braces stay prose: {js}");
     // Balanced literal braces inside an armed item stay literal.
     assert!(
         nota_doc("@div{- a {b} c}\n").contains(r#"{"a {b} c"}"#),
@@ -1276,7 +1327,7 @@ fn docstate_clips_at_bounded_frame_end() {
 fn docstate_escapes_are_literal() {
     // `\<`, `\&`, `\[` yield the literal characters via the standard escape machinery.
     let js = nota_doc("\\<sec> \\&ref \\[^n]\n");
-    for sugar in ["<Label", "h(Ref", "h(FootnoteMark", "h(FootnoteText"] {
+    for sugar in ["<Label", "<Ref", "<FootnoteMark", "<FootnoteText"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
     assert!(js.contains("<sec> &ref [^n]"), "escapes drop the backslash: {js}");
@@ -1411,8 +1462,8 @@ const CANONICAL_NOTA: &str = r#"%let Colorized = (props) => {
 }
 "#;
 
-/// Compile a `.nota` document without the validity assertion (used where an unlowered `@for` is
-/// still present, which is not yet valid JS).
+/// Compile a `.nota` document without the validity assertion (for probing emits whose validity is
+/// not the point).
 #[track_caller]
 fn nota_doc_no_validity(source: &str) -> String {
     let allocator = Allocator::default();
@@ -1506,8 +1557,8 @@ fn doc_paragraph_break_is_double_newline() {
 // ===============================================================================================
 // Raw spans: verbatim (`|{ … }|`), code (`` `…` `` / fenced), math (`$…$` / `$$…$$`), and general
 // backslash escapes. All raw spans lower to `String.raw` tagged templates.
-// `CodeInline`/`CodeBlock`/`Tex` are ambient prelude bindings (`Tex`, not `Math` — an ambient
-// `Math` would capture the JS global; decode.md §The registry & config).
+// `CodeInline`/`CodeBlock`/`Tex` are ambient prelude names the compiler shim binds (`Tex`, not
+// `Math` — an ambient `Math` would capture the JS global; design/solid.md).
 // ===============================================================================================
 
 // --- General backslash escape -----------------------------------------------------------------
@@ -1542,7 +1593,7 @@ fn escape_backtick_and_at_in_prose() {
 
 #[test]
 fn verbatim_raw_body() {
-    // `@code|{@foo{x}}|` → `h("code", {}, [String.raw`@foo{x}`])`. Sigils off, braces literal —
+    // `@code|{@foo{x}}|` → `<code>{String.raw`@foo{x}`}</code>`. Sigils off, braces literal —
     // `@foo{x}` is raw text, NOT a child.
     nota_expr(r"@code|{@foo{x}}|", "<code>{String.raw`@foo{x}`}</code>");
 }
@@ -1607,7 +1658,7 @@ fn verbatim_armed_interpolation() {
 
 #[test]
 fn code_inline() {
-    // `` `@x` `` → `h(CodeInline, {}, [String.raw`@x`])`. Fully raw (the `@` is literal).
+    // `` `@x` `` → `<CodeInline>{String.raw`@x`}</CodeInline>`. Fully raw (the `@` is literal).
     nota_expr("@p{`@x`}", "<p><CodeInline>{String.raw`@x`}</CodeInline></p>");
     nota_expr("@p{`a + b`}", "<p><CodeInline>{String.raw`a + b`}</CodeInline></p>");
 }
@@ -1635,7 +1686,7 @@ fn code_inline_clamps_at_newline() {
 
 #[test]
 fn code_fenced_with_lang() {
-    // ```` ```python⏎f(x)⏎``` ```` → `h(CodeBlock, { lang: "python" }, [String.raw`f(x)`])`.
+    // ```` ```python⏎f(x)⏎``` ```` → `<CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock>`.
     let src = "@d{```python\nf(x)\n```}";
     nota_expr(src, r#"<d><CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock></d>"#);
 }
@@ -1805,8 +1856,9 @@ fn verbatim_validity_with_backtick_in_raw() {
 
 #[test]
 fn math_dollar_brace_validity() {
-    // A literal `${` in LaTeX would open a template substitution; codegen escapes it (`\${`) to keep
-    // the template valid JS. Validity invariant is the assertion (inside nota_expr_raw).
+    // A `${` inside inline math: the `$` is an (unescaped) close, so the span ends there — `a `
+    // is the raw content and `{b}$` stays literal prose (never a live template substitution).
+    // Validity invariant is the assertion (inside nota_expr_raw).
     let js = nota_expr_raw(r"@p{$a ${b}$}");
     assert!(js.contains("<Tex"), "{js}");
 }
@@ -1815,7 +1867,7 @@ fn math_dollar_brace_validity() {
 
 #[test]
 fn doc_fenced_code_block() {
-    // A fenced block at document level → `h(CodeBlock, { lang }, [String.raw`…`])`.
+    // A fenced block at document level → `<CodeBlock lang="…">{String.raw`…`}</CodeBlock>`.
     let js = nota_doc("```python\nf(x)\n```\n");
     assert!(
         js.contains(r#"<CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock>"#),
@@ -2050,7 +2102,7 @@ fn strike_literal_cases() {
 // ===============================================================================================
 // Thematic break: a line-start run of 3+ `-` with a whitespace-only tail → `<hr />` (a block:
 // the runtime's Reforest pass breaks paragraphs around it). Inline `---` stays literal text
-// (smart-dash material at the decode stage).
+// (smart-dash material for the runtime's smart-punct pass).
 // ===============================================================================================
 
 #[test]
@@ -2190,19 +2242,125 @@ fn comments_stay_literal_in_raw_spans() {
 }
 
 // ===============================================================================================
-// Fuzzing findings (2026-06) — known reader/codegen bugs, as executable specs.
+// Solid-emit policy pins (2026-08): the flow-container Reforest wrap, synchronous Doc/IIFE, the
+// no-imports rule, and reader/runtime division-of-labor facts (design/solid.md, NOTA_READER.md
+// §Lowering).
+// ===============================================================================================
+
+#[test]
+fn flow_tags_get_reforest_interior() {
+    // Table-driven over the lowering's FLOW_TAGS (build.rs): every flow container's non-empty
+    // interior is wrapped in `<Reforest>` at emit; empty children skip the wrap; a non-flow tag
+    // never gets one.
+    const FLOW_TAGS: &[&str] = &[
+        "section",
+        "article",
+        "aside",
+        "nav",
+        "header",
+        "footer",
+        "main",
+        "div",
+        "blockquote",
+        "figure",
+        "td",
+        "th",
+    ];
+    for tag in FLOW_TAGS {
+        nota_expr(
+            &format!("@{tag}{{x}}"),
+            &format!(r#"<{tag}><Reforest>{{"x"}}</Reforest></{tag}>"#),
+        );
+    }
+    // The empty-children branch: no `<Reforest>`.
+    nota_expr("@div{}", "<div />");
+    // A non-flow host tag: children stay direct.
+    nota_expr("@span{x}", r#"<span>{"x"}</span>"#);
+}
+
+#[test]
+fn doc_and_nested_iife_stay_synchronous() {
+    // Semantic pin (NOTA_READER.md §Lowering): `Doc` and the nested-`%` IIFE are ALWAYS
+    // synchronous — no `await`-driven auto-`async` (top-level `await` emits non-parsing JS by
+    // design; see the fuzz_findings_2 note).
+    let js = nota_doc("% const x = 1\n@p{@x}\n");
+    assert!(!js.contains("async"), "Doc stays synchronous: {js}");
+    let js = nota_expr_raw("@aside{\n  intro\n  % const n = 1\n  @p{@n}\n}");
+    assert!(js.contains("=> {"), "nested-% IIFE present: {js}");
+    assert!(!js.contains("async"), "the nested-% IIFE stays synchronous: {js}");
+}
+
+#[test]
+fn doc_level_display_math_fence() {
+    // A standalone `$$` fence at DOCUMENT level (not inside a braced body) → `<Tex display>` with
+    // a String.raw body — the doc-level analog of `math_display_fence`.
+    let js = nota_doc("$$\n\\sum x\n$$\n");
+    assert!(js.contains(r"<Tex display>{String.raw`\sum x`}</Tex>"), "{js}");
+}
+
+#[test]
+fn smart_punct_reaches_emit_byte_identical() {
+    // The reader does NOT smarten punctuation — straight quotes, apostrophes, `--` dashes, and
+    // `...` ellipses reach the emit byte-identical (modulo JS string escaping); smartening is the
+    // runtime's business (design/solid.md).
+    let js = nota_doc("He said \"quotes\", it's 5 -- 6, dots...\n");
+    assert!(js.contains(r#""He said \"quotes\", it's 5 -- 6, dots...""#), "{js}");
+}
+
+#[test]
+fn escape_plus_and_bang_are_ordinary_escapes() {
+    // The escape set is UNIVERSAL: `\<c>` yields the literal `<c>` for ANY char (lexer
+    // `escape_span`) — so `\+` at a line start suppresses an ordered-list marker, and `\!` (no
+    // construct at all) still just drops the backslash.
+    let js = nota_doc("\\+ one\n+ real\n");
+    assert!(js.contains(r#"{"+ one\n"}"#), "escaped `+` stays literal text: {js}");
+    assert_eq!(js.matches("<OlLi").count(), 1, "only the unescaped marker fires: {js}");
+    assert!(js.contains(r#"<OlLi>{"real"}</OlLi>"#), "{js}");
+    let js = nota_doc("\\! bang stays\n");
+    assert!(js.contains(r#"{"! bang stays"}"#), "escaped `!` literal, backslash dropped: {js}");
+}
+
+#[test]
+fn attrs_on_ordered_item_hoist_and_on_colon_body_stay_marker() {
+    // An `N.` item hoists a trailing attrs group onto its own element, exactly like a bullet item
+    // (attrs_hoist_onto_heading_and_list_item covers `-` only).
+    let js = nota_doc("1. item [class: \"x\"]\n");
+    assert!(js.contains(r#"<OlLi class="x">{"item"}</OlLi>"#), "ordered-item attrs hoist: {js}");
+    // On an `@head:` colon construct the group does NOT hoist onto the element: hoisting is a
+    // heading/list-item rule (notation.md §Attrs), and a colon body is a flow interior — the group
+    // lowers to the ambient `<Attrs/>` marker inside `<Reforest>`, which applies it to the
+    // paragraph it is forming.
+    let js = nota_doc("@aside: note [class: \"x\"]\n");
+    assert!(
+        js.contains(r#"<aside><Reforest>{"note "}<Attrs class="x" /></Reforest></aside>"#),
+        "colon-body attrs stay a flow marker: {js}"
+    );
+}
+
+#[test]
+fn emit_contains_no_imports() {
+    // The reader emits NO imports at all (NOTA_READER.md §Lowering): structural names
+    // (`NotaDoc`/`Reforest`/`UlLi`/`For`/`Show`/…) and the ambient prelude
+    // (`Tex`/`CodeInline`/`Heading`/…) are free identifiers the `@nota-lang/compiler` shim binds.
+    let js = nota_doc("# T\n\n- a\n\n@p{$x$ and `c`}\n\n@if (c) {y}\n");
+    for name in ["<Heading", "<UlLi", "<Tex", "<CodeInline", "<Show"] {
+        assert!(js.contains(name), "the probe document renders {name}: {js}");
+    }
+    assert!(!js.contains("import "), "no reader-injected imports: {js}");
+}
+
+// ===============================================================================================
+// Fuzzing findings (2026-06) — reader/codegen bugs found by fuzzing, kept as executable specs.
 // ===============================================================================================
 //
-// Each `#[ignore]`d test asserts the **intended** behavior, so it FAILS today — that is the point:
-// it is a red, runnable record of a real bug. Run them with
-//     cargo test -p oxc_codegen --test integration -- --ignored
-// They are `#[ignore]`d only so normal CI stays green; when a bug is fixed, delete its `#[ignore]`
-// and the test turns green. Each test's comment states the severity, the repro, and the bug.
+// Every finding in this module has since been FIXED: each test asserts the intended behavior and
+// passes, pinned here as a regression suite (each test's FIX note says where the fix lives).
+// Still-open findings — the `#[ignore]`d deferred product calls — live in `fuzz_findings_2` below.
 //
-// Findings whose correct home is elsewhere live there instead: the paragraph-break bug is a runtime
-// issue (`packages/runtime/tests/struct.test.ts` — a `test.fails` on `groupParas`), and the
-// unterminated-`%%%`-fence rejection is a normal parser diagnostic (`err_unterminated_fence` above).
-// So this module is exclusively the `#[ignore]`d, currently-failing reader/codegen bug specs.
+// Findings whose correct home is elsewhere live there instead: paragraph grouping is the runtime
+// Reforest pass's business on this branch (`packages/solid/tests/reforest.test.tsx`), and the
+// unterminated-`%%%`-fence rejection is a normal parser diagnostic (`err_unterminated_fence`
+// above).
 mod fuzz_findings {
     use oxc_allocator::Allocator;
     use oxc_codegen::Codegen;
@@ -2239,9 +2397,9 @@ mod fuzz_findings {
     }
 
     // --- [HIGH] Hyphenated/quoted prop keys emit valid JS (FIXED) --------------------------------
-    // A key that is not a valid JS identifier (`data-x`, `aria-label`) must be a STRING-literal key:
-    // `{ data-x: v }` parses as `data - x`. FIX: lower_props emits a quoted key for non-identifier
-    // names → h("a", { "data-x": v }, ["y"]), which re-parses (validity invariant).
+    // A quoted non-identifier key (`"data-x"`) must survive the emit: JSX attribute names admit
+    // hyphens directly, so `@a["data-x": v]{y}` → `<a data-x={v}>{"y"}</a>`, which re-parses
+    // (validity invariant).
     #[test]
     fn hyphenated_prop_key_should_emit_valid_js() {
         let js = emit_doc_unchecked("@a[\"data-x\": v]{y}\n");
@@ -2252,16 +2410,8 @@ mod fuzz_findings {
     // String.raw does NOT process a `\` escape, so escaping a backtick/`${` inside it leaks the `\`
     // into the runtime string. FIX: content with either breaker falls back to a cooked string literal
     // (build.rs `build_string_raw`), which reproduces the source exactly — no spurious backslash.
-    #[test]
-    fn string_raw_should_not_corrupt_backtick_in_code() {
-        let js = nota_expr_raw("@code|{a `x` b}|");
-        assert!(
-            !js.contains(r"\`"),
-            "should not backslash-escape backticks (corrupts runtime): {js}"
-        );
-    }
-
-    // Same root cause for `${` (a template-substitution opener).
+    // (The backtick half of this finding is covered by `verbatim_validity_with_backtick_in_raw` +
+    // `verbatim_unicode_and_backtick_preserved` above; only the `${` half lives here.)
     #[test]
     fn string_raw_should_not_corrupt_dollar_brace_in_code() {
         let js = nota_expr_raw("@code|{a ${b} c}|");
@@ -2275,6 +2425,9 @@ mod fuzz_findings {
     // FIX: `\r\n` is normalized in the Scribble pass (a `\r` before the split `\n` is dropped as part
     // of the line terminator), so no `\r` stays glued to text and a trailing `\r\n` after the closing
     // `}` no longer leaks a stray "\r" sibling.
+    // KEPT alongside the transformer unit `crlf_is_normalized` (scribble.rs) deliberately: the unit
+    // covers only the pure whitespace pass; this golden also crosses the markup lexer (CRLF hitting
+    // the `\n` sigil / body-extent scans) and the codegen print — halves the unit cannot see.
     #[test]
     fn crlf_should_be_normalized() {
         let js = nota_doc("@p{line1\r\nline2}\r\n");
@@ -2317,7 +2470,7 @@ mod fuzz_findings {
     // --- 6. [MEDIUM] Colon/block sugar with a `| props` line dedents the body (FIXED) ------------
     // FIX: a `| props` line no longer throws off common-indent stripping. The body suffix after the
     // props now includes the preceding `\n` (collect_colon_body), so the whitespace pass treats its
-    // first line as an indent line. notation.md golden: h("foo", { x: 1 }, ["hello"]).
+    // first line as an indent line. notation.md golden: `<foo x={1}>{"hello"}</foo>`.
     #[test]
     fn colon_sugar_props_line_should_not_break_dedent() {
         let js = nota_doc("@foo:\n  | x: 1\n  hello\n");
@@ -2326,8 +2479,8 @@ mod fuzz_findings {
 
     // --- 7. [MEDIUM] Hyphenated (custom-element) tag names are host tags (FIXED) -----------------
     // FIX: a lowercase head extends over `-`-joined segments when an element trigger follows, so
-    // `@my-widget{hi}` → h("my-widget", {}, ["hi"]). Interpolation is unaffected: `@my-foo bar` (no
-    // trigger) stays `@my` interpolation + literal `-foo bar` (parser `scan_hyphenated_tag_tail`).
+    // `@my-widget{hi}` → `<my-widget>{"hi"}</my-widget>`. Interpolation is unaffected: `@my-foo bar`
+    // (no trigger) stays `@my` interpolation + literal `-foo bar` (parser `scan_hyphenated_tag_tail`).
     #[test]
     fn hyphenated_tag_should_be_a_host_tag() {
         let js = nota_doc("@my-widget{hi}\n");
@@ -2357,6 +2510,8 @@ mod fuzz_findings {
             doc_parses("@foo\\: hello\n"),
             "`@foo\\:` should parse (literal colon per notation.md)"
         );
+        // The raw-escaped-head scan is Unicode-aware, so a Unicode head escapes too.
+        assert!(doc_parses("@café\\: hello\n"), "`@café\\:` should parse (Unicode head)");
     }
 }
 
@@ -2366,9 +2521,9 @@ mod fuzz_findings {
 //
 // Specs found by AI-driven spec-conformance fuzzing (the `nota_inspect` harness), each asserting the
 // spec-correct behavior. The FIXED findings pass; the still-open ones are `#[ignore]`d with the
-// blocker noted in the reason (like `fuzz_findings` above) so the suite stays green — un-ignore one
-// and fix the reader to turn it green. The two purely-runtime findings (object/non-renderable child;
-// paragraph break surviving inside a tight element) live in `packages/runtime/tests/serialize.test.ts`.
+// blocker noted in the reason so the suite stays green — un-ignore one and fix the reader to turn
+// it green. Purely-runtime findings (non-renderable children, paragraph grouping) belong to the
+// Solid runtime's own tests (`packages/solid/tests/`), not here.
 mod fuzz_findings_2 {
     use oxc_allocator::Allocator;
     use oxc_codegen::Codegen;
@@ -2480,12 +2635,15 @@ mod fuzz_findings_2 {
 
     // ---- reader-injected name hygiene (collisions the oxc parser does NOT catch) ----------------
 
-    // [INVALID-JS] reader's `_i` map index collides with a user loop var named `_i` → `(_i, _i) =>`
-    // (a duplicate arrow parameter — a SyntaxError in a real engine; oxc's parser does not flag it).
+    // [RETIRED with the h-call emit] the reader used to inject an `_i` map-index parameter, which
+    // collided with a user bind named `_i` (`(_i, _i) =>`, a duplicate-parameter SyntaxError).
+    // `<For>`'s callback now takes EXACTLY the user's bind — no injected index exists to collide.
+    // Pin that shape.
     #[test]
-    fn fuzz2_for_index_name_should_not_collide() {
+    fn fuzz2_for_callback_takes_exactly_the_user_bind() {
         let js = emit_doc_unchecked("@for(_i of xs){@_i}\n");
-        assert!(!js.contains("(_i, _i)"), "the reader's `_i` index collides with the user's: {js}");
+        assert!(js.contains("<For each={xs}>{(_i) =>"), "callback param is the bind alone: {js}");
+        assert!(!js.contains("(_i, "), "no injected index parameter: {js}");
     }
 
     // [INVALID-JS] a module-scope user `Doc` (here `%import Doc`) collides with `function Doc`.
@@ -2497,10 +2655,12 @@ mod fuzz_findings_2 {
         );
     }
 
-    // [RUNTIME-BREAK] a user binding `h` (or `Fragment`/`decode`/…) shadows the runtime import the
-    // emitted markup calls, so `h(…)` invokes the user's value instead of the runtime function.
+    // [RUNTIME-BREAK] a user binding of a reader-injected structural name (`NotaDoc`, and Solid's
+    // `For`/`Show`) shadows the free identifier reference the emitted JSX renders through —
+    // silently, since they are ordinary references — so the lowering diagnoses it. `h` is an
+    // ordinary, bindable name now: the h-call surface is gone with the Solid JSX emit.
     #[test]
-    fn fuzz2_user_binding_should_not_shadow_runtime_h() {
+    fn fuzz2_reserved_structural_names_diagnosed_but_h_is_free() {
         assert!(
             !doc_lowers_clean("%let NotaDoc = 1\n@p{x}\n"),
             "a user `NotaDoc` binding must be diagnosed (it shadows the structural reference)"
@@ -2546,7 +2706,7 @@ mod fuzz_findings_2 {
     #[ignore = "deferred: @else support-vs-diagnose is a product call"]
     fn fuzz2_at_else_should_be_a_branch_not_an_element() {
         let js = emit_doc_unchecked("@if(x){a}@else{b}\n");
-        assert!(!js.contains("h(\"else\""), "`@else` is parsed as an <else> element: {js}");
+        assert!(!js.contains("<else"), "`@else` is parsed as an <else> element: {js}");
     }
 
     // [REJECTS-VALID] `@for(const x of xs)` → "'const' is a reserved word"; `@for(let x …)` differs.
@@ -2626,13 +2786,8 @@ mod fuzz_findings_2 {
         assert!(doc_parses("% // a comment\n@p{x}\n"), "a comment-only % line should parse");
     }
 
-    // [REJECTS-VALID] `@foo\:` (escaped literal colon adjacent to a head) — notation.md §Colon.
-    #[test]
-    fn fuzz2_head_adjacent_colon_escape_should_parse() {
-        assert!(doc_parses("@foo\\: hello\n"), "`@foo\\:` should parse (literal colon)");
-        // The raw-escaped-head scan is Unicode-aware, so a Unicode head escapes too.
-        assert!(doc_parses("@café\\: hello\n"), "`@café\\:` should parse (Unicode head)");
-    }
+    // (`@foo\:` head-adjacent colon escapes — incl. the Unicode-head case — live in
+    // `fuzz_findings::head_adjacent_colon_escape_should_parse`; the duplicate here was merged.)
 
     // ---- self-closing / lists / colon-block ----------------------------------------------------
 
@@ -2664,14 +2819,9 @@ mod fuzz_findings_2 {
         );
     }
 
-    // [REJECTS-VALID] colon sugar `@head:` inside a braced body swallows the `}` → "Expected `}`".
-    #[test]
-    fn fuzz2_colon_sugar_in_braced_body_should_parse() {
-        assert!(
-            doc_parses("@p{@a: b}\n"),
-            "colon sugar inside a braced body should parse, not error"
-        );
-    }
+    // (Colon sugar inside a braced body — the old swallowed-`}` finding — is subsumed by
+    // `colon_positional_line_start_fires` + `colon_body_brace_handling`, which assert the same
+    // input parses AND pin its emit; the parse-only duplicate here was deleted.)
 
     // [DATA-LOSS] a void element with children silently drops them at render — diagnose it instead.
     #[test]
@@ -2704,23 +2854,26 @@ mod fuzz_findings_2 {
     fn fuzz2_blank_line_after_list_item_should_not_leave_newline() {
         let js = emit_doc_unchecked("- a\n- b\n\npara\n");
         assert!(
-            !js.contains(r#"["b", "\n"]"#),
-            "blank line after a list item leaves a stray \\n: {js}"
+            !js.contains(r#""b\n"#),
+            "blank line after a list item leaves a stray \\n glued to the item text: {js}"
         );
+        assert!(js.contains(r#"<UlLi>{"b"}</UlLi>"#), "the item body is exactly \"b\": {js}");
     }
 
     // [WHITESPACE] an empty list item carries a stray newline body.
     #[test]
     fn fuzz2_empty_list_item_should_not_have_stray_newline() {
         let js = emit_doc_unchecked("- \n");
-        assert!(!js.contains(r#"["\n"]"#), "an empty list item has a stray newline body: {js}");
+        assert!(!js.contains(r#""\n""#), "an empty list item has a stray newline body: {js}");
+        assert!(js.contains("<UlLi />"), "the empty item is childless: {js}");
     }
 
     // [WHITESPACE] a colon-sugar body keeps a trailing newline that a brace body correctly drops.
     #[test]
     fn fuzz2_colon_body_should_drop_trailing_newline() {
         let js = emit_doc_unchecked("@foo:\n");
-        assert!(!js.contains(r#"["\n"]"#), "a colon-sugar body keeps the trailing newline: {js}");
+        assert!(!js.contains(r#""\n""#), "a colon-sugar body keeps the trailing newline: {js}");
+        assert!(js.contains("<foo />"), "the empty colon body is childless: {js}");
     }
 
     // [WHITESPACE] a bare CR (not part of CRLF) is not normalized to a line break.
