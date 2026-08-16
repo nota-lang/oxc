@@ -37,9 +37,10 @@ use crate::{
         armed_boundary, at_line_start_in_frame, brace_clip_on_line, byte_at, colon_block_extent,
         colon_prop_line_at, docstate_left_guard, else_peek, escape_span, find_emphasis_close,
         find_fence_close, footnote_sugar_at, heading_at, is_ident_start_at, is_statement_line,
-        label_sugar_at, lex_code_span, lex_math_span, line_content_end, line_indent_of,
-        list_item_extent, list_marker_at, markup_trigger, next_line_start, percent_line_is_empty,
-        ref_sugar_at, scan_hyphen_tail, statement_bound, statement_kind, verbatim_boundary,
+        label_sugar_at, lex_code_span, lex_comment, lex_math_span, line_content_end,
+        line_indent_of, list_item_extent, list_marker_at, markup_trigger, next_line_start,
+        percent_line_is_empty, ref_sugar_at, scan_hyphen_tail, statement_bound, statement_kind,
+        verbatim_boundary,
     },
 };
 
@@ -102,16 +103,20 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    fn wrap_document_program(&self, document: NotaDocument<'a>) -> Program<'a> {
+    fn wrap_document_program(&mut self, document: NotaDocument<'a>) -> Program<'a> {
         let span = document.span;
         let markup = self.ast.nota_markup(span, NotaMarkupKind::Document(self.ast.alloc(document)));
         let expr = Expression::NotaMarkup(self.ast.alloc(markup));
         let stmt = self.ast.statement_expression(span, expr);
+        // Markup comments are trivia, not children — they ride the Program's comments vec (the
+        // faithful-tree channel: the ESTree view and the highlight pass read them there; the
+        // lowering rebuilds the Program without them, so the emit never sees one).
+        let comments = self.ast.vec_from_iter(std::mem::take(&mut self.state.nota.comments));
         self.ast.program(
             span,
             SourceType::default().with_module(true),
             self.source_text,
-            self.ast.vec(),
+            comments,
             None,
             self.ast.vec(),
             self.ast.vec1(stmt),
@@ -637,6 +642,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
+                Kind::Slash => {
+                    // The lexer emits `Slash` only at a comment opener (`//` or `/*`,
+                    // notation.md §Comments). A comment is trivia — no child.
+                    self.parse_nota_comment(self.cur_token().start(), depth);
+                }
                 Kind::Eof => return MarkupClose::Eof,
                 _ => {
                     // Defensive: lexing resumed in JS mode (shouldn't happen mid-body). Re-enter
@@ -644,6 +654,51 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.advance_for_nota_child();
                 }
             }
+        }
+    }
+
+    /// Consume a markup comment opened at `open` (`//` to end of line, `/* … */` nestable —
+    /// notation.md §Comments). A comment is **trivia**: it produces no child and is recorded on
+    /// the parser state (→ the Program's comments vec — the ESTree view and the highlight pass).
+    /// A comment that has its line to itself — line-leading (whitespace-only since the line /
+    /// frame start) with nothing but whitespace after its close on the closing line — is consumed
+    /// *with* that line's `\n`, so a comment-only line contributes no phantom soft/paragraph
+    /// break; the resume then sits at a line start and runs the line-start hook (a heading, list,
+    /// or `%` statement directly after a comment line is sugar, not literal text). An unterminated
+    /// block comment (no matching `*/` within the frame) is a fatal diagnostic.
+    fn parse_nota_comment(&mut self, open: u32, depth: u32) {
+        let limit = self.docstate_scan_limit();
+        let scan = lex_comment(self.nota_scan_source(), open, limit);
+        if scan.block && !scan.terminated {
+            let error = diagnostics::nota_unterminated_comment(Span::new(open, scan.end));
+            self.set_fatal_error(error);
+            return;
+        }
+        let kind = if !scan.block {
+            CommentKind::Line
+        } else if self.source_text[open as usize..scan.end as usize].contains('\n') {
+            CommentKind::MultiLineBlock
+        } else {
+            CommentKind::SingleLineBlock
+        };
+        self.state.nota.comments.push(Comment::new(open, scan.end, kind));
+
+        let frame_start = match self.nota_top_region() {
+            NotaRegion::Markup { start, .. } => *start,
+            NotaRegion::Js | NotaRegion::Raw => 0, // unreachable: Slash only fires in markup
+        };
+        let close_line_end = line_content_end(self.source_text, scan.end);
+        let own_line = at_line_start_in_frame(self.source_text, open, frame_start)
+            && self.source_text[scan.end as usize..close_line_end as usize]
+                .bytes()
+                .all(|b| matches!(b, b' ' | b'\t' | b'\r'))
+            && close_line_end < limit
+            && byte_at(self.source_text, close_line_end) == Some(b'\n');
+        if own_line {
+            self.nota_seek_markup(close_line_end + 1);
+            self.consume_line_start_after_form(depth);
+        } else {
+            self.nota_seek_markup(scan.end);
         }
     }
 
@@ -1622,6 +1677,9 @@ enum NotaRegion<'a> {
 #[derive(Default)]
 pub struct NotaParserState<'a> {
     regions: Vec<NotaRegion<'a>>,
+    /// Markup comments (`//` / `/* … */`) in source order — trivia, carried onto the document
+    /// Program's comments vec by [`ParserImpl::wrap_document_program`].
+    comments: Vec<Comment>,
 }
 
 impl<'a, C: Config> ParserImpl<'a, C> {

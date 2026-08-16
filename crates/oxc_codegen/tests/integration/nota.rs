@@ -742,10 +742,7 @@ fn else_only_continues_as_next_token() {
 #[test]
 fn else_adjacent_continues() {
     // No blank line ⇒ `else` continues even across a single newline.
-    nota_expr(
-        "@if (c) {a}\nelse {b}",
-        r#"<Show when={c} fallback={<>{"b"}</>}><>{"a"}</></Show>"#,
-    );
+    nota_expr("@if (c) {a}\nelse {b}", r#"<Show when={c} fallback={<>{"b"}</>}><>{"a"}</></Show>"#);
 }
 
 #[test]
@@ -1947,6 +1944,107 @@ fn id(x: i32) -> i32 { x }
         js.contains(r"<figure><Reforest>{String.raw`verbatim @keep{raw}`}</Reforest></figure>"),
         "verbatim: {js}"
     );
+}
+
+// ===============================================================================================
+// Comments (`//` line, `/* … */` block — Typst/C style; notation.md §Comments). A comment is
+// trivia: excised from the child stream, never emitted. A comment with its line to itself is
+// consumed WITH the line's `\n`, so it contributes no phantom soft/paragraph break.
+// ===============================================================================================
+
+#[test]
+fn comment_trailing_on_a_line() {
+    // The comment is excised; the line's newline survives (a soft break, not a para break).
+    nota_expr("@p{a // note\nb}", r#"<p>{"a\nb"}</p>"#);
+}
+
+#[test]
+fn comment_only_line_consumes_its_newline() {
+    // A comment-only line contributes nothing — `a⏎//c⏎b` is a soft break, not a para break…
+    nota_expr("@p{a\n// note\nb}", r#"<p>{"a\nb"}</p>"#);
+    // …and blank lines around one still make exactly one paragraph break.
+    nota_expr("@p{a\n\n// note\nb}", r#"<p>{"a\n\nb"}</p>"#);
+}
+
+#[test]
+fn block_comment_inline_nested_and_multiline() {
+    // Inline: excised in place (the surrounding spaces are both kept — the comment is not a space).
+    nota_expr("@p{a /* x */ b}", r#"<p>{"a  b"}</p>"#);
+    // Nesting counts, Typst-style: one comment, not `c */` leaking as text.
+    nota_expr("@p{a /* x /* y */ z */ b}", r#"<p>{"a  b"}</p>"#);
+    // A mid-line block comment spanning lines swallows the newline — one line results.
+    nota_expr("@p{a /* x\ny */ b}", r#"<p>{"a  b"}</p>"#);
+    // Whole-line multi-line block comment: consumed with its final newline.
+    nota_expr("@p{a\n/* x\ny */\nb}", r#"<p>{"a\nb"}</p>"#);
+}
+
+#[test]
+fn comment_only_line_chains_line_start_constructs() {
+    // List continuity: a comment-only line between items vanishes, so the runs stay adjacent
+    // (Reforest coalesces adjacent same-kind items) — and nothing leaks as literal text.
+    let js = nota_doc("- a\n// gone\n- b\n");
+    assert_eq!(js.matches("UlLi").count(), 4, "two items, two tags each: {js}");
+    assert!(!js.contains("gone"), "comment leaked: {js}");
+
+    // A heading directly after a comment-only line is still a heading.
+    let js = nota_doc("// gone\n# Title\n");
+    assert!(js.contains(r#"<Heading rank={1}>{"Title"}</Heading>"#), "heading: {js}");
+    assert!(!js.contains("gone"), "comment leaked: {js}");
+}
+
+#[test]
+fn lone_and_escaped_slashes_are_literal() {
+    nota_expr("@p{a / b}", r#"<p>{"a / b"}</p>"#);
+    // `\/` escapes the opener: the pair renders as literal `//`.
+    nota_expr(r"@p{a \// b}", r#"<p>{"a // b"}</p>"#);
+}
+
+#[test]
+fn protocol_slashes_open_a_comment_by_design() {
+    // Typst semantics: `//` fires anywhere in prose, so a bare URL is claimed by it. Use the
+    // `[text](url)` link sugar, a code span, or `\/` for a literal URL.
+    nota_expr("@p{see https:\\//x.com}", r#"<p>{"see https://x.com"}</p>"#);
+    let js = nota_doc("see https://x.com\n");
+    assert!(js.contains(r#"{"see https:"}"#), "comment claims the rest: {js}");
+    assert!(!js.contains("x.com"), "comment leaked: {js}");
+}
+
+#[test]
+fn comment_claims_emphasis_close_and_body_closers() {
+    // `*a // b*`: the comment claims `b*`, so the emphasis never closes — literal `*`.
+    let js = nota_doc("*a // b*\n");
+    assert!(js.contains(r#"{"*a"}"#), "literal opener: {js}");
+    assert!(!js.contains("strong"), "no emphasis: {js}");
+
+    // Same-line trailing comment inside a braced body: the comment claims the `}` too (the
+    // comment extent is raw, C/Typst-style) — a loud unclosed-body diagnostic, not silence.
+    nota_expr_err("@p{a // b}");
+}
+
+#[test]
+fn comment_in_heading_and_list_bodies_clips_at_their_bounds() {
+    // A bounded body (heading / list item) clamps the comment at its own end — the construct
+    // itself is never eaten.
+    let js = nota_doc("# Title // note\n");
+    assert!(js.contains(r#"<Heading rank={1}>{"Title"}</Heading>"#), "heading: {js}");
+    let js = nota_doc("- item // note\n");
+    assert!(js.contains(r#"{"item"}"#), "item text: {js}");
+    assert!(!js.contains("note"), "comment leaked: {js}");
+}
+
+#[test]
+fn unterminated_block_comment_is_a_diagnostic() {
+    nota_doc_err("a /* never closed\n");
+    // In a braced body the unterminated `/*` also swallows the `}` — still one loud error.
+    nota_expr_err("@p{a /* x}");
+}
+
+#[test]
+fn comments_stay_literal_in_raw_spans() {
+    // Code, math, and verbatim interiors are raw: `//` and `/*` are content there.
+    nota_expr("@p{`a // b`}", r"<p><CodeInline>{String.raw`a // b`}</CodeInline></p>");
+    nota_expr("@p{$a /* b */$}", r"<p><Tex>{String.raw`a /* b */`}</Tex></p>");
+    nota_expr("@code|{// raw}|", r"<code>{String.raw`// raw`}</code>");
 }
 
 // ===============================================================================================

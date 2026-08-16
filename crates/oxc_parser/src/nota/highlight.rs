@@ -106,13 +106,16 @@ pub enum NotaHighlightKind {
     /// Raw text inside a `@style{…}` element — the editor highlights it as CSS (like a code
     /// interior). Interpolations / nested forms inside stay their own kinds (holes).
     StyleText = 23,
+    /// A markup comment (`// …` / `/* … */`, notation.md §Comments), delimiters included.
+    /// (Embedded-JS comments stay [`Self::JsComment`], via the re-lex pump.)
+    Comment = 24,
 }
 
 impl NotaHighlightKind {
     /// Every kind, in discriminant order (index = discriminant, test-guarded). Clients build
     /// kind→name/style tables from this — the *names* are client-side (the wasm bindings own the
     /// kebab-case table their `highlightKindNames()` serves; this crate only owns the wire enum).
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Sigil,
         Self::TagHost,
         Self::TagComponent,
@@ -137,6 +140,7 @@ impl NotaHighlightKind {
         Self::JsComment,
         Self::JsOperator,
         Self::StyleText,
+        Self::Comment,
     ];
 }
 
@@ -820,6 +824,24 @@ mod tests {
 
     fn has(spans: &[(K, String)], kind: K, text: &str) -> bool {
         spans.iter().any(|(k, t)| *k == kind && t == text)
+    }
+
+    /// Markup comments surface as `Comment` spans (delimiters included); embedded-JS comments
+    /// stay `JsComment` via the re-lex pump.
+    #[test]
+    fn markup_comments_are_comment_spans() {
+        let spans = hl("a // note\n/* block\nstill */\nb\n");
+        assert!(has(&spans, K::Comment, "// note"));
+        assert!(has(&spans, K::Comment, "/* block\nstill */"));
+
+        // An embedded-JS comment is JsComment, not Comment.
+        let spans = hl("% const x = 1; // js note\n@p{@x}\n");
+        assert!(spans.iter().any(|(k, t)| *k == K::JsComment && t.contains("js note")));
+        assert!(!spans.iter().any(|(k, t)| *k == K::Comment && t.contains("js note")));
+
+        // A lone `/` and an escaped opener are plain text — no Comment span.
+        let spans = hl("a / b \\// c\n");
+        assert!(!spans.iter().any(|(k, _)| *k == K::Comment));
     }
 
     #[test]

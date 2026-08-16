@@ -1388,6 +1388,17 @@ pub fn nota_armed_form_overruns_span(span: Span) -> OxcDiagnostic {
         .with_label(span.label("this `|@` form's body extends beyond the span's closing delimiter"))
 }
 
+/// An unterminated `/* … */` markup block comment (no matching `*/` within its frame — block
+/// comments nest, so every `/*` needs its own `*/`).
+#[cold]
+pub fn nota_unterminated_comment(span: Span) -> OxcDiagnostic {
+    OxcDiagnostic::error("unterminated `/* … */` comment")
+        .with_label(span.label("this `/*` is never closed"))
+        .with_help(
+            "close it with `*/` (block comments nest), or escape the opener as `\\/*` for literal text",
+        )
+}
+
 /// A `%` statement's JS failed to parse and its region was clipped at a blank line — the likely
 /// cause of the failure (a blank line always ends a `%` statement).
 #[cold]

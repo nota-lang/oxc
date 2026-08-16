@@ -523,6 +523,14 @@ mod parser_parse {
 
             let (mut spans, mut js_ranges) =
                 crate::nota::highlight::collect_structural(self.source_text, &program);
+            // Markup comments are trivia (never AST children); the parse carried them on the
+            // Program's comments vec — merge them as `Comment` spans. (Embedded-JS comments are
+            // classified `JsComment` by the re-lex pump below instead.)
+            spans.extend(program.comments.iter().map(|c| NotaHighlightSpan {
+                start: c.span.start,
+                end: c.span.end,
+                kind: NotaHighlightKind::Comment,
+            }));
             // The walker pops nested JS frames before their parents; the pump wants source order
             // (ranges are disjoint, so sorting by start suffices).
             js_ranges.sort_unstable_by_key(|range| range.start);

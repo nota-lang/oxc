@@ -645,8 +645,8 @@ mod tests {
     fn free_names_cover_structural_jsx_references() {
         // List markers → `UlLi`; `@for` → `For`; `@if` → `Show`; a dynamic tag → `Dynamic`. All
         // JSX identifier references, all free (the wrapper binds them).
-        let out = compile("@for (x of xs) {\n  - @if (x) {@(tags[0]){y}}\n}\n", None)
-            .expect("compiles");
+        let out =
+            compile("@for (x of xs) {\n  - @if (x) {@(tags[0]){y}}\n}\n", None).expect("compiles");
         for name in ["NotaDoc", "UlLi", "For", "Show", "Dynamic"] {
             assert!(out.free_names.iter().any(|n| n == name), "{name} free: {:?}", out.free_names);
         }

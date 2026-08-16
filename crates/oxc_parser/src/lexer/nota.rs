@@ -49,7 +49,9 @@ static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b 
     // the sigil in `next_nota_child` (left-guard / digraph shape); a non-opener stays 1-byte text.
     || b == b'<'
     || b == b'&'
-    || b == b'[');
+    || b == b'['
+    // Comment openers (`//` line, `/* … */` block — Typst/C style); a lone `/` stays 1-byte text.
+    || b == b'/');
 
 impl<C: Config> Lexer<'_, C> {
     /// Pull one Nota markup-body *child token* at the current source position.
@@ -106,6 +108,18 @@ impl<C: Config> Lexer<'_, C> {
             Some(b'[') => {
                 let kind = if footnote_can_open(self.source.whole(), start) {
                     Kind::LBrack
+                } else {
+                    Kind::MarkupText
+                };
+                self.consume_char();
+                return self.finish_re_lex(kind);
+            }
+            // Comments (Typst/C style): a marker token only at a valid opener (an unescaped `/`
+            // directly followed by `/` or `*`); otherwise the `/` is a 1-byte text token. The
+            // parser scans the extent ([`lex_comment`]) — a comment is trivia, never a child.
+            Some(b'/') => {
+                let kind = if comment_can_open(self.source.whole(), start) {
+                    Kind::Slash
                 } else {
                     Kind::MarkupText
                 };
@@ -535,6 +549,63 @@ pub fn footnote_sugar_at(source: &str, lbrack_off: u32, limit: u32) -> Option<Sp
 }
 
 // ================================================================================================
+// Comments (`//` line, `/* … */` block — Typst/C style, in markup text position)
+// ================================================================================================
+
+/// Lexer opener check for a markup comment: an unescaped `/` directly followed by `/` or `*`.
+pub fn comment_can_open(source: &str, off: u32) -> bool {
+    !is_escaped(source, off) && matches!(byte_at(source, off + 1), Some(b'/' | b'*'))
+}
+
+/// The result of scanning a markup comment ([`lex_comment`]).
+pub struct CommentScan {
+    /// One past the comment's last byte: for `//`, the line's content end (the `\n` excluded);
+    /// for `/* */`, one past the closing `*/`.
+    pub end: u32,
+    /// `true` for a `/* … */` block comment.
+    pub block: bool,
+    /// `false` when a block comment ran into `limit` with unbalanced `/*` depth.
+    pub terminated: bool,
+}
+
+/// Scan the comment opened at `off` (a valid opener per [`comment_can_open`]), within `limit` (a
+/// bounded frame's clip / the clamped scan view's end). A `//` comment runs to its line's content
+/// end; a `/* … */` block comment runs to the matching `*/` — **nesting counts**, Typst-style
+/// (`/* a /* b */ c */` is one comment). An unterminated block comment reports
+/// `terminated: false` with `end == limit`.
+pub fn lex_comment(source: &str, off: u32, limit: u32) -> CommentScan {
+    let limit = limit.min(source.len() as u32);
+    if byte_at(source, off + 1) == Some(b'/') {
+        let end = line_content_end(source, off).min(limit);
+        return CommentScan { end, block: false, terminated: true };
+    }
+    // Typst's nested-block-comment state machine: find the first `*/` that does not close a
+    // nested `/*`. `prev` is reset after a match so `/*/` cannot double-count its middle byte.
+    let mut s = Scan::new(source, off + 2);
+    let mut depth = 1u32;
+    let mut prev = 0u8;
+    while s.pos() < limit {
+        let Some(b) = s.peek() else { break };
+        s.bump();
+        match (prev, b) {
+            (b'*', b'/') => {
+                depth -= 1;
+                if depth == 0 {
+                    return CommentScan { end: s.pos(), block: true, terminated: true };
+                }
+                prev = 0;
+            }
+            (b'/', b'*') => {
+                depth += 1;
+                prev = 0;
+            }
+            _ => prev = b,
+        }
+    }
+    CommentScan { end: limit, block: true, terminated: false }
+}
+
+// ================================================================================================
 // Escapes & keywords
 // ================================================================================================
 
@@ -698,6 +769,7 @@ pub fn colon_prop_line_at(source: &str, line_start: u32) -> Option<u32> {
 /// and by line-start sugar armed inside a braced body (`@{- item}` — the item's extent must not
 /// eat the body's closer).
 pub fn brace_clip_on_line(source: &str, from: u32) -> Option<u32> {
+    let line_end = line_content_end(source, from);
     let mut s = Scan::new(source, from);
     let mut depth = 0i32;
     loop {
@@ -705,6 +777,15 @@ pub fn brace_clip_on_line(source: &str, from: u32) -> Option<u32> {
             None | Some(b'\n') => return None,
             Some(b'\\') => s.advance(2), // skip the escaped byte
             Some(b'@') => s.skip_at_form(),
+            // A `}` inside a comment is not structure: a `//` comment claims the rest of the
+            // line; a block comment that crosses the line end leaves no depth-0 `}` on it.
+            Some(b'/') if s.peek_at(1) == Some(b'/') => return None,
+            Some(b'/') if s.peek_at(1) == Some(b'*') => {
+                s.skip_markup_block_comment();
+                if s.pos() > line_end {
+                    return None;
+                }
+            }
             Some(b'{') => {
                 depth += 1;
                 s.bump();
@@ -891,6 +972,15 @@ impl Scan<'_> {
         }
     }
 
+    /// Skip a markup `/* … */` block comment whose `/*` is next (nesting honored); leaves the
+    /// cursor just past the closing `*/`, or at the source end if unterminated. Lets the
+    /// surrounding scan step over commented-out bytes (a `*` or `}` inside a comment is not
+    /// structure).
+    fn skip_markup_block_comment(&mut self) {
+        let scan = lex_comment(self.source, self.pos(), self.source.len() as u32);
+        self.goto(scan.end);
+    }
+
     /// Skip a raw span (inline/fenced code, math, or `|{ … }|` verbatim) whose opener byte is
     /// next; leaves the cursor just past its close, or one byte in if it has no valid close (the
     /// opener was literal). Lets emphasis matching step over raw content.
@@ -960,6 +1050,10 @@ pub fn find_emphasis_close(source: &str, open: u32, marker: u8) -> Option<u32> {
             b'`' | b'$' => s.skip_raw_span(),
             b'|' if s.peek_at(1) == Some(b'{') => s.skip_raw_span(),
             b'@' => s.skip_at_form(),
+            // A `//` comment claims the rest of the line — no close can follow on it; a block
+            // comment is skipped whole (one crossing the line end kills the span via the bound).
+            b'/' if s.peek_at(1) == Some(b'/') => return None,
+            b'/' if s.peek_at(1) == Some(b'*') => s.skip_markup_block_comment(),
             _ if b == marker && depth == 0 => {
                 if s.pos() > open + 1 && can_close(source, s.pos()) {
                     return Some(s.pos());
@@ -1415,6 +1509,61 @@ mod tests {
             panic!("display fence scans across newlines")
         };
         assert!(is_block);
+    }
+
+    /// Comment scans: opener shapes, line/block extents, Typst-style nesting, the `limit` clamp,
+    /// and the comment-awareness of the emphasis-close and brace-clip scans.
+    #[test]
+    fn comment_scans() {
+        // Opener shapes: `//` and `/*` fire; a lone `/` and an escaped opener do not.
+        assert!(comment_can_open("// c", 0));
+        assert!(comment_can_open("/* c */", 0));
+        assert!(!comment_can_open("/ x", 0));
+        assert!(!comment_can_open("a/b", 1));
+        assert!(!comment_can_open(r"\// x", 1)); // escaped
+        assert!(!comment_can_open("/", 0)); // EOF after the slash
+
+        // Line comment: to the line's content end (`\n` excluded); the limit clamps.
+        let src = "a // c\nb";
+        let scan = lex_comment(src, 2, src.len() as u32);
+        assert!(!scan.block && scan.terminated);
+        assert_eq!(&src[2..scan.end as usize], "// c");
+        assert_eq!(lex_comment("// abc", 0, 4).end, 4);
+
+        // Block comment: matching `*/`; nesting counts (Typst-style); `/*/` cannot self-close.
+        let src = "/* a /* b */ c */ d";
+        let scan = lex_comment(src, 0, src.len() as u32);
+        assert!(scan.block && scan.terminated);
+        assert_eq!(&src[0..scan.end as usize], "/* a /* b */ c */");
+        let src = "/*/ */ d";
+        assert_eq!(&src[0..lex_comment(src, 0, src.len() as u32).end as usize], "/*/ */");
+        let src = "/* a\nb */ c";
+        assert_eq!(&src[0..lex_comment(src, 0, src.len() as u32).end as usize], "/* a\nb */");
+
+        // Unterminated → `end == limit`, terminated false.
+        let scan = lex_comment("/* a", 0, 4);
+        assert!(scan.block && !scan.terminated);
+        assert_eq!(scan.end, 4);
+    }
+
+    #[test]
+    fn emphasis_close_honors_comments() {
+        // A `//` claims the rest of the line — no close can follow on it.
+        assert_eq!(find_emphasis_close("*a // b*", 0, b'*'), None);
+        // A `*` inside a block comment is not structure; the close after it matches.
+        let src = "*a /* x* */ b*";
+        assert_eq!(find_emphasis_close(src, 0, b'*'), Some(src.len() as u32 - 1));
+        // A block comment crossing the line end kills the span (the line clamp).
+        assert_eq!(find_emphasis_close("*a /* x\ny */ b*", 0, b'*'), None);
+    }
+
+    #[test]
+    fn brace_clip_honors_comments() {
+        // `}` inside a comment is not the clip; the depth-0 `}` after the comment is.
+        assert_eq!(brace_clip_on_line("a // }\n", 0), None);
+        assert_eq!(brace_clip_on_line("a /* } */ b} t", 0), Some(11));
+        // A block comment crossing the line end leaves no depth-0 `}` on this line.
+        assert_eq!(brace_clip_on_line("a /* \n */ }", 0), None);
     }
 
     #[test]
