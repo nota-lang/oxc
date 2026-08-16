@@ -680,69 +680,80 @@ fn unknown_component_is_not_a_reader_error() {
 }
 
 // ===============================================================================================
-// Control flow (`@if` / `else` / `@for`). All are expressions.
-// `@if (c){a}` → `c ? Fragment(...a) : null`; `@for (x of y){body}` → a keyed `.map`.
+// Control flow (`@if` / `else` / `@for`). All are expressions, and both lower to Solid's native
+// control-flow components: `@if (c){a}` → `<Show when={c}>`, `@for (x of y){body}` → `<For each={y}>`.
 // ===============================================================================================
 
 #[test]
 fn if_single_branch() {
-    // `@if (c) {a}` → `c ? Fragment("a") : null`.
-    nota_expr("@if (c) {a}", r#"c ? <>{"a"}</> : null"#);
+    // No `else` ⇒ no `fallback` prop at all (Solid renders nothing by default) — the `null`
+    // alternate the ternary emit used to carry is gone.
+    nota_expr("@if (c) {a}", r#"<Show when={c}><>{"a"}</></Show>"#);
     // Whitespace after `@if` is insignificant (`@if(c)` ≡ `@if (c)`).
-    nota_expr("@if(c){a}", r#"c ? <>{"a"}</> : null"#);
+    nota_expr("@if(c){a}", r#"<Show when={c}><>{"a"}</></Show>"#);
 }
 
 #[test]
 fn if_else() {
-    // `@if (c) {a} else {b}` → `c ? Fragment("a") : Fragment("b")`.
-    nota_expr("@if (c) {a} else {b}", r#"c ? <>{"a"}</> : <>{"b"}</>"#);
+    // `else` → the `fallback` prop.
+    nota_expr("@if (c) {a} else {b}", r#"<Show when={c} fallback={<>{"b"}</>}><>{"a"}</></Show>"#);
 }
 
 #[test]
 fn if_else_if() {
-    // `@if (c) {a} else if (d) {b}` → nested ternary, `null` when no branch matches.
-    nota_expr("@if (c) {a} else if (d) {b}", r#"c ? <>{"a"}</> : d ? <>{"b"}</> : null"#);
+    // `else if` → a `<Show>` nested in the `fallback`; the innermost one has no fallback, so
+    // nothing renders when no branch matches.
+    nota_expr(
+        "@if (c) {a} else if (d) {b}",
+        r#"<Show when={c} fallback={<Show when={d}><>{"b"}</></Show>}><>{"a"}</></Show>"#,
+    );
 }
 
 #[test]
 fn if_else_if_else() {
     nota_expr(
         "@if (c) {a} else if (d) {b} else {e}",
-        r#"c ? <>{"a"}</> : d ? <>{"b"}</> : <>{"e"}</>"#,
+        r#"<Show when={c} fallback={<Show when={d} fallback={<>{"e"}</>}><>{"b"}</></Show>}><>{"a"}</></Show>"#,
     );
 }
 
 #[test]
 fn if_branch_with_markup_and_interp() {
     // Branch bodies nest markup and interpolation.
-    nota_expr("@if (c) {Hi @em{@name}}", r#"c ? <>{"Hi "}<em>{name}</em></> : null"#);
+    nota_expr("@if (c) {Hi @em{@name}}", r#"<Show when={c}><>{"Hi "}<em>{name}</em></></Show>"#);
 }
 
 #[test]
 fn if_condition_is_arbitrary_expr() {
-    nota_expr("@if (a && b.c) {x}", r#"a && b.c ? <>{"x"}</> : null"#);
+    nota_expr("@if (a && b.c) {x}", r#"<Show when={a && b.c}><>{"x"}</></Show>"#);
 }
 
 #[test]
 fn else_only_continues_as_next_token() {
     // A blank line between `}` and `else` breaks the continuation: the `else` is literal text in the
-    // *following* sibling, so the `@if` has a `null` alternate. (Expression mode reads one form, so
+    // *following* sibling, so the `@if` gets no `fallback`. (Expression mode reads one form, so
     // here we assert the body-nested behavior via a fragment.)
-    nota_expr("@{@if (c) {a}\n\nelse text}", r#"<>{c ? <>{"a"}</> : null}{"\n\nelse text"}</>"#);
+    nota_expr(
+        "@{@if (c) {a}\n\nelse text}",
+        r#"<><Show when={c}><>{"a"}</></Show>{"\n\nelse text"}</>"#,
+    );
 }
 
 #[test]
 fn else_adjacent_continues() {
     // No blank line ⇒ `else` continues even across a single newline.
-    nota_expr("@if (c) {a}\nelse {b}", r#"c ? <>{"a"}</> : <>{"b"}</>"#);
+    nota_expr(
+        "@if (c) {a}\nelse {b}",
+        r#"<Show when={c} fallback={<>{"b"}</>}><>{"a"}</></Show>"#,
+    );
 }
 
 #[test]
 fn escaped_else_is_literal() {
-    // `\else` right after the if-block forces a literal (not a continuation): `@if` keeps a `null`
-    // alternate and the `\else` text surfaces in the surrounding body.
+    // `\else` right after the if-block forces a literal (not a continuation): `@if` keeps its
+    // fallback-less `<Show>` and the `\else` text surfaces in the surrounding body.
     let js = nota_expr_raw("@{@if (c) {a} \\else text}");
-    assert!(js.contains(r#"<>{"a"}</> : null"#), "if has null alternate: {js}");
+    assert!(js.contains(r#"<Show when={c}><>{"a"}</></Show>"#), "if has no fallback: {js}");
     assert!(js.contains("else text") || js.contains(r"\else text"), "else text literal: {js}");
 }
 
@@ -751,7 +762,7 @@ fn if_nested_in_for() {
     // Control flow nests: `@for` body contains an `@if`.
     nota_expr(
         "@for (x of xs) {@if (x) {@x}}",
-        "<For each={xs}>{(x) => <>{x ? <>{x}</> : null}</>}</For>",
+        "<For each={xs}>{(x) => <><Show when={x}><>{x}</></Show></>}</For>",
     );
 }
 
@@ -2256,6 +2267,17 @@ mod fuzz_findings_2 {
         );
         // `h` is an ordinary name now — the h-call surface is gone.
         assert!(doc_lowers_clean("%let h = 1\n@p{x}\n"), "`h` is not reserved anymore");
+        // Solid's control-flow components are reader-injected too: `@for` emits `<For>` and `@if`
+        // emits `<Show>`, so a user binding of either shadows the component the markup renders
+        // through — and does so silently, since both are ordinary identifier references.
+        assert!(
+            !doc_lowers_clean("%let For = 1\n@p{x}\n"),
+            "a user `For` binding must be diagnosed (it shadows Solid's list component)"
+        );
+        assert!(
+            !doc_lowers_clean("%let Show = 1\n@p{x}\n"),
+            "a user `Show` binding must be diagnosed (it shadows Solid's conditional)"
+        );
     }
 
     // [INVALID-JS] a DESTRUCTURED user binding (`%const { h } = …`, `%const [Doc] = …`) shadows a

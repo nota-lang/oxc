@@ -17,7 +17,7 @@ use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
-use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, UL_LI};
+use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI};
 
 /// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
 /// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
@@ -40,11 +40,11 @@ const FLOW_TAGS: &[&str] = &[
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The
 /// lowered module references the default-export component `Doc` and the `@nota-lang/solid`
-/// structural names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`, Solid's `For`, and `Dynamic` for
+/// structural names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`, Solid's `For`/`Show`, and `Dynamic` for
 /// dynamic tags) as free identifiers the integrator binds; a colliding binding is diagnosed
 /// rather than silently shadowed.
 fn is_reserved_emit_name(name: &str) -> bool {
-    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | DYNAMIC)
+    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | SHOW | DYNAMIC)
 }
 
 /// Diagnostic for a user module binding that shadows a reader-injected emit-surface name.
@@ -52,8 +52,9 @@ fn reserved_name_collision(name: &str, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!(
         "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` \
          (the default-export document component) and references \
-         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`, which the lowered markup uses; a \
-         module binding of the same name shadows them and breaks the emit. Rename the binding."
+         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Show`/`Dynamic`, which the lowered markup \
+         uses; a module binding of the same name shadows them and breaks the emit. Rename the \
+         binding."
     ))
     .with_label(span)
 }
@@ -394,6 +395,31 @@ impl<'a> NotaLowering<'a> {
             children,
             self.ast.jsx_closing_fragment(Span::empty(span.end)),
         )
+    }
+
+    /// `<Show when={test} fallback={alt}>{cons}</Show>` — Solid's conditional. `fallback` is
+    /// omitted entirely when there is no `else` branch (Solid renders nothing by default), so the
+    /// no-else emit carries no `null`.
+    ///
+    /// Both branches arrive already **fragment-wrapped** and the consequent nests as a fragment
+    /// child rather than having its children spliced in: `<Show>` reads a lone *function* child as
+    /// its keyed accessor callback, so splicing would make `@if (c) {@(f)}` silently mean
+    /// something else. The fragment costs nothing in Solid's output and closes that hole.
+    pub(super) fn build_show(
+        &self,
+        span: Span,
+        test: Expression<'a>,
+        cons: Expression<'a>,
+        alt: Option<Expression<'a>>,
+    ) -> Expression<'a> {
+        let empty = Span::empty(span.start);
+        let mut attrs = self.ast.vec_with_capacity(2);
+        attrs.push(self.jsx_attr(empty, empty, "when", Some(test)));
+        if let Some(alt) = alt {
+            attrs.push(self.jsx_attr(empty, empty, "fallback", Some(alt)));
+        }
+        let children = self.jsx_children(self.ast.vec1(cons));
+        self.jsx_element(span, self.jsx_ref_name(empty, SHOW), attrs, children, empty)
     }
 
     /// `<For each={iter}>{(bind) => <>children</>}</For>` — Solid's keyed list rendering; the old

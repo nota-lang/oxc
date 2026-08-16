@@ -322,18 +322,25 @@ impl<'a> NotaLowering<'a> {
         i.expression
     }
 
-    /// `@if` → a (nested) ternary; `null` when no branch matches. Branches are keyless (a single
-    /// branch needs no list reconciliation).
+    /// `@if` → `<Show when={test}>` (design/solid.md), Solid's native conditional — `else` becomes
+    /// the `fallback` prop and `else if` nests another `<Show>` inside it, exactly where the
+    /// nested ternary this replaces used to go. No branch to fall back to ⇒ no `fallback` prop.
+    ///
+    /// `<Show>` over a ternary because Solid's JSX compiler treats the two differently: an
+    /// interpolated ternary is one memo over the whole conditional, so *any* change to `test`
+    /// re-runs it, while `<Show>` only tears down and rebuilds when `when` crosses truthiness.
+    /// Branches stay keyless — a single branch needs no list reconciliation, and unkeyed `<Show>`
+    /// is the ternary-matching semantics (`keyed` would rebuild on every distinct truthy value).
     fn lower_if(&mut self, n: NotaIf<'a>) -> Expression<'a> {
         let NotaIf { span, test, consequent, alternate, .. } = n;
         self.record_nota_mapping(test.span(), NotaMappingKind::EmbeddedJs);
         let cons = self.lower_fragment(consequent.unbox(), false);
         let alt = match alternate {
-            None => self.ast.expression_null_literal(Span::empty(span.end)),
-            Some(NotaElse::ElseIf(b)) => self.lower_if(b.unbox()),
-            Some(NotaElse::Else(b)) => self.lower_fragment(b.unbox(), false),
+            None => None,
+            Some(NotaElse::ElseIf(b)) => Some(self.lower_if(b.unbox())),
+            Some(NotaElse::Else(b)) => Some(self.lower_fragment(b.unbox(), false)),
         };
-        self.ast.expression_conditional(span, test, cons, alt)
+        self.build_show(span, test, cons, alt)
     }
 
     /// `@for (bind of iter) {body}` → `<For each={iter}>{(bind) => <>…body…</>}</For>` — Solid's

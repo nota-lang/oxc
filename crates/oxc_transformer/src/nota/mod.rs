@@ -35,6 +35,8 @@ const UL_LI: &str = "UlLi";
 const OL_LI: &str = "OlLi";
 /// Solid's keyed list component (`@for` lowers to `<For each={…}>`), bound from `"solid-js"`.
 const FOR: &str = "For";
+/// Solid's conditional component (`@if` lowers to `<Show when={…}>`), bound from `"solid-js"`.
+const SHOW: &str = "Show";
 /// Solid's dynamic-tag component (`@(expr)[…]{…}` heads), bound from `"solid-js/web"`.
 const DYNAMIC: &str = "Dynamic";
 /// Ambient-prelude tags for code/math spans (referenced as identifiers — no import emitted).
