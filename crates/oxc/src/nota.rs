@@ -401,6 +401,148 @@ pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<Oxc
     Ok(NotaVirtualCompiled { code: out.code, mappings: out.mappings, errors: out.errors })
 }
 
+// ===============================================================================================
+// `--virtual` JSON serialization — the binary ↔ shim ↔ language-server protocol. Lives here (not
+// in the `nota_compile` example) so the contract is testable; the example prints this verbatim.
+// The JSON is hand-rolled: no `serde` dependency is added to the published `oxc` crate.
+// ===============================================================================================
+
+impl NotaVirtualCompiled {
+    /// Serialize as the `nota_compile --virtual` stdout JSON — the contract the
+    /// `@nota-lang/compiler` shim's `compileVirtual` and the language server consume:
+    ///
+    /// ```json
+    /// { "code": "<virtual .tsx>",
+    ///   "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
+    ///                   "generatedLengths": [u32]|null,
+    ///                   "data": {"completion":bool,"format":bool,"navigation":bool,
+    ///                            "semantic":bool,"structure":bool,"verification":bool} } ],
+    ///   "errors": [ { "message": string, "start": u32, "len": u32 } ] }
+    /// ```
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        out.push_str("{\"code\":");
+        push_json_string(&mut out, &self.code);
+        out.push_str(",\"mappings\":[");
+        for (i, m) in self.mappings.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write_mapping_json(&mut out, m);
+        }
+        out.push_str("],\"errors\":[");
+        for (i, e) in self.errors.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            write_error_json(&mut out, e);
+        }
+        out.push_str("]}");
+        out
+    }
+}
+
+/// Serialize one diagnostic as `{ "message": string, "start": u32, "len": u32 }`. The span is the
+/// first label's offset/length (byte offsets into the `.nota`); a label-less diagnostic reports
+/// `start: 0, len: 0`.
+fn write_error_json(out: &mut String, error: &OxcDiagnostic) {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "label offsets/lengths fit u32 (Span model)"
+    )]
+    let (start, len) = error
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.first())
+        .map_or((0u32, 0u32), |label| (label.offset() as u32, label.len() as u32));
+    out.push_str("{\"message\":");
+    push_json_string(out, &error.message);
+    out.push_str(",\"start\":");
+    out.push_str(&start.to_string());
+    out.push_str(",\"len\":");
+    out.push_str(&len.to_string());
+    out.push('}');
+}
+
+/// Serialize one [`CodeMapping`] as JSON (camelCase keys, parallel u32 arrays).
+fn write_mapping_json(out: &mut String, m: &CodeMapping) {
+    out.push_str("{\"sourceOffsets\":");
+    push_u32_array(out, &m.source_offsets);
+    out.push_str(",\"generatedOffsets\":");
+    push_u32_array(out, &m.generated_offsets);
+    out.push_str(",\"lengths\":");
+    push_u32_array(out, &m.lengths);
+    out.push_str(",\"generatedLengths\":");
+    match &m.generated_lengths {
+        Some(v) => push_u32_array(out, v),
+        None => out.push_str("null"),
+    }
+    out.push_str(",\"data\":");
+    write_caps_json(out, m.data);
+    out.push('}');
+}
+
+/// Serialize a [`MappingCapabilities`] as JSON (the six Volar `CodeInformation` flags).
+fn write_caps_json(out: &mut String, c: MappingCapabilities) {
+    out.push_str("{\"completion\":");
+    push_bool(out, c.completion);
+    out.push_str(",\"format\":");
+    push_bool(out, c.format);
+    out.push_str(",\"navigation\":");
+    push_bool(out, c.navigation);
+    out.push_str(",\"semantic\":");
+    push_bool(out, c.semantic);
+    out.push_str(",\"structure\":");
+    push_bool(out, c.structure);
+    out.push_str(",\"verification\":");
+    push_bool(out, c.verification);
+    out.push('}');
+}
+
+fn push_bool(out: &mut String, b: bool) {
+    out.push_str(if b { "true" } else { "false" });
+}
+
+fn push_u32_array(out: &mut String, xs: &[u32]) {
+    out.push('[');
+    for (i, x) in xs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        // u32 decimal is always valid JSON number text.
+        out.push_str(&x.to_string());
+    }
+    out.push(']');
+}
+
+/// Push a JSON string literal (with surrounding quotes) for `s`, escaping per RFC 8259:
+/// `"` `\` `\n` `\r` `\t` `\b` `\f`, and any other control character `< 0x20` as `\u00XX`.
+fn push_json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                // Remaining control chars: \u00XX (two lowercase hex digits).
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                let code = c as u32;
+                out.push_str("\\u00");
+                out.push(HEX[((code >> 4) & 0xF) as usize] as char);
+                out.push(HEX[(code & 0xF) as usize] as char);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 /// Join the reader's [`NotaMappingMark`]s (source ranges + kinds) with codegen's offset log into
 /// Volar [`CodeMapping`]s.
 ///
@@ -575,6 +717,54 @@ mod tests {
     fn compile_emits_source_map_when_requested() {
         let out = compile("@p{hi}\n", Some("doc.nota".into())).expect("compiles");
         assert!(out.map.is_some(), "source map present");
+    }
+
+    /// `(line, col)` of byte offset `off` in `text` (0-based; ASCII sources, so byte cols are
+    /// fine — the sourcemap's cols are code units).
+    fn line_col_of(text: &str, off: usize) -> (u32, u32) {
+        let before = &text[..off];
+        let line = u32::try_from(before.matches('\n').count()).unwrap();
+        let col = u32::try_from(off - before.rfind('\n').map_or(0, |i| i + 1)).unwrap();
+        (line, col)
+    }
+
+    /// Byte offset of 0-based `(line, col)` in `text`.
+    fn offset_at(text: &str, line: u32, col: u32) -> usize {
+        let mut off = 0usize;
+        for _ in 0..line {
+            off += text[off..].find('\n').expect("line in range") + 1;
+        }
+        off + col as usize
+    }
+
+    /// The sourcemap has *content*, not just presence: a known embedded-JS token (`count`)
+    /// round-trips — some token's source position is exactly the `.nota` offset of `count`, and
+    /// the generated code at that token's generated position is the same text (the byte-exactness
+    /// invariant of the mapping tests, applied to the sourcemap channel).
+    #[test]
+    fn source_map_round_trips_a_known_token() {
+        let src = "% const n = count();\n@p{hi}\n";
+        let out = compile(src, Some("doc.nota".into())).expect("compiles");
+        let map = out.map.expect("source map present");
+
+        assert!(
+            map.get_sources().any(|s| s.as_ref() == "doc.nota"),
+            "map names the source: {:?}",
+            map.get_sources().collect::<Vec<_>>()
+        );
+
+        let (src_line, src_col) = line_col_of(src, src.find("count").unwrap());
+        let token = map
+            .get_tokens()
+            .find(|t| t.get_src_line() == src_line && t.get_src_col() == src_col)
+            .expect("a token maps the source position of `count`");
+        let gen_off = offset_at(&out.code, token.get_dst_line(), token.get_dst_col());
+        assert_eq!(
+            &out.code[gen_off..gen_off + "count".len()],
+            "count",
+            "the token's generated position holds the same text:\n{}",
+            out.code
+        );
     }
 
     #[test]
@@ -991,5 +1181,132 @@ mod recover {
     fn reserved_name_collision_surfaces_as_diagnostic() {
         let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n").expect("recovers");
         assert!(!out.errors.is_empty(), "collision surfaced as a diagnostic");
+    }
+
+    /// An unterminated verbatim body (`@pre|{` with no `}|`) still yields a framed virtual `.tsx`
+    /// (the `Doc` wrapper + the recovered element), with the parse diagnostic surfaced.
+    #[test]
+    fn unterminated_verbatim_recovers_framed_tsx() {
+        let out = compile_virtual("before\n@pre|{\nraw run").expect("recovers");
+        assert_eq!(out.errors.len(), 1, "verbatim diagnostic: {:?}", out.errors);
+        assert!(out.errors[0].message.contains("verbatim"), "mentions verbatim: {:?}", out.errors);
+        assert!(
+            out.code.contains("export default function Doc()"),
+            "still framed TSX:\n{}",
+            out.code
+        );
+        assert!(out.code.contains("<pre"), "the recovered verbatim element:\n{}", out.code);
+    }
+
+    /// The unterminated-`%%%`-fence contract, virtual side: the fence body parses as JS to EOF
+    /// with NO diagnostic (`find_fence_close` treats EOF as the close), and the statements land
+    /// in the framed emit — the parser-level pin lives in `oxc_parser`'s recover_tests.
+    #[test]
+    fn unterminated_fence_recovers_silently_with_statements() {
+        let out = compile_virtual("%%%\nconst x = 1\n").expect("recovers");
+        assert!(
+            out.errors.is_empty(),
+            "no diagnostic for an EOF-terminated fence: {:?}",
+            out.errors
+        );
+        assert!(
+            out.code.contains("export default function Doc()"),
+            "still framed TSX:\n{}",
+            out.code
+        );
+        assert!(out.code.contains("const x = 1"), "the fence statement survives:\n{}", out.code);
+    }
+}
+
+// ===============================================================================================
+// The `--virtual` JSON contract ([`NotaVirtualCompiled::to_json`]): the exact key set and shapes
+// the `@nota-lang/compiler` shim and the language server parse.
+// ===============================================================================================
+#[cfg(test)]
+mod virtual_json {
+    use serde_json::Value;
+
+    use super::compile_virtual;
+
+    fn parse(source: &str) -> Value {
+        let out = compile_virtual(source).expect("compiles");
+        serde_json::from_str(&out.to_json()).expect("to_json emits valid JSON")
+    }
+
+    /// Assert `value` is an object with exactly `keys` (in any order).
+    #[track_caller]
+    fn assert_keys(value: &Value, keys: &[&str]) {
+        let obj = value.as_object().expect("a JSON object");
+        let mut got: Vec<&str> = obj.keys().map(String::as_str).collect();
+        got.sort_unstable();
+        let mut want = keys.to_vec();
+        want.sort_unstable();
+        assert_eq!(got, want, "exact key set");
+    }
+
+    #[test]
+    fn top_level_and_mapping_shapes() {
+        let json = parse("@a[k: theId]{@(user)}\n");
+        assert_keys(&json, &["code", "mappings", "errors"]);
+
+        let code = json["code"].as_str().expect("`code` is a string");
+        assert!(code.contains("export default function Doc()"), "framed TSX: {code}");
+
+        let mappings = json["mappings"].as_array().expect("`mappings` is an array");
+        assert!(!mappings.is_empty(), "the embedded JS produced mappings");
+        for m in mappings {
+            assert_keys(
+                m,
+                &["sourceOffsets", "generatedOffsets", "lengths", "generatedLengths", "data"],
+            );
+            let source_offsets = m["sourceOffsets"].as_array().expect("array");
+            let generated_offsets = m["generatedOffsets"].as_array().expect("array");
+            let lengths = m["lengths"].as_array().expect("array");
+            assert_eq!(source_offsets.len(), generated_offsets.len(), "parallel arrays");
+            assert_eq!(source_offsets.len(), lengths.len(), "parallel arrays");
+            for x in source_offsets.iter().chain(generated_offsets).chain(lengths) {
+                assert!(x.is_u64(), "offsets/lengths are unsigned numbers: {x:?}");
+            }
+            // `generatedLengths` is null or a parallel array.
+            match &m["generatedLengths"] {
+                Value::Null => {}
+                Value::Array(v) => assert_eq!(v.len(), source_offsets.len(), "parallel array"),
+                other => panic!("generatedLengths must be null or an array: {other:?}"),
+            }
+            let data = &m["data"];
+            assert_keys(
+                data,
+                &["completion", "format", "navigation", "semantic", "structure", "verification"],
+            );
+            for flag in data.as_object().unwrap().values() {
+                assert!(flag.is_boolean(), "capability flags are booleans: {flag:?}");
+            }
+        }
+
+        assert_eq!(json["errors"].as_array().expect("array").len(), 0, "well-formed → no errors");
+    }
+
+    #[test]
+    fn errors_carry_message_and_span() {
+        let json = parse("@p{unterminated");
+        let errors = json["errors"].as_array().expect("`errors` is an array");
+        assert_eq!(errors.len(), 1, "the recovered diagnostic is serialized: {errors:?}");
+        for e in errors {
+            assert_keys(e, &["message", "start", "len"]);
+            assert!(!e["message"].as_str().expect("string").is_empty());
+            assert!(e["start"].is_u64() && e["len"].is_u64(), "byte-span numbers: {e:?}");
+        }
+        // The code is still present and framed on the recover path.
+        assert!(json["code"].as_str().unwrap().contains("export default function Doc()"));
+    }
+
+    /// The escaping path: `code` contains newlines, quotes, backslashes, and a control char —
+    /// round-tripping through a real JSON parser proves the hand-rolled writer escapes correctly.
+    #[test]
+    fn code_string_escaping_round_trips() {
+        let src = "@p{a \"quoted\" \\@ literal}\n";
+        let out = compile_virtual(src).expect("compiles");
+        let json: Value = serde_json::from_str(&out.to_json()).expect("valid JSON");
+        assert_eq!(json["code"].as_str().unwrap(), out.code, "code round-trips exactly");
     }
 }

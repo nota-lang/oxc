@@ -1817,15 +1817,32 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 #[cfg(test)]
 mod recover_tests {
     use oxc_allocator::Allocator;
+    use oxc_ast::ast::{Expression, NotaMarkupKind, Statement};
     use oxc_span::SourceType;
 
     use crate::Parser;
 
     /// Recover-parse `source`; return the diagnostic messages (source-ordered as collected).
     fn recover_errors(source: &str) -> Vec<String> {
+        recover_probe(source).0
+    }
+
+    /// Recover-parse `source`; return `(diagnostic messages, top-level document children)` — the
+    /// child count witnesses that a partial tree survived recovery.
+    fn recover_probe(source: &str) -> (Vec<String>, usize) {
         let allocator = Allocator::default();
         let r = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document_recover();
-        r.errors.iter().map(std::string::ToString::to_string).collect()
+        let errors = r.errors.iter().map(std::string::ToString::to_string).collect();
+        let Some(Statement::ExpressionStatement(stmt)) = r.program.body.first() else {
+            panic!("recovered program is not a single expression statement");
+        };
+        let Expression::NotaMarkup(markup) = &stmt.expression else {
+            panic!("recovered statement is not a NotaMarkup document");
+        };
+        let NotaMarkupKind::Document(doc) = &markup.kind else {
+            panic!("recovered markup is not a document");
+        };
+        (errors, doc.items.len())
     }
 
     #[test]
@@ -1859,5 +1876,103 @@ mod recover_tests {
         // A mid-document `@a[` swallows to EOF; recovery still yields a diagnostic + a tree.
         let errs = recover_errors("before\n\n@a[");
         assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+    }
+
+    /// An unterminated verbatim body (`@code|{` with no `}|`) is a fatal diagnostic
+    /// ([`crate::diagnostics::nota_unterminated_verbatim`]); recovery keeps the partial tree with
+    /// the verbatim element (and any preceding children) in place.
+    #[test]
+    fn unterminated_verbatim_reports_and_keeps_tree() {
+        let (errs, children) = recover_probe("before\n@code|{\nraw run");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+        assert!(errs[0].contains("verbatim"), "mentions verbatim: {errs:?}");
+        assert!(children >= 2, "partial tree keeps prior text + the verbatim element: {children}");
+
+        // The degenerate `@code|{` at EOF (empty body) reports the same way.
+        let (errs, children) = recover_probe("@code|{");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+        assert!(errs[0].contains("verbatim"), "mentions verbatim: {errs:?}");
+        assert!(children >= 1, "the verbatim element survives: {children}");
+    }
+
+    /// The pinned contract for an unterminated `%%%` fence: [`find_fence_close`] treats EOF as the
+    /// close (`(len, len)`), so the fence body parses as JS to end of file with NO diagnostic —
+    /// silence, not an error, is the current product call (mirrors the document body running to
+    /// EOF). The statements still land in the tree.
+    #[test]
+    fn unterminated_fence_parses_to_eof_without_diagnostic() {
+        let (errs, children) = recover_probe("%%%\nconst x = 1\nconst y = 2\n");
+        assert!(errs.is_empty(), "no diagnostic for an EOF-terminated fence: {errs:?}");
+        assert!(children >= 2, "both fence statements land in the tree: {children}");
+    }
+
+    /// An unterminated `/* … */` markup block comment is a fatal diagnostic
+    /// ([`crate::diagnostics::nota_unterminated_comment`]); the text before it survives.
+    #[test]
+    fn unterminated_block_comment_reports_and_keeps_tree() {
+        let (errs, children) = recover_probe("a /* x");
+        assert_eq!(errs.len(), 1, "one diagnostic: {errs:?}");
+        assert!(errs[0].contains("comment"), "mentions the comment: {errs:?}");
+        assert!(children >= 1, "the preceding text child survives: {children}");
+    }
+
+    /// The pinned contract for unterminated math: a `$`-run with no valid close is LITERAL text
+    /// (the Typst fallback, same as emphasis) — no diagnostic, the `$` stays in the text stream.
+    #[test]
+    fn unterminated_math_is_literal_text_not_an_error() {
+        let (errs, children) = recover_probe("$a");
+        assert!(errs.is_empty(), "literal fallback, no diagnostic: {errs:?}");
+        assert!(children >= 1, "the `$a` text survives: {children}");
+    }
+
+    /// A multi-error document: a recoverable (non-fatal) lexer diagnostic from one construct plus
+    /// a later fatal from an independent one BOTH surface, and the partial tree keeps the children
+    /// parsed up to the fatal. (Two independent *fatal* constructs cannot both surface — the first
+    /// fatal stops the parse; that is the documented fatal-heavy recovery model.)
+    #[test]
+    fn multi_error_document_surfaces_both_diagnostics() {
+        // `\u{ZZ}` is a recoverable lexer error inside a prop string; `@p{` is a later fatal.
+        let (errs, children) = recover_probe("@a[k: \"\\u{ZZ}\"]{x}\n\n@p{unterminated");
+        assert_eq!(errs.len(), 2, "both diagnostics surface: {errs:?}");
+        assert!(children >= 2, "tree keeps the first element and the recovered `@p{{`: {children}");
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use oxc_allocator::Allocator;
+    use oxc_ast::CommentKind;
+    use oxc_span::SourceType;
+
+    use crate::Parser;
+
+    /// Markup comments are excised from the children but recorded on the document Program's
+    /// **comments vec** (the trivia channel the ESTree view and the highlight pass read).
+    #[test]
+    fn markup_comments_land_on_the_program_comments_vec() {
+        let src = "a // note\n/* block\nstill */\nb\n";
+        let allocator = Allocator::default();
+        let program =
+            Parser::new(&allocator, src, SourceType::nota()).parse_nota_document().expect("parses");
+
+        assert_eq!(program.comments.len(), 2, "exactly two comments: {:?}", program.comments);
+
+        let line = &program.comments[0];
+        assert_eq!(line.kind, CommentKind::Line);
+        assert_eq!(line.span.source_text(src), "// note");
+
+        let block = &program.comments[1];
+        assert_eq!(block.kind, CommentKind::MultiLineBlock);
+        assert_eq!(block.span.source_text(src), "/* block\nstill */");
+
+        // The excision is real: no child text contains the comment bytes (the emitting tree never
+        // sees trivia). The document still keeps `a` and `b` as text.
+        let single = "x /* one line */ y\n";
+        let program = Parser::new(&allocator, single, SourceType::nota())
+            .parse_nota_document()
+            .expect("parses");
+        assert_eq!(program.comments.len(), 1);
+        assert_eq!(program.comments[0].kind, CommentKind::SingleLineBlock);
+        assert_eq!(program.comments[0].span.source_text(single), "/* one line */");
     }
 }

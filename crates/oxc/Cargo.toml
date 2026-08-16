@@ -35,6 +35,9 @@ name = "nota_inspect"
 path = "examples/nota_inspect.rs"
 required-features = ["codegen"]
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [dependencies]
 oxc_allocator = { workspace = true }
 oxc_ast = { workspace = true }

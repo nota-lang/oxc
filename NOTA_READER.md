@@ -71,7 +71,9 @@ formatter, at the cost of a one-time generated-code churn (regenerate with
    position, never in a Nota expression context). Do NOT try to move markup state into
    `Context` — its `u8` is bit-saturated.
 3. **The `nota` parser module** — `nota/mod.rs` + entries in `lib.rs`
-   (`parse_nota_expression` / `parse_nota_document`), cursor seams in `cursor.rs`
+   (`parse_nota_document` / `parse_nota_document_recover` / `parse_nota_highlights`; an
+   expression-position parse is plain `Parser::parse_expression` with a `SourceType::nota()` —
+   the `@` hook fires, no dedicated entry), cursor seams in `cursor.rs`
    (`advance_for_nota_child`, `nota_seek_to/markup/head`), diagnostics in `diagnostics.rs`.
 
 Codegen has two additions: an opt-in offset log riding the existing `add_source_mapping` hooks
@@ -217,14 +219,16 @@ reinterpretations. Every surviving segment round-trips byte-for-byte. `CodeMappi
 boilerplate is unmapped.
 
 The binary's `--virtual` mode exposes `compile_virtual` to the language server — the
-binary ↔ shim ↔ language-server JSON contract:
+binary ↔ shim ↔ language-server JSON contract (`NotaVirtualCompiled::to_json`, serialized in the
+library and test-pinned there; the `nota_compile` example prints it verbatim):
 ```
 nota_compile --virtual <file>  →  stdout JSON:
 { "code": "<virtual .tsx>",
   "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
                   "generatedLengths": [u32]|null,
                   "data": {"completion":bool,"format":bool,"navigation":bool,
-                           "semantic":bool,"structure":bool,"verification":bool} } ] }
+                           "semantic":bool,"structure":bool,"verification":bool} } ],
+  "errors": [ { "message": string, "start": u32, "len": u32 } ] }
 ```
 The shim's `compileVirtual(source)` parses this; the language server prepends its runtime+ambient
 typing preamble to `code` and shifts every `generatedOffsets` by the preamble length
@@ -259,11 +263,14 @@ embedded JS re-lex as `/` operators (no parser context in the pump).
 | Compile entries + CodeMapping / virtual emit | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
 | AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |
 
+`just nota-tests` runs the first four rows in one recipe — the single source of truth; CI's test
+step (`.github/workflows/nota.yml`) calls it.
+
 The **validity invariant** (every fixture's emit re-parses under stock oxc) runs inside the
 codegen integration tests. Parser conformance (`cargo coverage -- parser`) must stay byte-identical
 to upstream — the markup lexer path is unreachable unless `nota_markup` is set. The
-`fuzz_findings*` modules in the integration tests hold `#[ignore]`d specs for the still-open
-product calls (see `TODO.md` at the repo root); the pipeline inspector for new probes is
+`fuzz_findings*` modules in the integration tests hold the `#[ignore]`d specs for the still-open
+product calls (they are the canonical list — see §Known gaps); the pipeline inspector for new probes is
 `cargo run -q -p oxc --example nota_inspect --features codegen -- --inline '<src>'` (debug build
 only — release `panic=abort` defeats its per-stage isolation).
 

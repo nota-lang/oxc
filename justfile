@@ -323,8 +323,13 @@ clone-submodule dir url sha:
 
 # ==================== NOTA ADDONS ====================
 
+# The single source of truth for the Nota reader's test layers (CI's test step calls this).
+# `--features` is per-package, so the `oxc` compile-entry tests need their own invocation.
 nota-tests:
-  cargo test -p oxc_codegen -p oxc_parser nota
+  cargo test -p oxc_codegen --test integration nota
+  cargo test -p oxc_parser --lib nota
+  cargo test -p oxc_transformer --lib nota
+  cargo test -p oxc --features codegen nota
 
 nota-lints:
   cargo clippy -p oxc_codegen -p oxc_parser

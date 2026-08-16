@@ -1094,6 +1094,45 @@ mod tests {
         assert!(!has(&spans, K::JsString, "y"));
     }
 
+    /// A positive `JsOperator` assertion: embedded-JS operators in a prop value classify.
+    #[test]
+    fn js_operator_in_prop_value() {
+        let spans = hl("@a[k: 1 + 2]{x}\n");
+        assert!(has(&spans, K::JsOperator, "+"));
+        assert!(has(&spans, K::JsNumber, "1"));
+        assert!(has(&spans, K::JsNumber, "2"));
+    }
+
+    /// A trailing attrs group (`# T [id: "x"]`): `visit_nota_attrs` emits the bare `[` and `]` as
+    /// sigils; the entries paint through the ordinary prop visitors (`PropName` + embedded-JS
+    /// kinds). The heading under-layer still covers the whole line.
+    #[test]
+    fn trailing_attrs_group_spans() {
+        let spans = hl("# T [id: \"x\"]\n");
+        assert!(has(&spans, K::Heading, "# T [id: \"x\"]"));
+        assert!(has(&spans, K::Sigil, "["));
+        assert!(has(&spans, K::Sigil, "]"));
+        assert!(has(&spans, K::PropName, "id"));
+        assert!(has(&spans, K::JsString, "\"x\""));
+
+        // The paragraph form: a trailing attrs group after prose paints the same way.
+        let spans = hl("some para [class: \"tip\"]\n");
+        assert!(has(&spans, K::Sigil, "["));
+        assert!(has(&spans, K::PropName, "class"));
+        assert!(has(&spans, K::JsString, "\"tip\""));
+    }
+
+    /// The malformed-document contract: `parse_nota_highlights` parses with the STRICT document
+    /// entry, so a malformed document returns `Err` (no spans-so-far) — clients keep their
+    /// last-good highlights (see the entry's doc in `lib.rs`).
+    #[test]
+    fn malformed_document_returns_err_not_partial_spans() {
+        let allocator = Allocator::default();
+        let result = Parser::new(&allocator, "@p{", SourceType::nota()).parse_nota_highlights();
+        let errors = result.expect_err("malformed document must not yield spans");
+        assert!(!errors.is_empty(), "the parse diagnostics are returned");
+    }
+
     #[test]
     fn kind_all_is_in_discriminant_order() {
         for (i, kind) in super::NotaHighlightKind::ALL.iter().enumerate() {

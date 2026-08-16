@@ -5,9 +5,9 @@ name: Nota
 on:
   workflow_dispatch:
   push:
-    branches: [nota]
+    branches: [nota, solid]
   pull_request:
-    branches: [nota]
+    branches: [nota, solid]
 
 permissions:
   contents: read
@@ -37,8 +37,10 @@ jobs:
         with:
           tool: wasm-bindgen@0.2.126
 
+      # `just nota-tests` is the single source of truth for the reader's test layers
+      # (oxc_codegen integration, oxc_parser lib, oxc_transformer lib, oxc --features codegen).
       - name: Tests
-        run: cargo test -p oxc -p oxc_transformer -p oxc_codegen nota
+        run: just nota-tests
 
       - name: Build wasm
         run: |
