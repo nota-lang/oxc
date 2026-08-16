@@ -935,12 +935,15 @@ mod tests {
 
     #[test]
     fn colon_block_with_pipe_props() {
-        let spans = hl("@section:\n  | class: \"tip\"\n  body *b*\n");
+        // Two `|` prop lines: each line gets its own `|` sigil, both lines' entries classify.
+        let spans = hl("@section:\n  | class: \"tip\"\n  | id: \"t\"\n  body *b*\n");
         assert!(has(&spans, K::TagHost, "section"));
         assert!(has(&spans, K::Sigil, ":"));
-        assert!(has(&spans, K::Sigil, "|"));
+        assert_eq!(spans.iter().filter(|(k, t)| *k == K::Sigil && t == "|").count(), 2);
         assert!(has(&spans, K::PropName, "class"));
+        assert!(has(&spans, K::PropName, "id"));
         assert!(has(&spans, K::JsString, "\"tip\""));
+        assert!(has(&spans, K::JsString, "\"t\""));
         assert!(has(&spans, K::EmphasisStrong, "*b*"));
     }
 

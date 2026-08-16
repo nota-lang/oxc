@@ -673,16 +673,40 @@ fn colon_pipe_props_line_supplies_props() {
 }
 
 #[test]
-#[ignore = "BUG (2026-08-16): a RUN of `|` prop lines mis-parses — the 2nd line's `|` is consumed \
-            as a JS binary-or into the 1st line's value expression, emitting \
-            <section class={\"tip\" | id} id=\"t\"> (valid JS, silently wrong). Spec: notation.md \
-            §Colon — 'Leading `|` lines of the body supply the `[…]` props (multiple accumulate)'."]
 fn colon_pipe_props_lines_should_accumulate() {
+    // A RUN of `|` prop lines accumulates, one props group per line (notation.md §Colon —
+    // 'Leading `|` lines of the body supply the `[…]` props (multiple accumulate)'). The value
+    // parse is lexer-clamped to its line, so the next line's `|` cannot lex as a JS binary-or
+    // continuing the previous value (the old bug: `<section class={"tip" | id} id="t">`).
     let js = nota_doc("@section:\n  | class: \"tip\"\n  | id: \"t\"\n  body\n");
     assert!(
         js.contains(r#"<section class="tip" id="t">"#),
         "each `|` line contributes its own props: {js}"
     );
+    let js = nota_doc("@section:\n  | class: \"tip\"\n  | id: \"t\"\n  | role: \"note\"\n  body\n");
+    assert!(
+        js.contains(r#"<section class="tip" id="t" role="note">"#),
+        "a run of three `|` lines accumulates: {js}"
+    );
+}
+
+#[test]
+fn colon_pipe_line_value_pipes_stay_js() {
+    // A literal `|` *within* a `|` line's value — inside a string, or a parenthesized binary-or —
+    // is ordinary embedded JS on that line: the line clamp only moves end-of-input.
+    let js = nota_doc("@section:\n  | title: \"a | b\"\n  | k: (a | b)\n  body\n");
+    assert!(
+        js.contains(r#"<section title="a | b" k={a | b}>"#),
+        "in-line `|`s are JS, not prop-line breaks: {js}"
+    );
+}
+
+#[test]
+fn colon_pipe_line_value_clamped_to_line() {
+    // A `|` line is one props group per line: a value expression that runs past the line end is a
+    // parse error at the clamped end-of-line — not a silent swallow of the next line (previously
+    // `| k: 1 +` before `body` emitted `k={1 + body}` AND the body text `"body"`, both).
+    nota_doc_err("@section:\n  | k: 1 +\n  body\n");
 }
 
 // ===============================================================================================

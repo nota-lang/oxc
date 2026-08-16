@@ -960,20 +960,27 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Parse `| k: v, …` prop entries of a colon-sugar prop line, from `[content_start, line_end)`.
+    /// The lexer is clamped to `line_end` for the duration ([`Self::with_source_end_bound`], the
+    /// `%`-statement clamp): a `|` line is one props group per line, so a value expression must
+    /// not read into the next line — unclamped, a following `|` line's `|` lexes as a JS
+    /// binary-or continuing this line's value (`class: "tip" | id`), silently mis-parsing a run
+    /// of `|` lines. (A `|` *within* the line — in a string, or a parenthesized `(a | b)` — is
+    /// unaffected: the clamp only moves end-of-input.)
     fn parse_pipe_prop_line(
         &mut self,
         content_start: u32,
         line_end: u32,
         props: &mut NotaProps<'a>,
     ) {
-        self.nota_seek_to(content_start);
-        while self.cur_token().start() < line_end && !self.at(Kind::Eof) && !self.has_fatal_error()
-        {
-            self.parse_prop_or_spread(props);
-            if !self.eat(Kind::Comma) {
-                break;
+        self.with_source_end_bound(line_end, |p| {
+            p.nota_seek_to(content_start);
+            while p.cur_token().start() < line_end && !p.at(Kind::Eof) && !p.has_fatal_error() {
+                p.parse_prop_or_spread(props);
+                if !p.eat(Kind::Comma) {
+                    break;
+                }
             }
-        }
+        });
     }
 
     /// One prop-list entry: `...spread`, `key: value`, or bare `key`.
