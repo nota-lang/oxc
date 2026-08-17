@@ -198,7 +198,7 @@ pub static STRUCTS: phf::Map<&'static str, StructDetails> = ::phf::Map {
         ("NotaSpreadProp", StructDetails { field_order: Some(&[1, 0, 2]) }),
         ("NullLiteral", StructDetails { field_order: Some(&[1, 0]) }),
         ("ImportDeclaration", StructDetails { field_order: Some(&[1, 0, 4, 5, 2, 6, 3]) }),
-        ("NotaDocState", StructDetails { field_order: Some(&[1, 0, 2, 3, 4, 5]) }),
+        ("NotaDocState", StructDetails { field_order: Some(&[1, 0, 2, 3, 4, 5, 6]) }),
         ("RegExp", StructDetails { field_order: None }),
         ("ScopeId", StructDetails { field_order: None }),
         ("NotaFragment", StructDetails { field_order: Some(&[1, 0, 2]) }),

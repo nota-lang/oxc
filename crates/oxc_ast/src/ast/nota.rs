@@ -556,45 +556,46 @@ pub struct NotaThematicBreak {
     pub span: Span,
 }
 
-/// Inline **doc-state sugar** (notation.md §Doc-state references).
+/// Inline **doc-state sugar** (notation.md §Doc-state references, design/references.md §Syntax).
 ///
-/// Four Markdown/Typst-flavored inline forms, each surface sugar for an element form, lowering to
-/// a free ambient identifier with an `id`/`label` string prop — `<label>` ≡ `@Label[id: "label"]{}`,
-/// `&ref` ≡ `@Ref[id: "ref"]{}`, `[^mark]` ≡ `@FootnoteMark[label: "mark"]{}`, and line-start
-/// `[^label]: body` ≡ `@FootnoteText[label: "label"]: body` (the colon-body extent verbatim). The
-/// label and body are the only surface the node carries; distinct sugar nodes (not desugared to
-/// [`NotaElement`]) keep the tree faithful for a future `.nota` formatter.
+/// Two Typst-flavored inline forms, each surface sugar for an element form, lowering to a free
+/// ambient identifier with an `id` string prop — `<label>` ≡ `@Label[id: "label"]{}` and `&ref` ≡
+/// `@Ref[id: "ref"]{}`. A ref composes with **glued postfix groups**, completing its equivalence
+/// to the element form: `&ref[props]` (the first group gated on a props shape — `see &sec[1]`
+/// keeps `[1]` prose) and `&ref{body}` (authored reference text) — so
+/// `&smith2020[page: "33"]{Smith}` ≡ `@Ref[id: "smith2020", page: "33"]{Smith}`. Distinct sugar
+/// nodes (not desugared to [`NotaElement`]) keep the tree faithful for a future `.nota`
+/// formatter.
 #[ast(visit)]
 #[derive(Debug)]
 #[generate_derive(CloneIn, Dummy, TakeIn, GetSpan, GetSpanMut, ContentEq, ESTree, UnstableAddress)]
 pub struct NotaDocState<'a> {
     pub node_id: Cell<NodeId>,
     pub span: Span,
-    /// Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// Which of the two sugars this is (fixes the emitted ambient identifier).
     pub kind: NotaDocStateKind,
     /// The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
     pub label: Str<'a>,
     /// Source span of `label` (sans sigils) — for the formatter and the highlight pass.
     #[estree(skip)]
     pub label_span: Span,
-    /// The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
-    /// leaf sugars (`Label`/`Ref`/`FootnoteMark`).
+    /// A ref's glued postfix `[props]` groups (merged after the synthesized `id`); empty for
+    /// `Label` and bare refs.
+    pub props: Vec<'a, NotaProp<'a>>,
+    /// A ref's glued `{body}` (authored reference text); empty for `Label` and bare refs.
     pub children: Vec<'a, NotaChild<'a>>,
 }
 
-/// Which of the four inline doc-state sugars a [`NotaDocState`] is.
+/// Which of the two inline doc-state sugars a [`NotaDocState`] is. The discriminants are an
+/// ESTree wire format — the retired footnote sugars' `2`/`3` are not reused.
 #[ast]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
 pub enum NotaDocStateKind {
     /// `<label>` → `h(Label, { id: "label" }, [])`.
     Label = 0,
-    /// `&ref` → `h(Ref, { id: "ref" }, [])`.
+    /// `&ref` → `h(Ref, { id: "ref", …props }, [body…])`.
     Ref = 1,
-    /// `[^mark]` → `h(FootnoteMark, { label: "mark" }, [])`.
-    FootnoteMark = 2,
-    /// line-start `[^label]: body` → `h(FootnoteText, { label: "label" }, [body…])`.
-    FootnoteText = 3,
 }
 
 #[cfg(test)]

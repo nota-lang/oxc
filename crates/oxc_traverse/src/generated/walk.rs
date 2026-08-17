@@ -6349,9 +6349,15 @@ unsafe fn walk_nota_doc_state<'a, State, Tr: Traverse<'a, State>>(
     ctx: &mut TraverseCtx<'a, State>,
 ) {
     traverser.enter_nota_doc_state(&mut *node, ctx);
-    let pop_token = ctx.push_stack(Ancestor::NotaDocStateChildren(
-        ancestor::NotaDocStateWithoutChildren(node, PhantomData),
+    let pop_token = ctx.push_stack(Ancestor::NotaDocStateProps(
+        ancestor::NotaDocStateWithoutProps(node, PhantomData),
     ));
+    for item in
+        &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_DOC_STATE_PROPS) as *mut Vec<NotaProp>)
+    {
+        walk_nota_prop(traverser, item as *mut _, ctx);
+    }
+    ctx.retag_stack(AncestorType::NotaDocStateChildren);
     for item in &mut *((node as *mut u8).add(ancestor::OFFSET_NOTA_DOC_STATE_CHILDREN)
         as *mut Vec<NotaChild>)
     {

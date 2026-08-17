@@ -3645,6 +3645,7 @@ impl ESTree for NotaDocState<'_> {
         state.serialize_field("type", &JsonSafeString("NotaDocState"));
         state.serialize_field("kind", &self.kind);
         state.serialize_field("label", &self.label);
+        state.serialize_field("props", &self.props);
         state.serialize_field("children", &self.children);
         state.serialize_span(self.span);
         state.end();
@@ -3656,8 +3657,6 @@ impl ESTree for NotaDocStateKind {
         match self {
             Self::Label => JsonSafeString("label").serialize(serializer),
             Self::Ref => JsonSafeString("ref").serialize(serializer),
-            Self::FootnoteMark => JsonSafeString("footnoteMark").serialize(serializer),
-            Self::FootnoteText => JsonSafeString("footnoteText").serialize(serializer),
         }
     }
 }

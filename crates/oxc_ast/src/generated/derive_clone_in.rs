@@ -9385,6 +9385,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaDocState<'_> {
             kind: CloneIn::clone_in(&self.kind, allocator),
             label: CloneIn::clone_in(&self.label, allocator),
             label_span: CloneIn::clone_in(&self.label_span, allocator),
+            props: CloneIn::clone_in(&self.props, allocator),
             children: CloneIn::clone_in(&self.children, allocator),
         }
     }
@@ -9396,6 +9397,7 @@ impl<'new_alloc> CloneIn<'new_alloc> for NotaDocState<'_> {
             kind: CloneIn::clone_in_with_semantic_ids(&self.kind, allocator),
             label: CloneIn::clone_in_with_semantic_ids(&self.label, allocator),
             label_span: CloneIn::clone_in_with_semantic_ids(&self.label_span, allocator),
+            props: CloneIn::clone_in_with_semantic_ids(&self.props, allocator),
             children: CloneIn::clone_in_with_semantic_ids(&self.children, allocator),
         }
     }

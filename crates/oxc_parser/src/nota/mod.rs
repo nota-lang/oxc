@@ -36,11 +36,11 @@ use crate::{
         ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
         armed_boundary, at_line_start_in_frame, attrs_group_at, brace_clip_on_line, byte_at,
         colon_block_extent, colon_prop_line_at, docstate_left_guard, else_peek, escape_span,
-        find_emphasis_close, find_fence_close, find_strike_close, footnote_sugar_at, heading_at,
+        find_emphasis_close, find_fence_close, find_strike_close, heading_at,
         is_ident_start_at, is_statement_line, label_sugar_at, lex_code_span, lex_comment,
         lex_math_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
-        markup_trigger, next_line_start, percent_line_is_empty, ref_sugar_at, scan_hyphen_tail,
-        statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
+        markup_trigger, next_line_start, percent_line_is_empty, props_shape_at, ref_sugar_at,
+        scan_hyphen_tail, statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -1283,10 +1283,11 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         kind: NotaDocStateKind,
         span: Span,
         label_span: Span,
+        props: NotaProps<'a>,
         children: NotaChildren<'a>,
     ) {
         let label = &self.source_text[label_span.start as usize..label_span.end as usize];
-        let node = self.ast.nota_doc_state(span, kind, label, label_span, children);
+        let node = self.ast.nota_doc_state(span, kind, label, label_span, props, children);
         self.push_nota_item(NotaChild::DocState(self.ast.alloc(node)));
     }
 
@@ -1302,6 +1303,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Span::new(open, end),
                 label_span,
                 self.ast.vec(),
+                self.ast.vec(),
             );
             self.nota_seek_markup(end);
         } else {
@@ -1310,36 +1312,76 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// `&ref` at `open` (≡ `@Ref[id: "ref"]{}`), or a literal `&`.
+    /// `&ref` at `open` (≡ `@Ref[id: "ref"]{}`), or a literal `&`. A matched ref continues into
+    /// [`Self::parse_ref_postfix`] for its glued `[props]`/`{body}` groups.
     fn parse_ref_sugar(&mut self, open: u32) {
         let limit = self.docstate_scan_limit();
         if self.docstate_guard_ok(open)
             && let Some(label_span) = ref_sugar_at(self.nota_scan_source(), open, limit)
         {
-            self.push_doc_state(
-                NotaDocStateKind::Ref,
-                Span::new(open, label_span.end),
-                label_span,
-                self.ast.vec(),
-            );
-            self.nota_seek_markup(label_span.end);
+            self.parse_ref_postfix(open, label_span, limit);
         } else {
             self.push_text(open, open + 1);
             self.nota_seek_markup(open + 1);
         }
     }
 
+    /// A ref's **glued postfix groups** (design/references.md §Syntax), completing `&id`'s
+    /// equivalence to the element form it rewrites to: `[props]` groups — the FIRST gated on a
+    /// props-shaped interior ([`props_shape_at`], the attrs-group gate), so `see &sec[1]` keeps
+    /// `[1]` as prose; once one commits, further glued `[` chain like an element head's — then an
+    /// optional braced `{body}` (authored reference text). Bare `&id` (no glued group) pushes the
+    /// leaf node exactly as before. Group openers must sit within the frame `limit`; the parsed
+    /// extents are then the ordinary props/body machineries' (element-form parity).
+    fn parse_ref_postfix(&mut self, open: u32, label_span: Span, limit: u32) {
+        let mut props = self.ast.vec();
+        let mut end = label_span.end;
+        while end < limit
+            && byte_at(self.source_text, end) == Some(b'[')
+            && (!props.is_empty() || props_shape_at(self.nota_scan_source(), end))
+        {
+            self.nota_seek_to(end); // lex the `[` as a JS token for the props parser
+            debug_assert!(self.at(Kind::LBrack), "ref postfix entered not at `[`");
+            self.parse_props_group(&mut props);
+            if self.has_fatal_error() {
+                return;
+            }
+            end = self.cur_token().end(); // one past the validated `]`
+        }
+        // The sugar has no recovery surface for an unclosed group's completion anchor (elements
+        // thread it as `props_recovery`); drop it so it cannot mis-attach to a later element.
+        self.nota_prop_anchor.take();
+        let children = if end < limit && byte_at(self.source_text, end) == Some(b'{') {
+            self.nota_seek_to(end); // `{` lexes as LCurly; parse_braced_body takes it from there
+            let (children, body_end) = self.parse_braced_body();
+            end = body_end;
+            children
+        } else {
+            self.ast.vec()
+        };
+        if self.has_fatal_error() {
+            return;
+        }
+        self.push_doc_state(
+            NotaDocStateKind::Ref,
+            Span::new(open, end),
+            label_span,
+            props,
+            children,
+        );
+        self.nota_seek_markup(end);
+    }
+
     /// Dispatch a markup `[` at `open` between the bracket sugars, in fixed precedence
-    /// (notation.md §Attrs groups): the footnote digraph `[^mark]` / `[^label]: body` first,
-    /// then a trailing attrs group, else a literal `[`.
+    /// (notation.md §Attrs groups): a trailing attrs group, else a literal `[`. (The footnote
+    /// digraph `[^…]` held the first tier until design/references.md retired it — footnote uses
+    /// are `&id` refs, definitions the `@Footnote[id]: …` element form.)
     fn parse_bracket_sugar(&mut self, open: u32, depth: u32) {
         let limit = self.docstate_scan_limit();
         // A depth-0 `}` may sit in an attrs group's trailing position only where it closes the
         // enclosing braced body.
         let closer_ok = matches!(self.nota_body_mode(), BodyMode::Body) && depth == 0;
-        if let Some(label_span) = footnote_sugar_at(self.nota_scan_source(), open, limit) {
-            self.parse_footnote_sugar(open, label_span, limit);
-        } else if attrs_group_at(self.nota_scan_source(), open, limit, closer_ok).is_some() {
+        if attrs_group_at(self.nota_scan_source(), open, limit, closer_ok).is_some() {
             self.parse_attrs_group(open);
         } else {
             self.push_text(open, open + 1);
@@ -1366,52 +1408,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.nota_seek_markup(end);
     }
 
-    /// `[^mark]` at `open` (≡ `@FootnoteMark[label: "mark"]{}`; unguarded — `text[^1]` glues,
-    /// Markdown-style), or — with a glued `:` under the positional line-start gate
-    /// ([`Self::colon_trigger_live`], the same gate as `@head:`) — a `[^label]: body` footnote
-    /// *text* definition (≡ `@FootnoteText[label: "label"]: body`, the colon-body extent
-    /// machinery verbatim). `label_span` comes from the caller's `footnote_sugar_at` match.
-    fn parse_footnote_sugar(&mut self, open: u32, label_span: Span, limit: u32) {
-        let after_rbrack = label_span.end + 1; // past `]`
-        let colon_glued =
-            after_rbrack < limit && byte_at(self.source_text, after_rbrack) == Some(b':');
-        if colon_glued && self.colon_trigger_live(open) {
-            self.parse_footnote_text(open, label_span, after_rbrack + 1);
-        } else {
-            self.push_doc_state(
-                NotaDocStateKind::FootnoteMark,
-                Span::new(open, after_rbrack),
-                label_span,
-                self.ast.vec(),
-            );
-            self.nota_seek_markup(after_rbrack);
-        }
-    }
-
-    /// The `[^label]: body` footnote-text body: the colon-body extent machinery verbatim
-    /// (mirrors [`Self::parse_colon_body`] — rest of line + lines indented past the opening
-    /// line, first-line brace clip in a braced body, clamped to a bounded frame's end).
-    fn parse_footnote_text(&mut self, open: u32, label_span: Span, colon_end: u32) {
-        let head_line_indent = line_indent_of(self.source_text, open);
-        let (clip_at_brace, bound) = match self.nota_top_region() {
-            NotaRegion::Markup { mode, .. } => (matches!(mode, BodyMode::Body), mode.bound()),
-            // Unreachable (the positional gate requires a Markup top); clip defensively.
-            NotaRegion::Js | NotaRegion::Raw => (false, None),
-        };
-        let (body_start, mut body_end) =
-            colon_block_extent(self.source_text, colon_end, head_line_indent, clip_at_brace);
-        if let Some(end) = bound {
-            body_end = body_end.min(end);
-        }
-        let children = self.collect_markup_range(body_start.min(body_end), body_end);
-        self.push_doc_state(
-            NotaDocStateKind::FootnoteText,
-            Span::new(open, body_end),
-            label_span,
-            children,
-        );
-        self.nota_seek_markup(body_end);
-    }
 }
 
 // ===============================================================================================

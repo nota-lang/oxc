@@ -4981,6 +4981,7 @@ pub mod walk_mut {
         visitor.enter_node(kind);
         visitor.visit_span(&mut it.span);
         visitor.visit_span(&mut it.label_span);
+        visitor.visit_nota_props(&mut it.props);
         visitor.visit_nota_children(&mut it.children);
         visitor.leave_node(kind);
     }

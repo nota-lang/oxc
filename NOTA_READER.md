@@ -143,11 +143,19 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   JS can't lex) are **erased** when the region parses clean.
 - **Every text child is a real source slice** — including single-byte sigils that turned out
   literal — so `NotaText` spans are always true source positions (sourcemaps / Volar / ESTree).
-- **A markup `[` is one typed token with a fixed dispatch** (notation.md §Attrs groups): the
-  footnote digraph `[^`, then a trailing attrs group (`attrs_group_at` — first-entry gate +
-  trailing gate, then the ordinary props parse), else a literal `[`. (A markdown-style
-  `[text](url)` link sugar existed briefly and was reverted — the bracket syntax is reserved;
-  links are `@a[href]{…}`, with `&`-refs the likely future link surface.)
+- **A markup `[` is one typed token with a fixed dispatch** (notation.md §Attrs groups): a
+  trailing attrs group (`attrs_group_at` — first-entry gate + trailing gate, then the ordinary
+  props parse), else a literal `[`. (The footnote digraph `[^…]` held the first tier until
+  design/references.md retired it; a markdown-style `[text](url)` link sugar existed briefly and
+  was reverted — the bracket syntax stays reserved, and links/refs are the `&`-ref family.)
+- **A matched `&ref` continues into its glued postfix groups** (design/references.md §Syntax):
+  `[props]` groups — the *first* gated on `props_shape_at` (the attrs-group first-entry gate, so
+  `see &sec[1]` keeps `[1]` prose; once one commits, further glued `[` chain like an element
+  head's) — then an optional braced `{body}` (authored reference text), both parsed by the
+  ordinary props/body machinery. Openers must sit within the bounded-frame `limit`. The
+  `<`/`&` left-boundary guard fires after whitespace, opening punctuation, **and
+  closing/terminal punctuation** (`.` `,` `;` `:` `!` `?` `)` `]` `}`) — a footnote use glues
+  after its sentence (`shown.&note`) while ident-adjacency keeps `R&D` literal.
 - **Markup comments are trivia, not children** (notation.md §Comments): `lex_comment` scans the
   extent (nesting counted; comment-only lines consume their newline so no phantom breaks), the
   parser records them on the document Program's **comments vec** — the ESTree view and the

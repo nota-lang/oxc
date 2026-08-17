@@ -3658,6 +3658,7 @@ impl<'a> Dummy<'a> for NotaDocState<'a> {
             kind: Dummy::dummy(allocator),
             label: Dummy::dummy(allocator),
             label_span: Dummy::dummy(allocator),
+            props: Dummy::dummy(allocator),
             children: Dummy::dummy(allocator),
         }
     }

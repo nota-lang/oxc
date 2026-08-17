@@ -2032,14 +2032,15 @@ const _: () = {
     assert!(offset_of!(NotaThematicBreak, node_id) == 8);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaDocState>() == 64);
+    assert!(size_of::<NotaDocState>() == 88);
     assert!(align_of::<NotaDocState>() == 8);
     assert!(offset_of!(NotaDocState, span) == 0);
     assert!(offset_of!(NotaDocState, node_id) == 8);
     assert!(offset_of!(NotaDocState, kind) == 12);
     assert!(offset_of!(NotaDocState, label) == 16);
     assert!(offset_of!(NotaDocState, label_span) == 32);
-    assert!(offset_of!(NotaDocState, children) == 40);
+    assert!(offset_of!(NotaDocState, props) == 40);
+    assert!(offset_of!(NotaDocState, children) == 64);
 
     assert!(size_of::<NotaDocStateKind>() == 1);
     assert!(align_of::<NotaDocStateKind>() == 1);
@@ -4070,14 +4071,15 @@ const _: () = if cfg!(target_family = "wasm") || align_of::<u64>() == 8 {
     assert!(offset_of!(NotaThematicBreak, node_id) == 8);
 
     // Padding: 3 bytes
-    assert!(size_of::<NotaDocState>() == 48);
+    assert!(size_of::<NotaDocState>() == 64);
     assert!(align_of::<NotaDocState>() == 4);
     assert!(offset_of!(NotaDocState, span) == 0);
     assert!(offset_of!(NotaDocState, node_id) == 8);
     assert!(offset_of!(NotaDocState, kind) == 12);
     assert!(offset_of!(NotaDocState, label) == 16);
     assert!(offset_of!(NotaDocState, label_span) == 24);
-    assert!(offset_of!(NotaDocState, children) == 32);
+    assert!(offset_of!(NotaDocState, props) == 32);
+    assert!(offset_of!(NotaDocState, children) == 48);
 
     assert!(size_of::<NotaDocStateKind>() == 1);
     assert!(align_of::<NotaDocStateKind>() == 1);
