@@ -50,14 +50,13 @@ const MATH: &str = "Tex";
 /// free identifier reference (like `Tex`/`CodeInline`, no import emitted). Raw `@hN{…}` element
 /// forms stay plain host tags (the unnumbered/un-Toc'd escape hatch).
 const HEADING: &str = "Heading";
-/// Ambient-prelude doc-state components (notation.md §Doc-state references): the four inline
-/// sugars lower to free identifier references, exactly the `HEADING` pattern — `<x>` →
-/// `<Label id="x" />`, `&x` → `<Ref id="x" />`, `[^x]` → `<FootnoteMark label="x" />`,
-/// line-start `[^x]: body` → `<FootnoteText label="x">body…</FootnoteText>`.
+/// Ambient-prelude doc-state components (notation.md §Doc-state references,
+/// design/references.md): the two inline sugars lower to free identifier references, exactly the
+/// `HEADING` pattern — `<x>` → `<Label id="x" />`, `&x` → `<Ref id="x" …props>body…</Ref>` (the
+/// props/body from the ref's glued postfix groups; footnote uses are refs, and footnote
+/// definitions are the plain `@Footnote[id]: …` element form — nothing reader-privileged).
 const LABEL: &str = "Label";
 const REF: &str = "Ref";
-const FOOTNOTE_MARK: &str = "FootnoteMark";
-const FOOTNOTE_TEXT: &str = "FootnoteText";
 /// The `@nota-lang/core` attrs marker (notation.md §Attrs): a flow-position attrs group lowers
 /// to `<Attrs …/>`, which the Reforest pass strips and applies to the paragraph it is forming.
 const ATTRS: &str = "Attrs";
@@ -79,8 +78,7 @@ pub const SOLID_EMIT_NAMES: &[&str] = &[FOR, SHOW];
 pub const SOLID_WEB_EMIT_NAMES: &[&str] = &[DYNAMIC];
 /// The ambient-prelude names the lowering emits free: code/math spans, heading sugar, and the
 /// doc-state sugars.
-pub const PRELUDE_EMIT_NAMES: &[&str] =
-    &[CODE_INLINE, CODE_BLOCK, MATH, HEADING, LABEL, REF, FOOTNOTE_MARK, FOOTNOTE_TEXT];
+pub const PRELUDE_EMIT_NAMES: &[&str] = &[CODE_INLINE, CODE_BLOCK, MATH, HEADING, LABEL, REF];
 
 /// Is `name` part of the emit surface — declared (`Doc`) or referenced free by lowered markup —
 /// such that a user module binding of it must be diagnosed rather than silently shadow the emit?

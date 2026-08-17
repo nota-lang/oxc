@@ -585,9 +585,10 @@ impl<'a> Visit<'a> for Highlighter<'a> {
     }
 
     /// Doc-state sugar. Reuses existing kinds — no new wire discriminants: the
-    /// sigil bytes (`<`/`>`, `&`, `[^`/`]`, the `]:`) paint [`NotaHighlightKind::Sigil`] (the
-    /// element-head `@` / emphasis-marker kind) and the label ident paints
-    /// [`NotaHighlightKind::Interpolation`] (the `@name` ident kind — a name-like reference).
+    /// sigil bytes (`<`/`>`, `&`) paint [`NotaHighlightKind::Sigil`] (the element-head `@` /
+    /// emphasis-marker kind) and the label ident paints [`NotaHighlightKind::Interpolation`]
+    /// (the `@name` ident kind — a name-like reference). A ref's postfix `[props]`/`{body}`
+    /// groups paint via the ordinary prop/child visitors (element parity).
     fn visit_nota_doc_state(&mut self, it: &NotaDocState<'a>) {
         let (start, label) = (it.span.start, it.label_span);
         match it.kind {
@@ -598,16 +599,11 @@ impl<'a> Visit<'a> for Highlighter<'a> {
             NotaDocStateKind::Ref => {
                 self.emit(start, start + 1, NotaHighlightKind::Sigil); // `&`
             }
-            NotaDocStateKind::FootnoteMark => {
-                self.emit(start, start + 2, NotaHighlightKind::Sigil); // `[^`
-                self.emit(label.end, label.end + 1, NotaHighlightKind::Sigil); // `]`
-            }
-            NotaDocStateKind::FootnoteText => {
-                self.emit(start, start + 2, NotaHighlightKind::Sigil); // `[^`
-                self.emit(label.end, label.end + 2, NotaHighlightKind::Sigil); // `]:`
-            }
         }
         self.emit(label.start, label.end, NotaHighlightKind::Interpolation);
+        for prop in &it.props {
+            self.visit_nota_prop(prop);
+        }
         self.visit_nota_children(&it.children);
     }
 
@@ -1147,20 +1143,26 @@ mod tests {
     /// Labels are Typst-minus-period, so a `_`-joined id scans whole.
     #[test]
     fn docstate_sugar_spans() {
-        let spans = hl("<sec_a> then &sec_a and x[^n1] here\n\n[^n1]: note *body*\n");
+        let spans = hl("<sec_a> then &sec_a here.&n1 done\n");
         // `<sec_a>`
         assert!(has(&spans, K::Sigil, "<"));
         assert!(has(&spans, K::Sigil, ">"));
         assert!(has(&spans, K::Interpolation, "sec_a"));
         // `&sec_a`
         assert!(has(&spans, K::Sigil, "&"));
-        // `x[^n1]` (glued mark)
-        assert!(has(&spans, K::Sigil, "[^"));
-        assert!(has(&spans, K::Sigil, "]"));
+        // `.&n1` — the guard fires after terminal punctuation.
         assert!(has(&spans, K::Interpolation, "n1"));
-        // `[^n1]: …` definition: the `]:` sigil, and the body's own paints still fire.
-        assert!(has(&spans, K::Sigil, "]:"));
-        assert!(has(&spans, K::EmphasisStrong, "*body*"));
+    }
+
+    /// A ref's postfix `[props]`/`{body}` groups paint through the ordinary prop/child visitors.
+    #[test]
+    fn docstate_ref_postfix_spans() {
+        let spans = hl("see &k[page: \"33\"]{the *label*}\n");
+        assert!(has(&spans, K::Sigil, "&"));
+        assert!(has(&spans, K::Interpolation, "k"));
+        assert!(has(&spans, K::PropName, "page"));
+        assert!(has(&spans, K::JsString, "\"33\""));
+        assert!(has(&spans, K::EmphasisStrong, "*label*"));
     }
 
     /// Boundary-guarded literals paint nothing sugar-ish; raw spans keep sugar-like text raw.

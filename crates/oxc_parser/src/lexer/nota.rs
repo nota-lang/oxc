@@ -107,9 +107,9 @@ impl<C: Config> Lexer<'_, C> {
                 self.consume_char();
                 return self.finish_re_lex(kind);
             }
-            // A `[` is always a typed token (unless escaped): the parser resolves which of the
-            // bracket sugars applies — footnote `[^mark]`, a trailing attrs group — or falls
-            // back to a literal `[` (notation.md §Attrs groups).
+            // A `[` is always a typed token (unless escaped): the parser resolves whether a
+            // trailing attrs group applies, or falls back to a literal `[` (notation.md §Attrs
+            // groups; the footnote digraph `[^…]` retired — design/references.md).
             Some(b'[') => {
                 let kind = if is_escaped(self.source.whole(), start) {
                     Kind::MarkupText
@@ -509,7 +509,14 @@ pub fn ref_can_open(source: &str, off: u32) -> bool {
 pub fn docstate_left_guard(source: &str, off: u32) -> bool {
     match (off as usize).checked_sub(1).and_then(|p| source.as_bytes().get(p)) {
         None => true, // start of source
-        Some(&b) => b.is_ascii_whitespace() || matches!(b, b'(' | b'[' | b'{' | b'"' | b'\''),
+        Some(&b) => {
+            b.is_ascii_whitespace()
+                || matches!(b, b'(' | b'[' | b'{' | b'"' | b'\'')
+                // Closing/terminal punctuation also opens (design/references.md): a footnote
+                // use must glue after a sentence — `shown.&note` — while the ident-adjacency
+                // block keeps `R&D`/`a&b`/`Vec<T>` literal.
+                || matches!(b, b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}')
+        }
     }
 }
 
@@ -547,27 +554,32 @@ pub fn ref_sugar_at(source: &str, amp_off: u32, limit: u32) -> Option<Span> {
     docstate_ident_end(source, amp_off + 1, limit).map(|end| Span::new(amp_off + 1, end))
 }
 
-/// `[^mark]` at `lbrack_off`: the mark's span, requiring the `[^` digraph and the `]` within
-/// `limit`. `None` → the `[` is not a footnote opener (the parser tries the link shape next).
-/// (The `[^ident]:` footnote-*text* split is the parser's: it needs the positional line-start
-/// gate — notation.md §Colon & block sugar.)
-pub fn footnote_sugar_at(source: &str, lbrack_off: u32, limit: u32) -> Option<Span> {
-    if byte_at(source, lbrack_off + 1) != Some(b'^') {
-        return None;
-    }
-    let start = lbrack_off + 2;
-    let end = docstate_ident_end(source, start, limit)?;
-    (end < limit && byte_at(source, end) == Some(b']')).then(|| Span::new(start, end))
-}
-
 // ================================================================================================
 // Attrs groups: a trailing bare `[props]` in markup text position (notation.md §Attrs)
 // ================================================================================================
 
+/// The **props-shape gate** on a `[` at `lbrack`: does the interior open (modulo whitespace)
+/// with `...spread`, a quoted key, or `ident` glued to a `:`? Keeps prose honest — `see [1]` and
+/// `[just words]` stay literal. Shared by the attrs-group detector and the `&ref[props]` postfix
+/// (design/references.md §Syntax).
+pub fn props_shape_at(source: &str, lbrack: u32) -> bool {
+    let mut s = Scan::new(source, lbrack + 1);
+    s.skip_inline_ws();
+    match s.peek() {
+        Some(b'.') => s.peek_at(1) == Some(b'.') && s.peek_at(2) == Some(b'.'),
+        Some(b'"' | b'\'') => true, // quoted key (`["data-x": v]`) — the props parse validates the `:`
+        Some(b) if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+            s.skip_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'));
+            s.skip_inline_ws();
+            s.peek() == Some(b':')
+        }
+        _ => false,
+    }
+}
+
 /// Detect a **trailing bare attrs group** `[k: v, …]` at `lbrack`. Two gates keep prose honest:
 ///
-/// 1. **First-entry shape**: the interior must open (modulo whitespace) with `...spread`, a
-///    quoted key, or `ident` glued to a `:` — so `see [1]` and `[just words]` stay literal.
+/// 1. **First-entry shape**: [`props_shape_at`].
 /// 2. **Trailing position**: after the group's `]` (balanced, string/comment-aware), only inline
 ///    whitespace may follow on the closing line up to the line end / `limit` — or, when
 ///    `closer_ok`, the enclosing body's `}`.
@@ -575,20 +587,7 @@ pub fn footnote_sugar_at(source: &str, lbrack_off: u32, limit: u32) -> Option<Sp
 /// The whole group must sit within `limit` (a bounded frame's clip). Returns the offset one past
 /// the `]`, or `None` (not an attrs group — the `[` falls through to literal text).
 pub fn attrs_group_at(source: &str, lbrack: u32, limit: u32, closer_ok: bool) -> Option<u32> {
-    // Gate 1: the first-entry shape.
-    let mut s = Scan::new(source, lbrack + 1);
-    s.skip_inline_ws();
-    let gate_ok = match s.peek()? {
-        b'.' => s.peek_at(1) == Some(b'.') && s.peek_at(2) == Some(b'.'),
-        b'"' | b'\'' => true, // quoted key (`["data-x": v]`) — the props parse validates the `:`
-        b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
-            s.skip_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$'));
-            s.skip_inline_ws();
-            s.peek() == Some(b':')
-        }
-        _ => false,
-    };
-    if !gate_ok {
+    if !props_shape_at(source, lbrack) {
         return None;
     }
     // The balanced group extent (strings/comments opaque), clamped to the frame.
@@ -1873,15 +1872,6 @@ mod tests {
         assert!(!ref_can_open("&$x", 0)); // `$` is not a label char now
         assert!(!ref_can_open("&,", 0));
         assert!(!ref_can_open(r"\&x", 1));
-        // The footnote opener shape lives in `footnote_sugar_at` itself (the `[^` digraph plus a
-        // label-start char; a `[` without them falls through to the link/attrs/literal dispatch).
-        // An escaped `\[` never reaches it — the lexer's `[` arm demotes it to text.
-        let fn_opens = |src: &str| footnote_sugar_at(src, 0, src.len() as u32).is_some();
-        assert!(fn_opens("[^n]"));
-        assert!(fn_opens("[^1]")); // digit start legal → `[^1]` fires
-        assert!(!fn_opens("[^ x]")); // space after `^`
-        assert!(!fn_opens("[^$]")); // `$` is not a label char
-        assert!(!fn_opens("[x]")); // no `^`
 
         // --- left-boundary guard (byte half; frame-start is the parser's) ---
         assert!(docstate_left_guard("<x>", 0)); // start of source
@@ -1890,9 +1880,12 @@ mod tests {
         for src in ["(<x>", "[<x>", "{<x>", "\"<x>", "'<x>"] {
             assert!(docstate_left_guard(src, 1), "opening punct fires: {src}");
         }
+        // Closing/terminal punctuation fires too (footnote uses glue after a sentence).
+        for src in [".&n", ",&n", ";&n", "!&n", "?&n", ")&n", "]&n", "}&n", ":&n"] {
+            assert!(docstate_left_guard(src, 1), "closing punct fires: {src}");
+        }
         assert!(!docstate_left_guard("Vec<T>", 3)); // ident before → literal
         assert!(!docstate_left_guard("R&D", 1));
-        assert!(!docstate_left_guard("a.<x>", 2)); // closing/other punct → literal
         assert!(!docstate_left_guard("*<x>", 1)); // emphasis marker: only frame-start saves it
 
         // --- `<label>`: Typst-minus-period charset, `>` required within limit ---
@@ -1925,12 +1918,13 @@ mod tests {
         assert_eq!(ref_sugar_at("&,", 0, 2), None);
         assert_eq!(ref_sugar_at("&abcd", 0, 3), Some(Span::new(1, 3))); // clipped at limit
 
-        // --- `[^mark]`: the digraph + `]` within limit ---
-        assert_eq!(footnote_sugar_at("[^note1] t", 0, 10), Some(Span::new(2, 7)));
-        assert_eq!(footnote_sugar_at("[^1] t", 0, 6), Some(Span::new(2, 3))); // digit-start mark
-        assert_eq!(footnote_sugar_at("[^ x]", 0, 5), None);
-        assert_eq!(footnote_sugar_at("[^x y]", 0, 6), None); // label stops at space, `]` missing
-        assert_eq!(footnote_sugar_at("[^x]", 0, 3), None); // `]` at/past the limit
-        assert_eq!(footnote_sugar_at("[^x]", 0, 4), Some(Span::new(2, 3)));
+        // --- `props_shape_at`: the shared first-entry gate (attrs groups + `&ref[props]`) ---
+        assert!(props_shape_at("[k: 1]", 0));
+        assert!(props_shape_at("[ k : 1 ]", 0)); // whitespace-tolerant
+        assert!(props_shape_at("[\"data-x\": 1]", 0)); // quoted key
+        assert!(props_shape_at("[...rest]", 0)); // spread
+        assert!(!props_shape_at("[1]", 0)); // `see [1]` stays prose
+        assert!(!props_shape_at("[just words]", 0));
+        assert!(!props_shape_at("[k]", 0)); // bare ident, no glued `:`
     }
 }

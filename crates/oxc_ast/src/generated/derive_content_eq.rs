@@ -2838,6 +2838,7 @@ impl ContentEq for NotaDocState<'_> {
     fn content_eq(&self, other: &Self) -> bool {
         ContentEq::content_eq(&self.kind, &other.kind)
             && ContentEq::content_eq(&self.label, &other.label)
+            && ContentEq::content_eq(&self.props, &other.props)
             && ContentEq::content_eq(&self.children, &other.children)
     }
 }

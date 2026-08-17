@@ -2224,6 +2224,7 @@ impl<'a> Visit<'a> for ChildScopeCollector {
 
     #[inline]
     fn visit_nota_doc_state(&mut self, it: &NotaDocState<'a>) {
+        self.visit_nota_props(&it.props);
         self.visit_nota_children(&it.children);
     }
 

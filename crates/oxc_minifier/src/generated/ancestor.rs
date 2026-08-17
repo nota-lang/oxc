@@ -352,7 +352,8 @@ pub(crate) enum AncestorType {
     NotaHeadingChildren = 328,
     NotaListItemChildren = 329,
     NotaAttrsProps = 330,
-    NotaDocStateChildren = 331,
+    NotaDocStateProps = 331,
+    NotaDocStateChildren = 332,
 }
 
 /// Ancestor type used in AST traversal.
@@ -977,6 +978,7 @@ pub enum Ancestor<'a, 't> {
     NotaListItemChildren(NotaListItemWithoutChildren<'a, 't>) =
         AncestorType::NotaListItemChildren as u16,
     NotaAttrsProps(NotaAttrsWithoutProps<'a, 't>) = AncestorType::NotaAttrsProps as u16,
+    NotaDocStateProps(NotaDocStateWithoutProps<'a, 't>) = AncestorType::NotaDocStateProps as u16,
     NotaDocStateChildren(NotaDocStateWithoutChildren<'a, 't>) =
         AncestorType::NotaDocStateChildren as u16,
 }
@@ -2085,7 +2087,7 @@ impl<'a, 't> Ancestor<'a, 't> {
 
     #[inline]
     pub fn is_nota_doc_state(self) -> bool {
-        matches!(self, Self::NotaDocStateChildren(_))
+        matches!(self, Self::NotaDocStateProps(_) | Self::NotaDocStateChildren(_))
     }
 
     #[inline]
@@ -2469,7 +2471,10 @@ impl<'a, 't> Ancestor<'a, 't> {
     pub fn is_parent_of_nota_prop(self) -> bool {
         matches!(
             self,
-            Self::NotaElementProps(_) | Self::NotaVerbatimProps(_) | Self::NotaAttrsProps(_)
+            Self::NotaElementProps(_)
+                | Self::NotaVerbatimProps(_)
+                | Self::NotaAttrsProps(_)
+                | Self::NotaDocStateProps(_)
         )
     }
 
@@ -2826,6 +2831,7 @@ impl<'a, 't> GetAddress for Ancestor<'a, 't> {
             Self::NotaHeadingChildren(a) => a.address(),
             Self::NotaListItemChildren(a) => a.address(),
             Self::NotaAttrsProps(a) => a.address(),
+            Self::NotaDocStateProps(a) => a.address(),
             Self::NotaDocStateChildren(a) => a.address(),
         }
     }
@@ -19965,7 +19971,61 @@ pub(crate) const OFFSET_NOTA_DOC_STATE_SPAN: usize = offset_of!(NotaDocState, sp
 pub(crate) const OFFSET_NOTA_DOC_STATE_KIND: usize = offset_of!(NotaDocState, kind);
 pub(crate) const OFFSET_NOTA_DOC_STATE_LABEL: usize = offset_of!(NotaDocState, label);
 pub(crate) const OFFSET_NOTA_DOC_STATE_LABEL_SPAN: usize = offset_of!(NotaDocState, label_span);
+pub(crate) const OFFSET_NOTA_DOC_STATE_PROPS: usize = offset_of!(NotaDocState, props);
 pub(crate) const OFFSET_NOTA_DOC_STATE_CHILDREN: usize = offset_of!(NotaDocState, children);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct NotaDocStateWithoutProps<'a, 't>(
+    pub(crate) *const NotaDocState<'a>,
+    pub(crate) PhantomData<&'t ()>,
+);
+
+impl<'a, 't> NotaDocStateWithoutProps<'a, 't> {
+    #[inline]
+    pub fn node_id(self) -> &'t Cell<NodeId> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_NODE_ID) as *const Cell<NodeId>)
+        }
+    }
+
+    #[inline]
+    pub fn span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn kind(self) -> &'t NotaDocStateKind {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_KIND) as *const NotaDocStateKind)
+        }
+    }
+
+    #[inline]
+    pub fn label(self) -> &'t Str<'a> {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_LABEL) as *const Str<'a>) }
+    }
+
+    #[inline]
+    pub fn label_span(self) -> &'t Span {
+        unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_LABEL_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn children(self) -> &'t Vec<'a, NotaChild<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_CHILDREN)
+                as *const Vec<'a, NotaChild<'a>>)
+        }
+    }
+}
+
+impl<'a, 't> GetAddress for NotaDocStateWithoutProps<'a, 't> {
+    #[inline]
+    fn address(&self) -> Address {
+        unsafe { Address::from_ptr(self.0) }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
@@ -20002,6 +20062,14 @@ impl<'a, 't> NotaDocStateWithoutChildren<'a, 't> {
     #[inline]
     pub fn label_span(self) -> &'t Span {
         unsafe { &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_LABEL_SPAN) as *const Span) }
+    }
+
+    #[inline]
+    pub fn props(self) -> &'t Vec<'a, NotaProp<'a>> {
+        unsafe {
+            &*((self.0 as *const u8).add(OFFSET_NOTA_DOC_STATE_PROPS)
+                as *const Vec<'a, NotaProp<'a>>)
+        }
     }
 }
 

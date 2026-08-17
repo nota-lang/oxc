@@ -11803,6 +11803,23 @@ impl<'a> AstNode<'a, NotaDocState<'a>> {
     }
 
     #[inline]
+    pub fn props(&self) -> &AstNode<'a, Vec<'a, NotaProp<'a>>> {
+        let following_span_start = self
+            .inner
+            .children
+            .first()
+            .map(|n| n.span().start)
+            .or(Some(self.following_span_start))
+            .unwrap_or(0);
+        self.allocator.alloc(AstNode {
+            inner: &self.inner.props,
+            allocator: self.allocator,
+            parent: AstNodes::NotaDocState(transmute_self(self)),
+            following_span_start,
+        })
+    }
+
+    #[inline]
     pub fn children(&self) -> &AstNode<'a, Vec<'a, NotaChild<'a>>> {
         let following_span_start = self.following_span_start;
         self.allocator.alloc(AstNode {

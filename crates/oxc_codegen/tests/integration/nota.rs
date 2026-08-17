@@ -325,12 +325,13 @@ fn props_then_colon_body() {
 }
 "#,
     );
-    // The doc-state element form is now legal: `@FootnoteText[label: "n2"]: def` — a colon-body footnote
-    // definition (previously the `[^x]:` sugar was the only colon-body definition surface).
+    // The footnote-definition surface is this exact shape: `@Footnote[id: "n2"]: def` — an
+    // ordinary component element with a colon body (design/references.md; nothing
+    // reader-privileged about footnotes anymore).
     assert_js_eq(
-        &nota_doc("@FootnoteText[label: \"n2\"]: def two\n"),
+        &nota_doc("@Footnote[id: \"n2\"]: def two\n"),
         r#"export default function Doc() {
-	return <NotaDoc><FootnoteText label="n2">{"def two"}</FootnoteText></NotaDoc>;
+	return <NotaDoc><Footnote id="n2">{"def two"}</Footnote></NotaDoc>;
 }
 "#,
     );
@@ -1030,16 +1031,13 @@ fn heading_sugar_relowers_but_raw_element_stays_host() {
 }
 
 #[test]
-fn line_start_constructs_resume_after_footnote_def_sugar() {
-    // A `[^x]: body` definition reuses the colon-body extent machinery, which consumes through
-    // trailing blank lines — so the parser resumes AT a line start and must re-run line-start
-    // detection there (the `@head:` forms already had the hook; the sugar arm missed it). A
-    // heading and a list directly after the definition are sugar, not literal text.
-    let js = nota_doc("[^a]: A def.\n\n## After\n\n- item\n");
-    assert!(
-        js.contains(r#"<FootnoteText label="a">{"A def."}</FootnoteText>"#),
-        "def parses: {js}"
-    );
+fn line_start_constructs_resume_after_colon_body_definition() {
+    // A colon-body definition (`@Footnote[id]: body` — the footnote-definition form) consumes
+    // through trailing blank lines, so the parser resumes AT a line start and must re-run
+    // line-start detection there. A heading and a list directly after the definition are sugar,
+    // not literal text.
+    let js = nota_doc("@Footnote[id: \"a\"]: A def.\n\n## After\n\n- item\n");
+    assert!(js.contains(r#"<Footnote id="a">{"A def."}</Footnote>"#), "def parses: {js}");
     assert!(js.contains(r#"<Heading rank={2}>{"After"}</Heading>"#), "heading resumes: {js}");
     assert!(js.contains("<UlLi>"), "list resumes: {js}");
     assert!(!js.contains("## After"), "no literal heading text: {js}");
@@ -1248,7 +1246,7 @@ fn body_start_is_a_line_start() {
     );
 }
 
-// ----- Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` / `[^label]: body` -----
+// ----- Doc-state sugar (notation.md §Doc-state references, design/references.md): `<label>` / `&ref[props]{body}` -----
 
 #[test]
 fn docstate_label_row() {
@@ -1263,65 +1261,53 @@ fn docstate_ref_row() {
 }
 
 #[test]
-fn docstate_footnote_mark_row() {
-    // Emit-table row: `[^note1]` ≡ `@FootnoteMark[label: "note1"]{}`; glues after a word
-    // (Markdown-style — `[^` needs no left guard).
-    nota_expr("@{text[^note1]}", r#"<>{"text"}<FootnoteMark label="note1" /></>"#);
+fn docstate_ref_postfix_props() {
+    // A glued props-shaped `[` continues the ref (design/references.md §Syntax):
+    // `&k[page: "33"]` ≡ `@Ref[id: "k", page: "33"]{}` — the synthesized id first, authored
+    // props after.
+    nota_expr(
+        "@{see &knuth84[page: \"33\"], ok}",
+        r#"<>{"see "}<Ref id="knuth84" page="33" />{", ok"}</>"#,
+    );
+    // Expression values + chained groups compose exactly as on an element head.
+    nota_expr("@{&k[a: 1][b: x]}", r#"<><Ref id="k" a={1} b={x} /></>"#);
 }
 
 #[test]
-fn docstate_footnote_text_row() {
-    // Emit-table row: line-start `[^note1]: body` ≡ `@FootnoteText[label: "note1"]: body`.
-    let js = nota_doc("[^note1]: See *also* now\n");
-    assert_js_eq(
-        &js,
-        r#"export default function Doc() {
-            return <NotaDoc><FootnoteText label="note1">{"See "}<strong>{"also"}</strong>{" now"}</FootnoteText></NotaDoc>;
-        }"#,
+fn docstate_ref_postfix_body() {
+    // A glued `{` opens authored reference text; markup nests.
+    nota_expr(
+        "@{&sec{the *intro* section}}",
+        r#"<><Ref id="sec">{"the "}<strong>{"intro"}</strong>{" section"}</Ref></>"#,
+    );
+    // Props + body compose: the design doc's `&smith2020[page: "33"]{Smith}` row.
+    nota_expr(
+        "@{&smith2020[page: \"33\"]{Smith}}",
+        r#"<><Ref id="smith2020" page="33">{"Smith"}</Ref></>"#,
     );
 }
 
 #[test]
-fn docstate_footnote_text_is_line_start_only() {
-    // Mid-line `[^x]:` is a footnote *mark*; the `:` stays literal (the positional rule).
-    let js = nota_doc("see [^x]: here\n");
-    assert!(js.contains(r#"<FootnoteMark label="x" />"#), "{js}");
-    assert!(!js.contains("FootnoteText"), "no definition mid-line: {js}");
-    assert!(js.contains(r#"": here""#), "the colon stays literal text: {js}");
-}
-
-#[test]
-fn docstate_footnote_text_colon_extent() {
-    // The definition body uses the colon-body extent machinery verbatim: rest of line + lines
-    // indented past the opening line (leftover indent joined, per the whitespace algorithm); the
-    // following paragraph stays outside.
-    let js = nota_doc("[^n]: first\n  cont\n\nafter para\n");
-    assert_js_eq(
-        &js,
-        r#"export default function Doc() {
-            return <NotaDoc><FootnoteText label="n">{"first\n  cont"}</FootnoteText>{"after para"}</NotaDoc>;
-        }"#,
-    );
-}
-
-#[test]
-fn docstate_footnote_text_at_body_start_clips_at_brace() {
-    // A braced body's start is a line start, and the colon body clips at the body's `}`.
-    let js = nota_expr_raw("@p{[^n]: note}");
-    assert!(js.contains(r#"<FootnoteText label="n">{"note"}</FootnoteText>"#), "{js}");
+fn docstate_ref_postfix_gate() {
+    // A non-props-shaped glued `[` stays prose (the attrs-group gate — `see [1]` precedent):
+    // the ref closes at the ident and the bracket rides as text.
+    nota_expr("@{see &sec[1] x}", r#"<>{"see "}<Ref id="sec" />{"[1] x"}</>"#);
+    // Unglued groups are not postfix: a space ends the ref, and literal braces in prose stay
+    // text (notation.md §Markup sugar).
+    nota_expr("@{&sec {x}}", r#"<><Ref id="sec" />{" {x}"}</>"#);
 }
 
 #[test]
 fn docstate_left_boundary_guard_negatives() {
-    // The `<`/`&` left guard: ident/closing-punct before the sigil ⇒ literal prose. Non-matching
-    // opens are literal everywhere: `< b` (space), `<->` (start restriction — `-` not a label-start,
-    // so arrow-like prose stays text), `&$x` (`$` is not a label char), `[^ x]` (space).
-    let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x, [^ x]\n");
-    for sugar in ["<Label", "<Ref", "<FootnoteMark", "<FootnoteText"] {
+    // The `<`/`&` left guard: an ident before the sigil ⇒ literal prose. Non-matching opens are
+    // literal everywhere: `< b` (space), `<->` (start restriction — `-` not a label-start, so
+    // arrow-like prose stays text), `&$x` (`$` is not a label char).
+    let js = nota_doc("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x\n");
+    for sugar in ["<Label", "<Ref"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
     assert!(
-        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x, [^ x]"),
+        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x"),
         "prose intact: {js}"
     );
 }
@@ -1334,6 +1320,16 @@ fn docstate_left_boundary_guard_positives() {
     assert!(js.contains(r#"<Label id="y" />"#), "{js}");
     assert!(js.contains(r#"<Ref id="z" />"#), "{js}");
     assert!(js.contains(r#"<Ref id="w" />"#), "{js}");
+}
+
+#[test]
+fn docstate_guard_fires_after_closing_punctuation() {
+    // Closing/terminal punctuation opens the guard (design/references.md): a footnote use glues
+    // after its sentence — `shown.&note` — while ident-adjacency still blocks `R&D`.
+    let js = nota_doc("As shown.&note1 Again,&note1 and (twice)&note2\n");
+    assert!(js.contains(r#"{"As shown."}<Ref id="note1" />"#), "{js}");
+    assert!(js.contains(r#"{" Again,"}<Ref id="note1" />"#), "{js}");
+    assert!(js.contains(r#"{" and (twice)"}<Ref id="note2" />"#), "{js}");
 }
 
 #[test]
@@ -1358,23 +1354,34 @@ fn docstate_clips_at_bounded_frame_end() {
     assert!(!js.contains("<Label"), "no label across the frame: {js}");
     assert!(js.contains(r#"<em>{"<abc"}</em>"#), "the em body keeps the literal `<abc`: {js}");
 
-    // A footnote definition armed at an emphasis body's start clips its colon body at the frame.
-    let js = nota_doc("*[^x]: y* z\n");
-    assert!(
-        js.contains(r#"<strong><FootnoteText label="x">{"y"}</FootnoteText></strong>"#),
-        "{js}"
-    );
-    assert!(js.contains(r#"" z""#), "the tail stays outside: {js}");
+    // A ref postfix whose opener sits past the frame end is not consumed: the `[` belongs to the
+    // text after the emphasis close, so the ref stays bare.
+    let js = nota_doc("q *&x*[k: 1] z\n");
+    assert!(js.contains(r#"<strong><Ref id="x" /></strong>"#), "{js}");
+    assert!(!js.contains(r#"k="1""#) && !js.contains("k={1}"), "no postfix across the frame: {js}");
 }
 
 #[test]
 fn docstate_escapes_are_literal() {
-    // `\<`, `\&`, `\[` yield the literal characters via the standard escape machinery.
-    let js = nota_doc("\\<sec> \\&ref \\[^n]\n");
-    for sugar in ["<Label", "<Ref", "<FootnoteMark", "<FootnoteText"] {
+    // `\<` and `\&` yield the literal characters via the standard escape machinery.
+    let js = nota_doc("\\<sec> \\&ref\n");
+    for sugar in ["<Label", "<Ref"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
-    assert!(js.contains("<sec> &ref [^n]"), "escapes drop the backslash: {js}");
+    assert!(js.contains("<sec> &ref"), "escapes drop the backslash: {js}");
+}
+
+#[test]
+fn docstate_footnote_digraph_retired() {
+    // The `[^…]` footnote sugars are GONE (design/references.md): `[^n]` and a line-start
+    // `[^n]: body` are plain prose now (the `[` falls through the attrs gate to literal text).
+    // Footnote uses are `&id` refs; definitions are the `@Footnote[id]: …` element form.
+    let js = nota_doc("A note[^n] here.\n\n[^n]: The body.\n");
+    for gone in ["FootnoteMark", "FootnoteText"] {
+        assert!(!js.contains(gone), "{gone} must not appear: {js}");
+    }
+    assert!(js.contains("A note[^n] here."), "the mark shape is prose: {js}");
+    assert!(js.contains("[^n]: The body."), "the definition shape is prose: {js}");
 }
 
 #[test]
@@ -1389,10 +1396,9 @@ fn docstate_ident_charset() {
     // `:` joins (namespaced labels) — documented behavior; a trailing `-` also glues.
     nota_expr("@{&ns:x y}", r#"<><Ref id="ns:x" />{" y"}</>"#);
     nota_expr("@{&sec- y}", r#"<><Ref id="sec-" />{" y"}</>"#);
-    // Digits may start a label (Markdown-style): `<1a>` / `&1x` / `[^1]` fire.
+    // Digits may start a label (Markdown-style): `<1a>` / `&1x` fire.
     nota_expr("@{<1a>}", r#"<><Label id="1a" /></>"#);
     nota_expr("@{&1x y}", r#"<><Ref id="1x" />{" y"}</>"#);
-    nota_expr("@{[^1]}", r#"<><FootnoteMark label="1" /></>"#);
     // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."), so a ref never glues sentence
     // punctuation.
     nota_expr("@{&sec. and}", r#"<><Ref id="sec" />{". and"}</>"#);
@@ -1424,15 +1430,16 @@ fn docstate_unclosed_label_is_literal() {
 
 #[test]
 fn docstate_mixed_document() {
-    // All four sugars + guarded literals in one document (the mixed golden, exact emit).
+    // Both sugars, a postfix citation ref, a post-sentence footnote ref, the `@Footnote[id]: …`
+    // element definition, and guarded literals in one document (the mixed golden, exact emit).
     let js = nota_doc(
-        "# Intro <sec_intro>\n\nSee &sec_intro for Vec<T> and R&D details[^note1].\n\n\
-         [^note1]: The *fine* print.\n",
+        "# Intro <sec_intro>\n\nSee &sec_intro[page: \"7\"] for Vec<T> and R&D details.&note1\n\n\
+         @Footnote[id: \"note1\"]: The *fine* print.\n",
     );
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-            return <NotaDoc><Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>{"\n\nSee "}<Ref id="sec_intro" />{" for Vec<T> and R&D details"}<FootnoteMark label="note1" />{".\n\n"}<FootnoteText label="note1">{"The "}<strong>{"fine"}</strong>{" print."}</FootnoteText></NotaDoc>;
+            return <NotaDoc><Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>{"\n\nSee "}<Ref id="sec_intro" page="7" />{" for Vec<T> and R&D details."}<Ref id="note1" />{"\n\n"}<Footnote id="note1">{"The "}<strong>{"fine"}</strong>{" print."}</Footnote></NotaDoc>;
         }"#,
     );
 }
@@ -2115,8 +2122,8 @@ fn markdown_link_shapes_stay_literal() {
     // (A `//`-bearing url in prose is the comment sugar's business — plain shapes here.)
     nota_expr("@p{see [the docs](x.com).}", r#"<p>{"see [the docs](x.com)."}</p>"#);
     nota_expr("@p{bang ![alt](src) too}", r#"<p>{"bang ![alt](src) too"}</p>"#);
-    // The footnote digraph still wins its shape; the parens stay prose.
-    nota_expr("@p{x[^1](u)}", r#"<p>{"x"}<FootnoteMark label="1" />{"(u)"}</p>"#);
+    // The retired footnote digraph is prose too — the whole bracket run stays literal.
+    nota_expr("@p{x[^1](u)}", r#"<p>{"x[^1](u)"}</p>"#);
 }
 
 // ===============================================================================================

@@ -15867,10 +15867,11 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `kind`: Which of the two sugars this is (fixes the emitted ambient identifier).
     /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
     /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
-    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    /// * `props`: A ref's glued postfix `[props]` groups (merged after the synthesized `id`); empty for
+    /// * `children`: A ref's glued `{body}` (authored reference text); empty for `Label` and bare refs.
     #[inline]
     pub fn nota_child_doc_state<A1>(
         self,
@@ -15878,12 +15879,15 @@ impl<'a> AstBuilder<'a> {
         kind: NotaDocStateKind,
         label: A1,
         label_span: Span,
+        props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
     ) -> NotaChild<'a>
     where
         A1: Into<Str<'a>>,
     {
-        NotaChild::DocState(self.alloc_nota_doc_state(span, kind, label, label_span, children))
+        NotaChild::DocState(
+            self.alloc_nota_doc_state(span, kind, label, label_span, props, children),
+        )
     }
 
     /// Build a [`NotaChild::ThematicBreak`].
@@ -16883,10 +16887,11 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `kind`: Which of the two sugars this is (fixes the emitted ambient identifier).
     /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
     /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
-    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    /// * `props`: A ref's glued postfix `[props]` groups (merged after the synthesized `id`); empty for
+    /// * `children`: A ref's glued `{body}` (authored reference text); empty for `Label` and bare refs.
     #[inline]
     pub fn nota_doc_state<A1>(
         self,
@@ -16894,6 +16899,7 @@ impl<'a> AstBuilder<'a> {
         kind: NotaDocStateKind,
         label: A1,
         label_span: Span,
+        props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
     ) -> NotaDocState<'a>
     where
@@ -16905,6 +16911,7 @@ impl<'a> AstBuilder<'a> {
             kind,
             label: label.into(),
             label_span,
+            props,
             children,
         }
     }
@@ -16916,10 +16923,11 @@ impl<'a> AstBuilder<'a> {
     ///
     /// ## Parameters
     /// * `span`: The [`Span`] covering this node
-    /// * `kind`: Which of the four sugars this is (fixes the emitted ambient identifier + prop key).
+    /// * `kind`: Which of the two sugars this is (fixes the emitted ambient identifier).
     /// * `label`: The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
     /// * `label_span`: Source span of `label` (sans sigils) — for the formatter and the highlight pass.
-    /// * `children`: The body of a `[^label]: …` footnote-text definition (`FootnoteText`); empty for the three
+    /// * `props`: A ref's glued postfix `[props]` groups (merged after the synthesized `id`); empty for
+    /// * `children`: A ref's glued `{body}` (authored reference text); empty for `Label` and bare refs.
     #[inline]
     pub fn alloc_nota_doc_state<A1>(
         self,
@@ -16927,12 +16935,16 @@ impl<'a> AstBuilder<'a> {
         kind: NotaDocStateKind,
         label: A1,
         label_span: Span,
+        props: Vec<'a, NotaProp<'a>>,
         children: Vec<'a, NotaChild<'a>>,
     ) -> Box<'a, NotaDocState<'a>>
     where
         A1: Into<Str<'a>>,
     {
-        Box::new_in(self.nota_doc_state(span, kind, label, label_span, children), self.allocator)
+        Box::new_in(
+            self.nota_doc_state(span, kind, label, label_span, props, children),
+            self.allocator,
+        )
     }
 }
 

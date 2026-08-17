@@ -492,30 +492,29 @@ impl<'a> NotaLowering<'a> {
         self.build_named_element(span, super::HEADING, props, children)
     }
 
-    /// Doc-state sugar (notation.md §Doc-state references) → `<Slot key="label">children</Slot>`,
-    /// the same ambient pattern as `Heading`: the component is an ambient-prelude free identifier
-    /// (no import emitted), the `id`/`label` attribute reader-synthesized boilerplate (empty spans
-    /// — unmapped). Only `FootnoteText` has children (its colon body); the three leaf sugars
-    /// self-close.
+    /// Doc-state sugar (notation.md §Doc-state references, design/references.md) →
+    /// `<Slot id="label" …props>children</Slot>`, the same ambient pattern as `Heading`: the
+    /// component is an ambient-prelude free identifier (no import emitted), the `id` attribute
+    /// reader-synthesized boilerplate (empty spans — unmapped). A ref's postfix `[props]` groups
+    /// merge after the synthesized `id` (authored props — mapped like element props); its
+    /// `{body}` becomes the children. `Label` and bare refs self-close.
     fn lower_doc_state(&mut self, d: NotaDocState<'a>) -> Expression<'a> {
-        let NotaDocState { span, kind, label, children, .. } = d;
-        let (slot, key) = match kind {
-            NotaDocStateKind::Label => (super::LABEL, "id"),
-            NotaDocStateKind::Ref => (super::REF, "id"),
-            NotaDocStateKind::FootnoteMark => (super::FOOTNOTE_MARK, "label"),
-            NotaDocStateKind::FootnoteText => (super::FOOTNOTE_TEXT, "label"),
+        let NotaDocState { span, kind, label, props, children, .. } = d;
+        let slot = match kind {
+            NotaDocStateKind::Label => super::LABEL,
+            NotaDocStateKind::Ref => super::REF,
         };
-        // A footnote-text body is a colon body (non-brace whitespace regime); leaves are empty.
         let children = self.lower_children(children, false);
         let value =
             self.ast.expression_string_literal(Span::empty(span.start), label.as_str(), None);
-        let props = self.ast.vec1(self.jsx_attr(
+        let mut jsx_props = self.ast.vec1(self.jsx_attr(
             Span::empty(span.start),
             Span::empty(span.start),
-            key,
+            "id",
             Some(value),
         ));
-        self.build_named_element(span, slot, props, children)
+        jsx_props.extend(self.lower_attrs(props));
+        self.build_named_element(span, slot, jsx_props, children)
     }
 
     /// `---` thematic-break sugar → `<hr />` — a plain host element (a block, so the runtime's
