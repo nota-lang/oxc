@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn free_names_cover_lowering_synthesized_and_user_refs() {
         // `# t` synthesizes a free `Heading` ref; `$x$` a free `Tex`; `% secset(…)` is a free
-        // user call; the structural surface (`NotaDoc`) is free because the `@nota-lang/solid`
+        // user call; the structural surface (`NotaDoc`) is free because the `@nota-lang/core`
         // import is the wrapper's job. Sorted output.
         let out = compile("% secset({ n: 1 })\n# Title\n\n$y$\n", None).expect("compiles");
         for name in ["Heading", "Tex", "secset", "NotaDoc"] {

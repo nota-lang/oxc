@@ -2,7 +2,7 @@
 //! JSX element/fragment `Expression` builders and the document `Program` assembly (Doc skeleton,
 //! `%`-statement routing — design/solid.md §The pipeline).
 //!
-//! The emit targets `@nota-lang/solid`'s runtime surface: the document body is wrapped in
+//! The emit targets `@nota-lang/core`'s runtime surface: the document body is wrapped in
 //! `<NotaDoc>`, list markers become `<UlLi>`/`<OlLi>`, flow-container host tags get a
 //! `<Reforest>` interior, `@for` lowers to Solid's `<For>`, and a dynamic tag rides on
 //! `<Dynamic component={…}>`. Text children are emitted as `{"…"}` expression containers
@@ -39,7 +39,7 @@ const FLOW_TAGS: &[&str] = &[
 ];
 
 /// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The
-/// lowered module references the default-export component `Doc` and the `@nota-lang/solid`
+/// lowered module references the default-export component `Doc` and the `@nota-lang/core`
 /// structural names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`, Solid's `For`/`Show`, and `Dynamic` for
 /// dynamic tags) as free identifiers the integrator binds; a colliding binding is diagnosed
 /// rather than silently shadowed.
