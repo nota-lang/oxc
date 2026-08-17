@@ -231,7 +231,15 @@ impl<'a> NotaLowering<'a> {
         let props = self.lower_attrs(props);
         // The whitespace regime follows the body syntax: a brace body keeps the spaces between
         // `{`/`}` and text as content; a colon body trims its edges like a document/block.
-        let children = self.lower_children(children, !is_colon);
+        let mut children = self.lower_children(children, !is_colon);
+        // ...except where HTML forbids text entirely (see `FOSTER_PARENTING_TAGS`).
+        if is_foster_parenting_tag(&tag) {
+            children.retain(|child| !is_whitespace_text(child));
+        }
+        // `<table>` gets the `<tbody>` the parser would have inserted (see `wrap_bare_rows`).
+        if is_host_tag(&tag, "table") {
+            children = self.wrap_bare_rows(children);
+        }
         // EOF error-recovery completion anchor: for an unclosed `[props]` group, give the JSX
         // opening element a *real* span (the source `[`) so codegen logs its position, and record
         // a `PropsAnchor` mark the join turns into a zero-width attribute-completion anchor just
@@ -578,6 +586,98 @@ impl<'a> NotaLowering<'a> {
         }
         let siblings = self.scribble_emit(segs, false);
         self.build_document(siblings, module_items, doc_prelude)
+    }
+}
+
+/// The HTML elements whose child *text* the parser refuses to keep in place.
+///
+/// Inside table structure, character data is not "in table text" — the parser **foster-parents**
+/// it, re-inserting it in the DOM immediately *before* the table. Whitespace between rows is
+/// content to Scribble (`@table{\n  @tr{…}\n  @tr{…}\n}` lowers with a `"\n"` between the rows),
+/// so the server writes markup whose parsed DOM has fewer children than it emitted — and a client
+/// walking `nextSibling` to claim those children runs off the end and the hydration tears the page
+/// down. Dropping the whitespace at lowering time is the fix: the bytes and the DOM agree.
+///
+/// Only *whitespace-only* text is dropped, and only for a statically known host tag — a component
+/// that happens to render a `<table>` is out of reach here, as is deliberate non-whitespace text
+/// in table position (which is a document bug the browser will relocate either way).
+const FOSTER_PARENTING_TAGS: [&str; 6] =
+    ["table", "thead", "tbody", "tfoot", "tr", "colgroup"];
+
+/// Whether `tag` is a host element from {@link FOSTER_PARENTING_TAGS}.
+fn is_foster_parenting_tag(tag: &NotaTag<'_>) -> bool {
+    matches!(tag, NotaTag::Host(h) if FOSTER_PARENTING_TAGS.contains(&h.name.as_str()))
+}
+
+/// Whether a lowered child is a text child holding only ASCII whitespace.
+fn is_whitespace_text(child: &Expression<'_>) -> bool {
+    matches!(child, Expression::StringLiteral(s)
+        if !s.value.is_empty() && s.value.as_str().bytes().all(|b| b.is_ascii_whitespace()))
+}
+
+/// Whether `tag` is the named host element.
+fn is_host_tag(tag: &NotaTag<'_>, name: &str) -> bool {
+    matches!(tag, NotaTag::Host(h) if h.name.as_str() == name)
+}
+
+/// The host element name of a lowered child, if it is one.
+fn lowered_host_name<'a>(child: &Expression<'a>) -> Option<&'a str> {
+    let Expression::JSXElement(el) = child else { return None };
+    match &el.opening_element.name {
+        JSXElementName::Identifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
+}
+
+impl<'a> NotaLowering<'a> {
+    /// Wrap each run of bare `<tr>` children of a `<table>` in the `<tbody>` the HTML parser
+    /// would insert anyway.
+    ///
+    /// `@table{@tr{…} @tr{…}}` is the natural way to write a table, and it lowers to a `<table>`
+    /// whose direct children are rows. The parser does not build that tree: rows outside a row
+    /// group get an implicit `<tbody>`, so the DOM has a generation the emitted bytes never
+    /// mentioned — `table.firstChild` is a `<tbody>`, the client's compiled template expects the
+    /// first `<tr>`, and hydration dies on the mismatch. Emitting the `<tbody>` ourselves makes
+    /// the bytes describe the tree they will actually parse into. Sibling row groups an author
+    /// writes explicitly (`@thead{…}`) are left alone, and each run is wrapped separately so
+    /// `@thead{…} @tr{…}` keeps its order.
+    ///
+    /// Out of reach here (statically invisible): a *component* child that renders rows.
+    fn wrap_bare_rows(
+        &self,
+        children: ArenaVec<'a, Expression<'a>>,
+    ) -> ArenaVec<'a, Expression<'a>> {
+        if !children.iter().any(|c| lowered_host_name(c) == Some("tr")) {
+            return children;
+        }
+        let mut out = self.ast.vec_with_capacity(children.len());
+        let mut run: ArenaVec<'a, Expression<'a>> = self.ast.vec();
+        for child in children {
+            if lowered_host_name(&child) == Some("tr") {
+                run.push(child);
+            } else {
+                if !run.is_empty() {
+                    let rows = std::mem::replace(&mut run, self.ast.vec());
+                    out.push(self.build_tbody(rows));
+                }
+                out.push(child);
+            }
+        }
+        if !run.is_empty() {
+            out.push(self.build_tbody(run));
+        }
+        out
+    }
+
+    /// A synthesized `<tbody>` around `rows` (no props, no source span — it is not in the source).
+    fn build_tbody(&self, rows: ArenaVec<'a, Expression<'a>>) -> Expression<'a> {
+        self.build_element(
+            Span::empty(0),
+            build::JsxTag::Host { name: "tbody", span: Span::empty(0) },
+            self.ast.vec(),
+            rows,
+            None,
+        )
     }
 }
 

@@ -177,6 +177,55 @@ fn component_element() {
 }
 
 #[test]
+fn table_structure_drops_whitespace_children() {
+    // HTML foster-parents character data out of table structure, re-inserting it *before* the
+    // table — so a `"\n"` between rows is markup the server writes and the parser then moves,
+    // leaving the DOM with fewer children than the bytes claimed and hydration walking off the
+    // end. Whitespace-only text is dropped for these tags so bytes and DOM agree.
+    nota_expr(
+        "@table{\n  @tr{@td{a} @td{b}}\n  @tr{@td{c} @td{d}}\n}",
+        concat!(
+            r#"<table><tbody><tr><td><Reforest>{"a"}</Reforest></td><td><Reforest>{"b"}</Reforest></td></tr>"#,
+            r#"<tr><td><Reforest>{"c"}</Reforest></td><td><Reforest>{"d"}</Reforest></td></tr></tbody></table>"#
+        ),
+    );
+    nota_expr(
+        "@tbody{\n  @tr{@th{h}}\n}",
+        r#"<tbody><tr><th><Reforest>{"h"}</Reforest></th></tr></tbody>"#,
+    );
+    // Cells are ordinary content: their own whitespace and text survive untouched — only the
+    // inter-cell whitespace, which sits in `<tr>` position, goes.
+    nota_expr(
+        "@tr{@td{a b}  @td{ c }}",
+        r#"<tr><td><Reforest>{"a b"}</Reforest></td><td><Reforest>{" c "}</Reforest></td></tr>"#,
+    );
+}
+
+#[test]
+fn table_gets_the_implicit_tbody_the_parser_would_insert() {
+    // Bare rows in a `<table>` are re-parented into an implicit `<tbody>` by the HTML parser, so
+    // the emit inserts it: otherwise the DOM has a generation the bytes never mentioned and
+    // hydration mismatches on `table.firstChild`.
+    nota_expr(
+        "@table{@tr{@td{a}}}",
+        r#"<table><tbody><tr><td><Reforest>{"a"}</Reforest></td></tr></tbody></table>"#,
+    );
+    // An explicit row group is left exactly as written...
+    nota_expr(
+        "@table{@tbody{@tr{@td{a}}}}",
+        r#"<table><tbody><tr><td><Reforest>{"a"}</Reforest></td></tr></tbody></table>"#,
+    );
+    // ...and mixed content keeps its order, each bare run wrapped on its own.
+    nota_expr(
+        "@table{@thead{@tr{@th{h}}} @tr{@td{a}}}",
+        concat!(
+            r#"<table><thead><tr><th><Reforest>{"h"}</Reforest></th></tr></thead>"#,
+            r#"<tbody><tr><td><Reforest>{"a"}</Reforest></td></tr></tbody></table>"#
+        ),
+    );
+}
+
+#[test]
 fn empty_body_is_no_children() {
     // The whitespace pass drops empty/whitespace-only text → `[]`.
     nota_expr("@p{}", "<p />");
