@@ -961,8 +961,11 @@ mod tests {
 
     #[test]
     fn heading_after_colon_block() {
-        // TODO.md bug 7: sugar directly after a colon-sugar body (mega.nota's
-        // `## Nested statements`) must classify as a heading, not literal text.
+        // Regression: a colon-sugar body consumes through its trailing blank lines, resuming at a
+        // line start the `\n` arm's line-start hook never saw — sugar directly after a colon body
+        // (mega.nota's `## Nested statements`) must still classify as a heading, not literal text.
+        // See `line_start_sugar_after_a_colon_block` in oxc_codegen's integration suite for the
+        // parser-level regression coverage.
         let spans = hl("@section:\n  body\n\n## After\n");
         assert!(has(&spans, K::Heading, "## After"));
         assert!(has(&spans, K::HeadingMarker, "##"));

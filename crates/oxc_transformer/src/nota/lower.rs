@@ -24,8 +24,8 @@ use super::scribble;
 /// The result of a Nota lowering pass: Volar mapping marks + lowering diagnostics.
 ///
 /// The diagnostics are semantic facts about the *lowered* module the reader cannot see at parse
-/// time: a user binding colliding with a reader-injected emit-surface name (`Doc`, the runtime
-/// imports), or a second `export default`.
+/// time: a user binding colliding with a reserved emit-surface name (`Doc`, the structural/
+/// solid-js/ambient-prelude names — [`super::reserved_emit_names`]), or a second `export default`.
 #[derive(Debug)]
 pub struct NotaLoweringReturn {
     /// Source⇄generated mapping marks (ascending source offset).
@@ -165,7 +165,7 @@ impl<'a> NotaLowering<'a> {
 
     /// Lower a body's children, applying the Scribble whitespace algorithm. A `%`/`%%%` statement
     /// child scopes the *remaining* siblings into an IIFE:
-    /// `(() => { …stmts…; return Fragment(...rest); })()`.
+    /// `(() => { …stmts…; return <>…rest…</>; })()`.
     fn lower_children(
         &mut self,
         items: ArenaVec<'a, NotaChild<'a>>,
@@ -178,7 +178,10 @@ impl<'a> NotaLowering<'a> {
                 NotaChild::Text(t) => segs.push(scribble::Seg::Text(t.unbox().value.as_str())),
                 NotaChild::Statement(first) => {
                     // Peel the statement run; the remaining siblings lower recursively into the
-                    // IIFE's returned Fragment.
+                    // IIFE's returned Fragment. Anchored at the first statement's own span (build.rs's
+                    // "anchored at the source construct" rule) — not the whole run's, since a
+                    // multi-statement run's later members already carry their own real spans.
+                    let at = first.span.start;
                     let mut stmts = self.ast.vec1(first.unbox().statement);
                     stmts.extend(
                         iter.peeking_take_while(|c| matches!(c, NotaChild::Statement(_))).map(
@@ -190,7 +193,7 @@ impl<'a> NotaLowering<'a> {
                     );
                     let tail = self.ast.vec_from_iter(iter.by_ref());
                     let rest = self.lower_children(tail, is_brace);
-                    segs.push(scribble::Seg::Elem(self.build_statement_iife(stmts, rest)));
+                    segs.push(scribble::Seg::Elem(self.build_statement_iife(at, stmts, rest)));
                     break; // `iter` was drained into the IIFE
                 }
                 other => segs.push(scribble::Seg::Elem(self.lower_child(other))),
@@ -387,8 +390,9 @@ impl<'a> NotaLowering<'a> {
         if block {
             let mut props = self.ast.vec();
             if let Some(lang) = lang {
-                let val = self.ast.expression_string_literal(Span::empty(0), lang.as_str(), None);
-                props.push(self.jsx_attr(Span::empty(0), Span::empty(0), "lang", Some(val)));
+                let at = Span::empty(span.start);
+                let val = self.ast.expression_string_literal(at, lang.as_str(), None);
+                props.push(self.jsx_attr(at, at, "lang", Some(val)));
             }
             self.build_named_element(span, super::CODE_BLOCK, props, children)
         } else {
@@ -403,7 +407,8 @@ impl<'a> NotaLowering<'a> {
         // a bare JSX attribute is `display={true}` — exactly the `$$` fence's meaning.
         let mut props = self.ast.vec();
         if block {
-            props.push(self.jsx_attr(Span::empty(0), Span::empty(0), "display", None));
+            let at = Span::empty(span.start);
+            props.push(self.jsx_attr(at, at, "display", None));
         }
         self.build_named_element(span, super::MATH, props, children)
     }

@@ -40,7 +40,7 @@ fork — kept shallow (see the fork seam below).
 | Volar mapping marks | `crates/oxc_transformer/src/nota/mapping.rs` |
 | Compile entries + CodeMapping join (+ mapping/virtual-emit tests) | `crates/oxc/src/nota.rs` |
 | Dev tools | `crates/oxc/examples/nota_compile.rs`, `nota_inspect.rs` |
-| wasm bindings (playground) | `napi/nota_wasm/src/lib.rs` |
+| wasm bindings (playground) | `napi/nota/src/lib.rs` |
 | E2E fixtures (parse→lower→codegen, exact-emit) | `crates/oxc_codegen/tests/integration/nota.rs` |
 
 **Parse-then-lower** (the shape oxc uses for JSX): the parser leaves every `@`-form in place as
@@ -65,11 +65,12 @@ formatter, at the cost of a one-time generated-code churn (regenerate with
    `\` *terminates* the head (so `@foo\:` works) instead of starting a JS `\u` escape. Plus
    offset-seek entries (`seek_and_lex{,_markup,_nota_head}`, `Source::set_offset`) and a temporary
    source-end clamp (`set_end_offset`) for bounding statement parses.
-2. **Parser hook** — `js/expression.rs`: `Kind::At if self.nota_markup => parse_nota_form(...)`.
-   The `nota_markup` bool on `ParserImpl` is the *entire* `@`-vs-decorator disambiguation
-   (decorators are unavailable inside `.nota`, v1 — sound: they only appear in class/statement
-   position, never in a Nota expression context). Do NOT try to move markup state into
-   `Context` — its `u8` is bit-saturated.
+2. **Parser hook** — `js/expression.rs`: `Kind::At if self.source_type.is_nota() =>
+   self.parse_nota_markup_expression()`, else `parse_decorated_expression()`. `SourceType::nota()`'s
+   `is_nota()` bit is the *entire* `@`-vs-decorator disambiguation — set once at `Parser::new` and
+   read-only thereafter (a per-file property, not a mutable per-token flag, so there is no markup
+   state to leak into `Context`). Sound because decorators are unavailable inside `.nota`, v1: they
+   only appear in class/statement position, never in a Nota expression context.
 3. **The `nota` parser module** — `nota/mod.rs` + entries in `lib.rs`
    (`parse_nota_document` / `parse_nota_document_recover` / `parse_nota_highlights`; an
    expression-position parse is plain `Parser::parse_expression` with a `SourceType::nota()` —
@@ -189,7 +190,9 @@ place — document-local; a `%` nested in an element body scopes the remaining s
 IIFE returning a JSX fragment); list markers → `<UlLi>`/`<OlLi>` (reference-named); flow-container
 host tags (decode.md's old HOST_FLOW_TAGS, now an emit policy) get a `<Reforest>` interior;
 `@for` → `<For each={iter}>{(bind) => <>…</>}</For>`; dynamic tags → `<Dynamic component={…}>`;
-reserved-name collision diagnostics (`Doc`/`NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`).
+reserved-name collision diagnostics (every name `reserved_emit_names()` returns — `Doc`, then the
+structural/`solid-js`/`solid-js/web`/ambient-prelude groups: `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/
+`Attrs`/`For`/`Show`/`Dynamic`/`CodeInline`/`CodeBlock`/`Tex`/`Heading`/`Label`/`Ref`).
 Component tags are JSX **identifier references** (they surface in free names and log byte-exact
 for the Volar mappings); host tags are plain intrinsic `JSXIdentifier`s.
 
@@ -226,9 +229,9 @@ reinterpretations. Every surviving segment round-trips byte-for-byte. `CodeMappi
 `data: {completion, format, navigation, semantic, structure, verification}`); generated
 boilerplate is unmapped.
 
-The binary's `--virtual` mode exposes `compile_virtual` to the language server — the
-binary ↔ shim ↔ language-server JSON contract (`NotaVirtualCompiled::to_json`, serialized in the
-library and test-pinned there; the `nota_compile` example prints it verbatim):
+The binary's `--virtual` mode is **dev tooling**, not the live language-server path: it prints
+`compile_virtual`'s result as JSON to stdout for ad-hoc inspection (`NotaVirtualCompiled::to_json`,
+serialized in the library and test-pinned there; the `nota_compile` example prints it verbatim):
 ```
 nota_compile --virtual <file>  →  stdout JSON:
 { "code": "<virtual .tsx>",
@@ -238,10 +241,12 @@ nota_compile --virtual <file>  →  stdout JSON:
                            "semantic":bool,"structure":bool,"verification":bool} } ],
   "errors": [ { "message": string, "start": u32, "len": u32 } ] }
 ```
-The shim's `compileVirtual(source)` parses this; the language server prepends its runtime+ambient
-typing preamble to `code` and shifts every `generatedOffsets` by the preamble length
-(`sourceOffsets` index the `.nota`, unchanged). The wasm bindings (wasm-bindgen over the same
-entries, plus `parseAst` and `highlight`/`highlightKindNames`) serve the browser playground and
+The live path never touches this JSON text: `@nota-lang/compiler` calls the **wasm** `compileVirtual`
+binding (`napi/nota`, `#[wasm_bindgen(js_name = compileVirtual)]`) in-process, getting the same shape
+back as a structured value straight across the wasm boundary — no subprocess, no serialize/parse
+round trip. `packages/language-server` then prepends its typing preamble to `code` and shifts every
+`generatedOffsets` by the preamble length (`sourceOffsets` index the `.nota`, unchanged). The same
+wasm bindings (plus `parseAst` and `highlight`/`highlightKindNames`) serve the browser playground and
 the language server's semantic tokens.
 
 ## Highlighting (`oxc_parser/src/nota/highlight.rs`)
@@ -276,7 +281,7 @@ step (`.github/workflows/nota.yml`) calls it.
 
 The **validity invariant** (every fixture's emit re-parses under stock oxc) runs inside the
 codegen integration tests. Parser conformance (`cargo coverage -- parser`) must stay byte-identical
-to upstream — the markup lexer path is unreachable unless `nota_markup` is set. The
+to upstream — the markup lexer path is unreachable unless `SourceType::is_nota()` is set. The
 `fuzz_findings*` modules in the integration tests hold the `#[ignore]`d specs for the still-open
 product calls (they are the canonical list — see §Known gaps); the pipeline inspector for new probes is
 `cargo run -q -p oxc --example nota_inspect --features codegen -- --inline '<src>'` (debug build

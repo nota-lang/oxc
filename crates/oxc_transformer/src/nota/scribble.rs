@@ -30,7 +30,7 @@ enum Piece<'a, E> {
 ///    per notation.md §Whitespace); trim each line's trailing whitespace (a brace body keeps the
 ///    `}`-line's).
 /// 5. Emit one `"\n"` per inter-line newline, never coalesced — a blank line surfaces as two
-///    adjacent `"\n"` children, the runtime's paragraph-break marker (decode.md §struct).
+///    adjacent `"\n"` children, Reforest's paragraph-break marker (design/solid.md).
 pub(super) fn lower<E>(segs: Vec<Seg<'_, E>>, is_brace: bool) -> Vec<Child<E>> {
     // --- Step 1: split into lines of pieces, counting newlines. ---
     let mut lines: Vec<Vec<Piece<E>>> = vec![Vec::new()];

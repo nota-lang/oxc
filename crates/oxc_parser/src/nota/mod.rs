@@ -2,10 +2,9 @@
 //!
 //! This module parses `@`-markup into the Nota AST nodes ([`NotaMarkup`] & friends, in
 //! `oxc_ast::ast::nota`): each `@`-form stays in place as `Expression::NotaMarkup`, and a whole
-//! `.nota` file becomes a single `NotaMarkupKind::Document` statement. Lowering to hyperscript
-//! (`h`/`Fragment`/`decode`), the Scribble whitespace pass, `%`-statement routing, and component-
-//! binding routing all run *later*, in `oxc_transformer::NotaLowering` — the deferred-pass analog
-//! of how oxc lowers JSX.
+//! `.nota` file becomes a single `NotaMarkupKind::Document` statement. Lowering to Solid JSX, the
+//! Scribble whitespace pass, `%`-statement routing, and component-binding routing all run *later*,
+//! in `oxc_transformer::NotaLowering` — the deferred-pass analog of how oxc lowers JSX.
 //!
 //! Mechanics: the parser drives the lexer between JS mode and markup mode. Inside a body it pulls
 //! typed markup child tokens (`advance_for_nota_child`, the JSX `advance_for_jsx_child` analog) and
@@ -97,10 +96,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // `\`/`%`/etc. would choke the JS lexer. `parse_document_body` seeks from offset 0 itself.
         let document = self.parse_document_body();
         let program = self.wrap_document_program(document);
-        match self.finish_nota(()) {
-            Ok(()) => Ok(program),
-            Err(errors) => Err(errors),
-        }
+        self.finish_nota()?;
+        Ok(program)
     }
 
     fn wrap_document_program(&mut self, document: NotaDocument<'a>) -> Program<'a> {
@@ -135,7 +132,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 
     /// Shared finalize for the Nota entries: collect fatal/lexer/parser diagnostics.
-    fn finish_nota<T>(mut self, value: T) -> Result<T, Vec<OxcDiagnostic>> {
+    fn finish_nota(mut self) -> Result<(), Vec<OxcDiagnostic>> {
         if let Some(FatalError { error, .. }) = self.fatal_error.take() {
             return Err(vec![error]);
         }
@@ -144,7 +141,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         if !errors.is_empty() {
             return Err(errors);
         }
-        Ok(value)
+        Ok(())
     }
 
     /// Recover-path finalize: collect **all** diagnostics (fatal + lexer + parser) without
@@ -523,7 +520,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// bounded sub-ranges. Dispatches on the typed child tokens from `next_nota_child`; balanced
     /// `{…}` braces are literal text (Scribble `@foo{f{o}o}` → `"f{o}o"`); `\n` runs stay in the
     /// text stream verbatim (the Scribble whitespace pass owns line handling at lowering time).
-    /// Entered with the current token already lexed as a markup child.x
+    /// Entered with the current token already lexed as a markup child.
     fn collect_markup_inner(&mut self) -> MarkupClose {
         let mut depth = 0u32; // balanced-brace depth inside the body
         // The start of a body/range is a line start (notation.md §Markup sugar). A body opening
@@ -584,8 +581,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     self.push_text(s, s + 1);
                     self.advance_for_nota_child();
                 }
-                // Body close: leave the `}` current so `parse_body` can consume it in the right
-                // mode. Document / bounded bodies treat a depth-0 `}` as literal text instead.
+                // Body close: leave the `}` current so `parse_braced_body` can consume it in the
+                // right mode. Document / bounded bodies treat a depth-0 `}` as literal text instead.
                 Kind::RCurly if matches!(mode, BodyMode::Body) => {
                     return MarkupClose::Curly { end: self.cur_token().end() };
                 }
@@ -1151,8 +1148,8 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
 // ===============================================================================================
 // Markup sugar: emphasis `*`/`_`, headings `#`, lists `-`/`+`/`N.`. Each parses to a faithful
-// node; the runtime `struct` pass does list/paragraph/section grouping (the reader emits flat
-// per-line/per-span nodes).
+// node; the runtime's Reforest pass does list/paragraph/section grouping (design/solid.md; the
+// reader emits flat per-line/per-span nodes).
 // ===============================================================================================
 
 impl<'a, C: Config> ParserImpl<'a, C> {

@@ -164,7 +164,7 @@ pub enum Expression<'a> {
     /// See [`V8IntrinsicExpression`] for AST node details.
     V8IntrinsicExpression(Box<'a, V8IntrinsicExpression<'a>>) = 39,
 
-    /// Nota markup form (lowered to hyperscript by the Nota lowering pass).
+    /// Nota markup form (lowered to Solid JSX by the Nota lowering pass).
     /// See [`NotaMarkup`] for AST node details.
     NotaMarkup(Box<'a, NotaMarkup<'a>>) = 40,
 

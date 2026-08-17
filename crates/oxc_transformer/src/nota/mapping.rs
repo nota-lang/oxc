@@ -1,11 +1,12 @@
 //! Nota `CodeMapping` marks — Volar structured `CodeMappings`.
 //!
-//! The Nota lowering ([`super::NotaLowering`]) turns `@`-markup into a plain oxc `Program`. Embedded
-//! JS — prop values, `@(expr)`/`@name` interpolation, `%`/`%%%` statement bodies, `|@`-armed forms
-//! in raw spans (code / math / verbatim), `@if`/`@for` heads — is spliced as real oxc nodes carrying their *source* spans;
-//! component tags (`@Aside` → `h(Aside, …)`) become real identifier references, also source-spanned.
-//! Everything the lowering *synthesizes* (`h(`, `{}`, `[`, `Fragment`, `.map`, `String.raw`, the keyed
-//! `Fragment({key:_i},…)` scaffolding) uses `Span::empty`, so it carries no source.
+//! The Nota lowering ([`super::NotaLowering`]) turns `@`-markup into a plain oxc `Program` emitting
+//! Solid JSX. Embedded JS — prop values, `@(expr)`/`@name` interpolation, `%`/`%%%` statement
+//! bodies, `|@`-armed forms in raw spans (code / math / verbatim), `@if`/`@for` heads — is spliced
+//! as real oxc nodes carrying their *source* spans; component tags (`@Aside` → `<Aside>`) become
+//! real identifier references, also source-spanned. Everything the lowering *synthesizes* (the JSX
+//! element/fragment/attribute scaffolding, the `<For>`/`<Show>`/`<Dynamic>` wrappers, `String.raw`
+//! tagged templates for raw spans) uses `Span::empty`, so it carries no source.
 //!
 //! This module *exposes* that existing data as Volar `CodeMapping`s. The lowering records a flat
 //! list of [`NotaMappingMark`]s — `(source span, kind)` — at each embedded-JS splice / component tag.
@@ -28,16 +29,17 @@ pub enum NotaMappingKind {
     /// `@(expr)`/`@name` interpolation, a `%`/`%%%` statement body, a `|@`-armed form in a raw span
     /// (code / math / verbatim), or an `@if`/`@for` head (condition / iterable / binding). Full IDE capabilities.
     EmbeddedJs,
-    /// A component-tag identifier reference: `@Aside` lowering to `h(Aside, …)`. The TS service
+    /// A component-tag identifier reference: `@Aside` lowering to `<Aside>`. The TS service
     /// resolves it like any identifier (hover, go-to-def, find-references, rename, and the
     /// `@Unknown{}` "Cannot find name" scope error), but it is not a completion/format/structure
     /// region — navigation + hover (semantic) only.
     ComponentIdentifier,
     /// A **props-completion anchor** synthesised by EOF error-recovery for an unclosed `[props]`
-    /// group (`@tag[|` at end of file). The mark's `span` is the source `[` (whose object the
-    /// lowering gave a real span so codegen logs its position); the join emits a zero-width segment
-    /// just inside the props object literal `{ | }` with `completion: true`, so the language server
-    /// offers prop names there. Not a byte-exact leaf mapping — resolved specially by the join.
+    /// group (`@tag[|` at end of file). The mark's `span` is the source `[` (the lowering gives the
+    /// JSX opening element that span so codegen logs its position); the join emits a zero-width
+    /// segment just inside the opening tag's attribute position with `completion: true`, so the
+    /// language server offers JSX prop-name completions there. Not a byte-exact leaf mapping —
+    /// resolved specially by the join.
     PropsAnchor,
 }
 

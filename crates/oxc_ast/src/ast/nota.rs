@@ -1,11 +1,10 @@
 //! Nota markup AST nodes.
 //!
 //! Nota is a document language whose `@`-syntax markup is parsed into these AST nodes and then
-//! *lowered* (in a separate pass) to hyperscript `h`/`Fragment`/`decode` calls — the same
-//! parse-then-lower shape oxc uses for JSX (see [`super::jsx`]). The reader lives in
-//! `crates/oxc_parser/src/nota/`; the spec lives in the main repo (`design/notation.md` for
-//! surface syntax → emit, `design/decode.md` for runtime semantics) and the architecture notes
-//! in `NOTA_READER.md`.
+//! *lowered* (in a separate pass) to **Solid JSX** — the same parse-then-lower shape oxc uses for
+//! JSX (see [`super::jsx`]). The reader lives in `crates/oxc_parser/src/nota/`; the spec lives in
+//! the main repo (`design/notation.md` for surface syntax → emit, `design/solid.md` for runtime
+//! semantics) and the architecture notes in `NOTA_READER.md`.
 //!
 //! NB: `#[ast]`, `#[generate_derive(...)]`, `#[estree(...)]` and friends are markers consumed by
 //! `tasks/ast_tools`; they do not affect the code directly. Run `just ast` after editing this file.
@@ -519,7 +518,10 @@ pub struct NotaListItem<'a> {
     pub children: Vec<'a, NotaChild<'a>>,
 }
 
-/// Whether a list item is unordered (`-` → `nota-ul-li`) or ordered (`+`/`N.` → `nota-ol-li`).
+/// Whether a list item is unordered (`-` → the reference-named `<UlLi>`) or ordered (`+`/`N.` →
+/// `<OlLi>`) — `oxc_transformer`'s `NotaLowering::lower_list_item` builds the element directly, not
+/// through the host-tag path, so a literal user tag spelled `@nota-ul-li`/`@nota-ol-li` cannot
+/// collide with it.
 #[ast]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
@@ -574,7 +576,11 @@ pub struct NotaDocState<'a> {
     pub span: Span,
     /// Which of the two sugars this is (fixes the emitted ambient identifier).
     pub kind: NotaDocStateKind,
-    /// The identifier (label/ref key), source-exact and sigil-free (`[A-Za-z_][A-Za-z0-9_.:-]*`).
+    /// The identifier (label/ref key), source-exact and sigil-free — Typst minus period, ASCII-only
+    /// (`[A-Za-z0-9_][A-Za-z0-9_:-]*`: digits are legal at the *start*, unlike a JS identifier; `-`
+    /// and `:` join but `.` does not — see `lexer/nota.rs`'s `is_docstate_label_start`/
+    /// `is_docstate_label_part`). The element forms remain charset-free; only the sugar is
+    /// restricted.
     pub label: Str<'a>,
     /// Source span of `label` (sans sigils) — for the formatter and the highlight pass.
     #[estree(skip)]
@@ -592,9 +598,10 @@ pub struct NotaDocState<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
 pub enum NotaDocStateKind {
-    /// `<label>` → `h(Label, { id: "label" }, [])`.
+    /// `<label>` → `<Label id="label" />`.
     Label = 0,
-    /// `&ref` → `h(Ref, { id: "ref", …props }, [body…])`.
+    /// `&ref` → `<Ref id="ref" …props>…body…</Ref>` (self-closing when body-less; `…props` from
+    /// the ref's glued postfix `[props]` groups).
     Ref = 1,
 }
 

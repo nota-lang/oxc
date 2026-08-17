@@ -259,7 +259,7 @@ impl<'a> NotaLowering<'a> {
     ) -> JSXAttributeItem<'a> {
         let attr_name = self.ast.jsx_attribute_name_identifier(key_span, name);
         let attr_value = value.map(|expr| match expr {
-            Expression::StringLiteral(lit) if jsx_string_safe(lit.value.as_str()) => {
+            Expression::StringLiteral(lit) if is_jsx_attr_inert(lit.value.as_str()) => {
                 JSXAttributeValue::StringLiteral(lit)
             }
             other => self.ast.jsx_attribute_value_expression_container(
@@ -433,11 +433,12 @@ impl<'a> NotaLowering<'a> {
     /// `async`ify the IIFE from the presence of `await` in `stmts`.
     pub(super) fn build_statement_iife(
         &self,
+        at: u32,
         stmts: ArenaVec<'a, Statement<'a>>,
         rest: ArenaVec<'a, Expression<'a>>,
     ) -> Expression<'a> {
-        let fragment = self.build_fragment(Span::empty(0), rest);
-        self.iife(Span::empty(0), stmts, fragment)
+        let fragment = self.build_fragment(Span::empty(at), rest);
+        self.iife(Span::empty(at), stmts, fragment)
     }
 
     // ===========================================================================================
@@ -458,7 +459,7 @@ impl<'a> NotaLowering<'a> {
         }
         let ast = self.ast;
         let mut quasis = ast.vec_with_capacity(1);
-        quasis.push(self.raw_quasi(span, raw, true));
+        quasis.push(self.raw_quasi(span, raw));
         let quasi = ast.template_literal(span, quasis, ast.vec());
         self.tag_string_raw(span, quasi)
     }
@@ -467,10 +468,10 @@ impl<'a> NotaLowering<'a> {
     /// `String.raw` tag reads only the raw text: `\` and `{}` are NOT interpreted). We do **not**
     /// use codegen's `escape_raw` (which doubles every `\`, wrong for `String.raw`); the caller
     /// guarantees `raw` is breaker-free.
-    fn raw_quasi(&self, span: Span, raw: &'a str, tail: bool) -> TemplateElement<'a> {
+    fn raw_quasi(&self, span: Span, raw: &'a str) -> TemplateElement<'a> {
         debug_assert!(!Self::has_template_breaker(raw));
         let value = TemplateElementValue { raw: self.ast.str(raw), cooked: None };
-        self.ast.template_element(span, value, tail, false)
+        self.ast.template_element(span, value, true, false)
     }
 
     /// Does `raw` contain a template-syntax breaker — a backtick or a `${` — that a `String.raw`
@@ -606,10 +607,6 @@ impl<'a> NotaLowering<'a> {
 /// cannot round-trip and must ride in an expression container instead. `<`/`>`/newlines are
 /// legal in attribute strings, but `<` is kept out conservatively (some downstream tooling
 /// chokes); everything the reader synthesizes (ids, labels, langs) passes.
-fn jsx_string_safe(s: &str) -> bool {
-    is_jsx_attr_inert(s)
-}
-
 fn is_jsx_attr_inert(s: &str) -> bool {
     !s.contains(['"', '&', '<', '>'])
 }

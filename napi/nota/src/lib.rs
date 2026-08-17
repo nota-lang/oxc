@@ -70,7 +70,8 @@ pub struct NotaCompileResult {
 #[tsify(into_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
 pub struct NotaMappedResult {
-    /// The emitted module source (JS for `compileWithMappings`, virtual `.tsx` for `compileVirtual`).
+    /// The emitted JS module source, types preserved (`compileWithMappings` only — `compileVirtual`
+    /// returns its own [`NotaVirtualResult`], which additionally carries recovered `errors`).
     pub code: String,
     /// The Volar `CodeMapping`s.
     pub mappings: Vec<NotaCodeMapping>,
@@ -176,6 +177,13 @@ fn diagnostics_to_error(errors: &[OxcDiagnostic]) -> JsError {
 // ===================================================================================================
 // The exported entries (the playground's JS API): three compile paths, the AST view, and the
 // highlight spans.
+//
+// Sourcemap channel: the native `compile`/`compile_with_mappings` take a `source_map_path` and can
+// return a `SourceMap` (`oxc::nota::NotaCompiled::map` / `NotaCompiledWithMappings`); neither wasm
+// wrapper below exposes it — `source_map_path` is always passed `None`, and `NotaCompileResult`/
+// `NotaMappedResult` carry no `map` field. This is a **recorded scope decision, not an oversight**:
+// today's wasm consumers (playground, language server) work off `code` + Volar `CodeMapping`s and
+// don't need a standalone sourcemap. Revisit if a consumer needs one.
 // ===================================================================================================
 
 /// Compile a `.nota` source string to a JS module. Returns `{ code, freeNames }`.
@@ -202,7 +210,7 @@ pub fn compile(source: String) -> Result<NotaCompileResult, JsError> {
 ///
 /// This is the parser stage only — no lowering, no codegen — so it is the faithful Nota tree
 /// (`NotaDocument` / `NotaHeading` / `NotaElement` / …) the reader builds before lowering to
-/// hyperscript. Serialized via `oxc_ast`'s ESTree serializer (every Nota node `#[generate_derive]`s
+/// Solid JSX. Serialized via `oxc_ast`'s ESTree serializer (every Nota node `#[generate_derive]`s
 /// `ESTree`); `ranges = true` so each node carries `start`/`end` offsets, letting the tree slice a
 /// one-line source preview from the editor text.
 ///
@@ -232,6 +240,8 @@ pub fn parse_ast(source: &str) -> Result<NotaParseAstResult, JsError> {
 /// well-formed Nota.
 #[wasm_bindgen(js_name = compileWithMappings)]
 pub fn compile_with_mappings(source: &str) -> Result<NotaMappedResult, JsError> {
+    // No `source_map_path`; `NotaMappedResult` carries no `map` field either — the sourcemap
+    // channel is deliberately not exposed over wasm yet (see the section note above).
     match nota::compile_with_mappings(source, None) {
         Ok(compiled) => {
             Ok(NotaMappedResult { code: compiled.code, mappings: map_mappings(&compiled.mappings) })
@@ -240,11 +250,12 @@ pub fn compile_with_mappings(source: &str) -> Result<NotaMappedResult, JsError> 
     }
 }
 
-/// Compile a `.nota` source to the type-preserving **virtual `.tsx`** emit + CodeMappings.
-/// Returns `{ code, mappings }` — the language-server / playground virtual view
-/// (NOTA_READER.md §Compiler entries).
+/// Compile a `.nota` source to the type-preserving **virtual `.tsx`** emit + CodeMappings + any
+/// recovered diagnostics. Returns `{ code, mappings, errors }` — the language-server / playground
+/// virtual view (NOTA_READER.md §Compiler entries).
 ///
-/// JS: `compileVirtual(source: string): { code: string, mappings: CodeMapping[] }`.
+/// JS: `compileVirtual(source: string): { code: string, mappings: CodeMapping[], errors: {
+/// message: string, start: number, len: number }[] }`.
 ///
 /// # Errors
 /// Returns a `JsError` (thrown in JS) carrying the rendered diagnostics if `source` is not
@@ -400,21 +411,14 @@ pub struct NotaLineClassifiers {
 #[wasm_bindgen(js_name = lineClassifiers)]
 pub fn line_classifiers() -> NotaLineClassifiers {
     let sources = oxc::parser::line_classifier_sources();
-    let get = |name: &str| -> String {
-        sources
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, pattern)| (*pattern).to_string())
-            .expect("classifier name present in line_classifier_sources")
-    };
     NotaLineClassifiers {
-        percent_line: get("percentLine"),
-        fence_line: get("fenceLine"),
-        fence_close_line: get("fenceCloseLine"),
-        empty_statement: get("emptyStatement"),
-        heading: get("heading"),
-        list_marker: get("listMarker"),
-        prop_line: get("propLine"),
+        percent_line: sources.percent_line.to_string(),
+        fence_line: sources.fence_line.to_string(),
+        fence_close_line: sources.fence_close_line.to_string(),
+        empty_statement: sources.empty_statement.to_string(),
+        heading: sources.heading.to_string(),
+        list_marker: sources.list_marker.to_string(),
+        prop_line: sources.prop_line.to_string(),
     }
 }
 

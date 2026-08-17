@@ -81,16 +81,11 @@ fn nota_regen_record(actual: &str) -> bool {
     true
 }
 
-/// Compile a whole `.nota` file to a JS module string (document mode).
+/// Compile a whole `.nota` file to a JS module string (document mode), asserting the validity
+/// invariant.
 #[track_caller]
 fn nota_doc(source: &str) -> String {
-    let allocator = Allocator::default();
-    let mut program = Parser::new(&allocator, source, SourceType::nota())
-        .parse_nota_document()
-        .unwrap_or_else(|errors| panic!("Nota document parse failed for {source:?}: {errors:?}"));
-    oxc_transformer::NotaLowering::new(&allocator, source, false)
-        .lower_document_program(&mut program);
-    let js = Codegen::new().build(&program).code;
+    let js = emit_doc_unchecked(source);
     assert_valid_js(&js);
     js
 }
@@ -114,17 +109,54 @@ fn nota_doc_err(source: &str) {
     );
 }
 
+/// The **stock** source type every fixture's emit must re-parse under (the validity invariant):
+/// TSX module source type, since the emit is Solid JSX (document mode may hoist `import`/`export`;
+/// the virtual paths preserve embedded TS, so tsx covers every fixture). The one definition
+/// [`assert_valid_js`] and [`reparses`] both build their `Parser` from — no second "valid" to drift.
+fn valid_js_source_type() -> SourceType {
+    SourceType::default().with_module(true).with_jsx(true).with_typescript(true)
+}
+
 /// Assert the emitted JS re-parses cleanly under the stock oxc parser (the validity invariant).
 /// (`pub`: the shared-fixture tests in `nota_fixtures.rs` reuse it.)
 #[track_caller]
 pub fn assert_valid_js(js: &str) {
     let allocator = Allocator::default();
-    // TSX module source type: the emit is Solid JSX (document mode may hoist `import`/`export`;
-    // the virtual paths preserve embedded TS, so tsx covers every fixture).
-    let source_type = SourceType::default().with_module(true).with_jsx(true).with_typescript(true);
-    let ret = Parser::new(&allocator, js, source_type).parse();
+    let ret = Parser::new(&allocator, js, valid_js_source_type()).parse();
     assert!(!ret.panicked, "stock oxc panicked re-parsing emitted JS: {js:?}");
     assert!(ret.errors.is_empty(), "emitted JS did not re-parse cleanly: {js:?}\n{:?}", ret.errors);
+}
+
+/// Does `js` re-parse cleanly under the stock oxc parser (the validity invariant), as a bool
+/// instead of a panic? For findings whose whole point is that the emit must NOT be valid JS, where
+/// asserting the *absence* of validity needs a non-panicking check — the bool-returning sibling of
+/// [`assert_valid_js`], sharing its exact [`valid_js_source_type`].
+fn reparses(js: &str) -> bool {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, js, valid_js_source_type()).parse();
+    !ret.panicked && ret.errors.is_empty()
+}
+
+/// Try to parse `source` in document mode (the canonical TS-aware Nota parse); `true` iff it
+/// parses without diagnostics. Panics if the reader itself panics — a parser crash is a finding in
+/// its own right and should fail the calling test loudly rather than report `false`.
+fn doc_parses(source: &str) -> bool {
+    let allocator = Allocator::default();
+    Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
+}
+
+/// Compile a whole `.nota` file to a JS module string **without** the validity assertion — for
+/// probing an emit whose validity is not the point (including findings whose whole point is that
+/// the emit is *not* valid JavaScript).
+#[track_caller]
+fn emit_doc_unchecked(source: &str) -> String {
+    let allocator = Allocator::default();
+    let mut program = Parser::new(&allocator, source, SourceType::nota())
+        .parse_nota_document()
+        .unwrap_or_else(|errors| panic!("Nota parse failed for {source:?}: {errors:?}"));
+    oxc_transformer::NotaLowering::new(&allocator, source, false)
+        .lower_document_program(&mut program);
+    Codegen::new().build(&program).code
 }
 
 // ===============================================================================================
@@ -1513,19 +1545,6 @@ const CANONICAL_NOTA: &str = r#"%let Colorized = (props) => {
 }
 "#;
 
-/// Compile a `.nota` document without the validity assertion (for probing emits whose validity is
-/// not the point).
-#[track_caller]
-fn nota_doc_no_validity(source: &str) -> String {
-    let allocator = Allocator::default();
-    let mut program = Parser::new(&allocator, source, SourceType::nota())
-        .parse_nota_document()
-        .expect("document parses");
-    oxc_transformer::NotaLowering::new(&allocator, source, false)
-        .lower_document_program(&mut program);
-    Codegen::new().build(&program).code
-}
-
 /// THE canonical golden, stage-3 (design/solid.md §The pipeline): the component binding is
 /// **document-local** — it prepends into `Doc` (no hoist, no export) as the user's own plain
 /// Solid arrow, with its TS annotation stripped. The `@for` lowers to `<For each={…}>`, and the
@@ -1578,7 +1597,7 @@ fn doc_percent_literal_midline() {
 #[test]
 fn doc_backslash_percent_line_start_not_statement() {
     // `\%` at line start is NOT a statement line (first non-ws is `\`, not `%`).
-    let js = nota_doc_no_validity("\\% literal\n");
+    let js = emit_doc_unchecked("\\% literal\n");
     // It is treated as markup text (a `%` statement would have hoisted/prepended a JS statement).
     assert!(!js.contains("export let"), "should not be hoisted as a component: {js}");
     assert!(js.contains("<NotaDoc>"), "{js}");
@@ -1588,7 +1607,7 @@ fn doc_backslash_percent_line_start_not_statement() {
 fn nested_percent_statement_wraps_rest_in_iife() {
     // A `%` statement nested in an element body wraps the remaining siblings in an IIFE.
     let js = nota_expr_raw("@aside{\n  Intro.\n  % const n = count()\n  @p{@n items}\n}");
-    // The IIFE: `(() => { const n = count(); return Fragment(...); })()`
+    // The IIFE: `(() => { const n = count(); return <>...</>; })()`
     assert!(js.contains("const n = count();"), "{js}");
     assert!(js.contains("=> {"), "IIFE present: {js}");
     assert!(js.contains("return <>"), "IIFE returns a fragment: {js}");
@@ -2396,43 +2415,11 @@ fn emit_contains_no_imports() {
 // Still-open findings — the `#[ignore]`d deferred product calls — live in `fuzz_findings_2` below.
 //
 // Findings whose correct home is elsewhere live there instead: paragraph grouping is the runtime
-// Reforest pass's business on this branch (`packages/solid/tests/reforest.test.tsx`), and the
+// Reforest pass's business on this branch (`packages/core/tests/reforest.test.tsx`), and the
 // unterminated-`%%%`-fence rejection is a normal parser diagnostic (`err_unterminated_fence`
 // above).
 mod fuzz_findings {
-    use oxc_allocator::Allocator;
-    use oxc_codegen::Codegen;
-    use oxc_parser::Parser;
-    use oxc_span::SourceType;
-
-    use super::{nota_doc, nota_expr_raw};
-
-    /// Emit document-mode JS **without** asserting the validity invariant — for the finding whose
-    /// whole point is that the emit is *not* valid JavaScript.
-    #[track_caller]
-    fn emit_doc_unchecked(source: &str) -> String {
-        let allocator = Allocator::default();
-        let mut program = Parser::new(&allocator, source, SourceType::nota())
-            .parse_nota_document()
-            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
-        oxc_transformer::NotaLowering::new(&allocator, source, false)
-            .lower_document_program(&mut program);
-        Codegen::new().build(&program).code
-    }
-
-    /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
-    fn reparses(js: &str) -> bool {
-        let allocator = Allocator::default();
-        let source_type = SourceType::default().with_module(true).with_jsx(true);
-        let ret = Parser::new(&allocator, js, source_type).parse();
-        !ret.panicked && ret.errors.is_empty()
-    }
-
-    /// Try to parse `source` in document mode; `true` iff it parses without diagnostics.
-    fn doc_parses(source: &str) -> bool {
-        let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
-    }
+    use super::{doc_parses, emit_doc_unchecked, nota_doc, nota_expr_raw, reparses};
 
     // --- [HIGH] Hyphenated/quoted prop keys emit valid JS (FIXED) --------------------------------
     // A quoted non-identifier key (`"data-x"`) must survive the emit: JSX attribute names admit
@@ -2554,48 +2541,20 @@ mod fuzz_findings {
 }
 
 // ===============================================================================================
-// Fuzzing findings, round 2 (2026-06) — NON-ignored, currently-FAILING reader/codegen specs.
+// Fuzzing findings, round 2 (2026-06) — reader/codegen specs from a later fuzzing pass.
 // ===============================================================================================
 //
 // Specs found by AI-driven spec-conformance fuzzing (the `nota_inspect` harness), each asserting the
 // spec-correct behavior. The FIXED findings pass; the still-open ones are `#[ignore]`d with the
 // blocker noted in the reason so the suite stays green — un-ignore one and fix the reader to turn
 // it green. Purely-runtime findings (non-renderable children, paragraph grouping) belong to the
-// Solid runtime's own tests (`packages/solid/tests/`), not here.
+// Solid runtime's own tests (`packages/core/tests/`), not here.
 mod fuzz_findings_2 {
     use oxc_allocator::Allocator;
-    use oxc_codegen::Codegen;
     use oxc_parser::Parser;
     use oxc_span::SourceType;
 
-    use super::nota_expr_raw;
-
-    /// Document-mode emit WITHOUT the validity assertion (for findings whose emit is invalid JS).
-    #[track_caller]
-    fn emit_doc_unchecked(source: &str) -> String {
-        let allocator = Allocator::default();
-        let mut program = Parser::new(&allocator, source, SourceType::nota())
-            .parse_nota_document()
-            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
-        oxc_transformer::NotaLowering::new(&allocator, source, false)
-            .lower_document_program(&mut program);
-        Codegen::new().build(&program).code
-    }
-
-    /// Does `js` re-parse cleanly under the STOCK oxc parser? (the validity invariant, as a bool).
-    fn reparses(js: &str) -> bool {
-        let allocator = Allocator::default();
-        let source_type = SourceType::default().with_module(true).with_jsx(true);
-        let ret = Parser::new(&allocator, js, source_type).parse();
-        !ret.panicked && ret.errors.is_empty()
-    }
-
-    /// Parse `source` in document mode; `true` iff it parses without diagnostics. (Panics if the
-    /// reader panics — itself a finding, which fails the test.)
-    fn doc_parses(source: &str) -> bool {
-        let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
-    }
+    use super::{doc_parses, emit_doc_unchecked, nota_expr_raw, reparses};
 
     /// Parse + lower a document; `true` iff lowering reported NO diagnostics. A reserved-name
     /// collision (a user `Doc` / runtime-import binding) or a duplicate `export default` → `false`.
@@ -2608,32 +2567,6 @@ mod fuzz_findings_2 {
             .lower_document_program(&mut program)
             .diagnostics
             .is_empty()
-    }
-
-    /// Parse `source` in document mode as **TS-aware** (`tsx`) — the canonical Nota parse.
-    /// `true` iff it parses without diagnostics.
-    fn doc_parses_tsx(source: &str) -> bool {
-        let allocator = Allocator::default();
-        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
-    }
-
-    /// Compile a Nota expression with the **TS-aware** (`tsx`) parse, asserting the emit re-parses as
-    /// TSX. (The build path additionally strips the types — covered in `oxc::nota`; here we only
-    /// pin that a generic call is parsed as a call, not as `f < Foo > x` comparison operators.)
-    #[track_caller]
-    fn nota_expr_tsx(source: &str) -> String {
-        let allocator = Allocator::default();
-        let mut expr = Parser::new(&allocator, source, SourceType::nota())
-            .parse_expression()
-            .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
-        oxc_transformer::NotaLowering::new(&allocator, source, false).lower_expression(&mut expr);
-        let mut codegen = Codegen::new();
-        codegen.print_expression(&expr);
-        let js = codegen.into_source_text();
-        let reparse_allocator = Allocator::default();
-        let reparse = Parser::new(&reparse_allocator, &js, SourceType::nota()).parse();
-        assert!(!reparse.panicked && reparse.errors.is_empty(), "emit not valid TSX: {js}");
-        js
     }
 
     // ---- crashes (should be diagnostics, not panics) -------------------------------------------
@@ -2765,7 +2698,7 @@ mod fuzz_findings_2 {
     #[test]
     fn fuzz2_build_path_should_accept_embedded_ts() {
         assert!(
-            doc_parses_tsx("% const n: number = 1\n@p{@(n)}\n"),
+            doc_parses("% const n: number = 1\n@p{@(n)}\n"),
             "the TS-aware parse accepts embedded TS"
         );
     }
@@ -2773,7 +2706,7 @@ mod fuzz_findings_2 {
     // A generic call `f<Foo>(x)` must parse as a call, not as `f < Foo > x` (comparison operators).
     #[test]
     fn fuzz2_generic_call_should_not_parse_as_comparison() {
-        let js = nota_expr_tsx("@(f<Foo>(x))");
+        let js = nota_expr_raw("@(f<Foo>(x))");
         assert!(
             !js.contains("f < Foo"),
             "a generic call is mis-parsed as comparison operators: {js}"
@@ -3016,10 +2949,17 @@ mod fuzz_findings_2 {
 
     // [name-attach — RETIRED] the debug-manifest name-attach is gone with the manifest itself:
     // the reader no longer touches any call shape (the old `inlineComponent(fn, "Name")` attach
-    // included), so a user-supplied second argument passes through untouched.
+    // included), so a user-supplied second argument passes through untouched. Originally (F1) this
+    // asserted the OPPOSITE — `!js.contains("\"ZZZ\"")` — because the reader was expected to
+    // OVERRIDE the user's arg with the binding name (`"C"`) for the island manifest's `comp` to
+    // match the registry key; that whole mechanism is gone with the manifest.
     #[test]
     fn fuzz2_component_name_should_use_binding_name() {
         let js = emit_doc_unchecked("%let C = wrap((c) => @em{@c}, \"ZZZ\")\n\n@C{x}\n");
         assert!(js.contains("\"ZZZ\""), "the user's arg passes through untouched: {js}");
+        // The retired name-attach shape — a synthesized `"C"` (binding-name) string argument
+        // replacing or joining the user's own — must not reappear. (The bare `C` identifier is
+        // expected, from `let C = …` and the `<C>` tag; only the quoted string form is guarded.)
+        assert!(!js.contains("\"C\""), "no synthesized binding-name string arg (retired): {js}");
     }
 }

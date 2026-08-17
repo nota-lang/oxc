@@ -3,8 +3,8 @@
 //! This is the surface that `@nota-lang/compiler` (the wasm/napi wrapper) builds on: the three
 //! compile entries. It lives in the `oxc` umbrella crate because that is the only place with *all
 //! three* stages on the Nota path available together: the reader (`oxc_parser`, document mode → a
-//! faithful Nota AST), the lowering ([`oxc_transformer::NotaLowering`], Nota AST → hyperscript),
-//! and `oxc_codegen`. The lowering is the deferred-pass analog of how `oxc_transformer` lowers
+//! faithful Nota AST), the lowering ([`oxc_transformer::NotaLowering`], Nota AST → Solid JSX), and
+//! `oxc_codegen`. The lowering is the deferred-pass analog of how `oxc_transformer` lowers plain
 //! JSX. (The parse-stage *views* — the playground's `parseAst` document parse and the
 //! `parse_nota_highlights` editor spans — are `Parser` entries consumed directly by the wasm
 //! bindings; they never reach the lowering, so they don't belong to this compile seam.)
@@ -34,13 +34,14 @@ pub struct NotaCompiled {
     /// The source map, if `source_map_path` was provided.
     pub map: Option<oxc_sourcemap::SourceMap>,
     /// The **free names** of the emitted module: identifiers referenced in value position but bound
-    /// nowhere in it (root-unresolved references, sorted + deduped). The runtime surface
-    /// (`h`/`decode`/`Fragment`/…) always appears — the runtime import is prepended by the wrapper,
-    /// not emitted here. The rest is the ambient-prelude surface the lowering references free
-    /// (`Tex`, `Heading`, `Label`, …; `secset`-family config calls) plus any genuinely unbound user
-    /// references. Mechanism only: *which* of these an integrator binds, and from where, is the
-    /// `@nota-lang/compiler` shim's policy (it intersects this list with its ambient-name set to
-    /// synthesize the prelude import).
+    /// nowhere in it (root-unresolved references, sorted + deduped). `NotaDoc` always appears (every
+    /// document wraps its siblings in it); the rest of the structural JSX surface (`UlLi`/`OlLi`,
+    /// `Reforest`, `For`, `Show`, `Dynamic`, `Attrs`, …) appears when the construct is used. No
+    /// import for any of these is emitted here — the wrapper binds them. The remainder is the
+    /// ambient-prelude surface the lowering references free (`Tex`, `Heading`, `Label`, …;
+    /// `secset`-family config calls) plus any genuinely unbound user references. Mechanism only:
+    /// *which* of these an integrator binds, and from where, is the `@nota-lang/compiler` shim's
+    /// policy (it intersects this list with its ambient-name set to synthesize the prelude import).
     pub free_names: Vec<String>,
 }
 
@@ -93,7 +94,7 @@ impl MappingCapabilities {
         }
     }
 
-    /// Navigation + hover only — for a **component-identifier** range (`@Aside` → `h(Aside, …)`).
+    /// Navigation + hover only — for a **component-identifier** range (`@Aside` → `<Aside>`).
     /// The TS service resolves it like any identifier reference (hover, go-to-def, find-references,
     /// rename, and the `@Unknown{}` "Cannot find name" diagnostic), but it is not a completion-,
     /// formatting-, or structure-region. `verification` stays on so the scope error is reported at
@@ -111,9 +112,10 @@ impl MappingCapabilities {
     }
 
     /// Completion only — for the zero-width **props-completion anchor** an EOF-recovered `@tag[|`
-    /// leaves just inside the props object literal. It exists purely to route a completion request
-    /// into the object type (so the TS service proposes prop names); it must not carry
-    /// verification/semantic (there is no real text to diagnose or hover at a zero-width point).
+    /// leaves just inside the emitted JSX opening element's attribute position. It exists purely to
+    /// route a completion request into the element's attributes type (so the TS service proposes
+    /// prop names); it must not carry verification/semantic (there is no real text to diagnose or
+    /// hover at a zero-width point).
     #[must_use]
     pub const fn props_anchor() -> Self {
         Self {
@@ -191,10 +193,6 @@ struct CompileConfig {
     strip_ts: bool,
     /// Collect Volar `CodeMapping`s (the mapping / virtual paths) — also enables codegen's offset log.
     collect_mappings: bool,
-    /// Tolerate lowering diagnostics (reserved-name collisions) instead of failing: the language
-    /// server's virtual `.tsx` path still emits a best-effort file so the editor degrades gracefully
-    /// (it surfaces the collision through its own diagnostic channel). The build paths stay strict.
-    lenient_diagnostics: bool,
     /// EOF error-recovery: parse with [`Parser::parse_nota_document_recover`] so an unterminated
     /// construct still yields a virtual `.tsx` + mappings, and collect the parse/lowering
     /// diagnostics into [`CompileOutput::errors`] instead of returning `Err`. The language-server
@@ -249,7 +247,7 @@ fn compile_internal(
         if config.recover {
             // Surface reserved-name-collision diagnostics as editor diagnostics too.
             errors.extend(lowered.diagnostics);
-        } else if !config.lenient_diagnostics {
+        } else {
             return Err(lowered.diagnostics);
         }
     }
@@ -332,7 +330,6 @@ pub fn compile(
         CompileConfig {
             strip_ts: true,
             collect_mappings: false,
-            lenient_diagnostics: false,
             recover: false,
             source_map_path,
         },
@@ -357,7 +354,6 @@ pub fn compile_with_mappings(
         CompileConfig {
             strip_ts: false,
             collect_mappings: true,
-            lenient_diagnostics: false,
             recover: false,
             source_map_path,
         },
@@ -371,12 +367,13 @@ pub fn compile_with_mappings(
 /// verbatim (no strip step) so the TS service can type the virtual `.tsx`. Returns the virtual code +
 /// the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
 ///
-/// **For the Volar `LanguagePlugin`:** like the build path, the runtime `import { h, decode,
-/// Fragment, … } from "@nota-lang/runtime"` and the ambient `CodeInline`/`CodeBlock`/`Tex`
-/// declarations are *not* emitted here — the plugin prepends that typing preamble to the virtual
-/// `.tsx` so `h`/`decode`/component refs type-check. When it does, it must shift every mapping's
-/// `generated_offsets` by the prepended prefix length (the `source_offsets` are unchanged — they
-/// index the `.nota`).
+/// **For the Volar `LanguagePlugin`:** no imports are emitted here — the structural components
+/// (`NotaDoc`/`Reforest`/`UlLi`/…), the ambient prelude (`Tex`/`Heading`/`CodeBlock`/…), and the
+/// `solid-js` state surface are all free identifiers. `packages/language-server` prepends a typing
+/// preamble of ambient `declare const`/`declare global` decls (no import statement — see its
+/// `preamble.ts`) to the virtual `.tsx` so those free refs type-check. When it does, it must shift
+/// every mapping's `generated_offsets` by the prepended prefix length (the `source_offsets` are
+/// unchanged — they index the `.nota`).
 ///
 /// Uses **EOF error-recovery**, so it does not fail on unterminated markup: an unclosed `[props]`
 /// group, `{ … }` body, or bare `@`-head still yields a virtual `.tsx` (with mappings, incl. a
@@ -394,7 +391,6 @@ pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<Oxc
         CompileConfig {
             strip_ts: false,
             collect_mappings: true,
-            lenient_diagnostics: true,
             recover: true,
             source_map_path: None,
         },
@@ -911,7 +907,7 @@ mod tests {
     clippy::cast_possible_truncation,
     reason = "test fixtures: substring offsets/lengths fit in u32 (oxc's Span model)"
 )]
-mod h1_h2 {
+mod code_mappings {
     use super::{CodeMapping, MappingCapabilities, compile_virtual, compile_with_mappings};
 
     /// Byte offset of the (unique) substring `needle` in `hay`.
@@ -1006,7 +1002,7 @@ mod h1_h2 {
 
     #[test]
     fn component_identifier_maps_with_navigation_hover_only() {
-        // `@Aside` → `h(Aside, …)`: navigation + hover, NOT a completion/format/structure region.
+        // `@Aside` → `<Aside>`: navigation + hover, NOT a completion/format/structure region.
         let src = "@Aside{hi}\n";
         let out = compile_with_mappings(src, None).expect("compiles");
 
@@ -1129,8 +1125,9 @@ mod h1_h2 {
 mod recover {
     use super::compile_virtual;
 
-    /// The load-bearing P5 case: `@a[` at EOF still emits the props object literal, and a mapping
-    /// anchors a completion cursor (the position just after `[`) into it (just inside `{`).
+    /// The load-bearing P5 case: `@a[` at EOF still emits the recovered JSX opening tag, and a
+    /// mapping anchors a completion cursor (the position just after `[`) into it, just inside the
+    /// tag's attribute position.
     #[test]
     fn unclosed_props_group_yields_opening_tag_with_completion_anchor() {
         let out = compile_virtual("@a[").expect("recovers");
@@ -1188,8 +1185,9 @@ mod recover {
         assert!(out.code.contains("<></>"), "empty fragment recovery:\n{}", out.code);
     }
 
-    /// Recovery surfaces a reserved-name collision (`%let NotaDoc = …`) as a diagnostic too,
-    /// rather than silently dropping it the way the lenient (non-recover) virtual path used to.
+    /// Recovery surfaces a reserved-name collision (`%let NotaDoc = …`) as a diagnostic too, exactly
+    /// like a parse error — `compile_internal`'s `recover` branch extends `errors` with lowering
+    /// diagnostics instead of returning `Err`.
     #[test]
     fn reserved_name_collision_surfaces_as_diagnostic() {
         let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n").expect("recovers");

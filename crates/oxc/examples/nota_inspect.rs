@@ -7,10 +7,10 @@
 //!    `⏎`=CR, `⟪BOM⟫`). Whitespace is semantically load-bearing in Nota (the Scribble pass).
 //! 2. **PARSER AST** — the raw `{:#?}` of the post-parse Nota AST (`Program` in document mode, the
 //!    `Expression` in `--expr` mode). This is the lexer+parser view; node spans expose lexing bugs.
-//! 3. **LOWERED AST** — `--lower` only: the `{:#?}` of the hyperscript AST after `NotaLowering`. By
+//! 3. **LOWERED AST** — `--lower` only: the `{:#?}` of the Solid JSX AST after `NotaLowering`. By
 //!    default this is elided, since CODEGEN JS is its readable form.
-//! 4. **CODEGEN JS** — the emitted module (the runtime import the reader omits is *not* prepended;
-//!    that is `@nota-lang/compiler`'s job, and the TS front door re-adds it when it evaluates).
+//! 4. **CODEGEN JS** — the emitted module (the imports the reader omits are *not* prepended — that
+//!    is `@nota-lang/compiler`'s job when it wraps this same reader for real consumers).
 //! 5. **JS VALIDITY** — auto: re-parse the emitted JS under the stock oxc parser (the validity
 //!    invariant the integration fixtures assert).
 //!
@@ -25,8 +25,8 @@
 //! cargo run -q -p oxc --example nota_inspect --features codegen -- --json --lower -   # stdin → JSON
 //! ```
 //!
-//! The TS front door (`packages/cli/scripts/inspect.ts`) spawns this with `--json`, then evaluates
-//! CODEGEN JS through `@nota-lang/runtime` to add the runtime HTML + island-manifest stages.
+//! Standalone: nothing in the JS/TS packages spawns this today; `--json` is for an ad-hoc driver
+//! (or piping through `jq`), not a live consumer.
 #![expect(clippy::print_stdout, clippy::print_stderr)]
 
 use std::io::Read;
@@ -132,7 +132,8 @@ fn inspect(source: &str, mode: Mode, want_lower: bool) -> Report {
     }
 
     // One arena for the whole reader pipeline; it must outlive every borrowed AST below. Both modes
-    // parse as plain mjs (matching `oxc::nota::compile`); embedded TS is out of scope for the reader.
+    // parse under `SourceType::nota()` — TypeScript-based (matching `oxc::nota::compile`), so
+    // embedded TS type annotations/generics parse too, not just plain JS.
     let allocator = Allocator::default();
     let source_type = SourceType::nota();
 
@@ -432,8 +433,9 @@ fn push_json_string_array(out: &mut String, items: &[String]) {
     out.push(']');
 }
 
-/// Push a JSON string literal (with surrounding quotes), escaping per RFC 8259. Copied from
-/// `nota_compile.rs` (the published `oxc` crate avoids a `serde` dependency).
+/// Push a JSON string literal (with surrounding quotes), escaping per RFC 8259. Mirrors the
+/// crate-private `push_json_string` in `oxc/src/nota.rs` (not reusable directly — it's not `pub`,
+/// and the published `oxc` crate avoids a `serde` dependency for this alone).
 fn push_json_string(out: &mut String, s: &str) {
     out.push('"');
     for ch in s.chars() {
