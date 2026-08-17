@@ -94,11 +94,16 @@ fn caught<T>(captured: &Mutex<Option<String>>, f: impl FnOnce() -> T) -> Result<
 }
 
 /// The final, shared stage: re-parse the emitted JS under the **stock** oxc parser. Mirrors the
-/// `assert_valid_js` invariant from the integration fixtures.
+/// `assert_valid_js` invariant from the integration fixtures
+/// (`oxc_codegen/tests/integration/nota.rs`) — TSX module source type, since the emit is Solid
+/// JSX and document mode may hoist `import`/`export`; keep this `SourceType` in sync with that
+/// function's.
 fn check_validity(captured: &Mutex<Option<String>>, code: &str, report: &mut Report) {
     match caught(captured, || {
         let allocator = Allocator::default();
-        let ret = Parser::new(&allocator, code, SourceType::default().with_module(true)).parse();
+        let source_type =
+            SourceType::default().with_module(true).with_jsx(true).with_typescript(true);
+        let ret = Parser::new(&allocator, code, source_type).parse();
         let errors: Vec<String> = ret.errors.iter().map(ToString::to_string).collect();
         (!ret.panicked && ret.errors.is_empty(), errors)
     }) {

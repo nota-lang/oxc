@@ -17,7 +17,7 @@ use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
-use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI, is_reserved_emit_name};
+use super::{DOC, DYNAMIC, FOR, NOTA_DOC, REFOREST, SHOW, is_reserved_emit_name};
 
 /// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
 /// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
@@ -282,11 +282,15 @@ impl<'a> NotaLowering<'a> {
     /// The tagged-element builder — the one funnel for host/component/dynamic tags
     /// (design/solid.md §The pipeline):
     ///
-    /// * host `nota-ul-li`/`nota-ol-li` sentinels → `<UlLi>`/`<OlLi>` (runtime references);
     /// * host flow containers ([`FLOW_TAGS`]) → `<tag …><Reforest>children</Reforest></tag>`;
     /// * other host tags → plain intrinsic elements;
     /// * components → reference-named elements;
     /// * dynamic tags → `<Dynamic component={expr} …>`.
+    ///
+    /// List items (`<UlLi>`/`<OlLi>`) do NOT go through here — they are a lowering-internal
+    /// construct, not a host tag a document can spell, so [`NotaLowering::lower_list_item`] calls
+    /// [`Self::build_named_element`] directly. A literal user tag named `@nota-ul-li`/`@nota-ol-li`
+    /// is an ordinary host element and must fall through the plain-host-tag arm below unchanged.
     pub(super) fn build_element(
         &self,
         span: Span,
@@ -299,19 +303,6 @@ impl<'a> NotaLowering<'a> {
         let children = self.jsx_children(children);
         match tag {
             JsxTag::Host { name, span: tag_span } => {
-                if let Some(item) = match name {
-                    "nota-ul-li" => Some(UL_LI),
-                    "nota-ol-li" => Some(OL_LI),
-                    _ => None,
-                } {
-                    return self.jsx_element(
-                        span,
-                        self.jsx_ref_name(Span::empty(tag_span.start), item),
-                        attrs,
-                        children,
-                        opening_span,
-                    );
-                }
                 let children = if FLOW_TAGS.contains(&name) && !children.is_empty() {
                     let reforest = self.jsx_element(
                         Span::empty(span.start),

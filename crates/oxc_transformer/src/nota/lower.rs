@@ -532,12 +532,16 @@ impl<'a> NotaLowering<'a> {
 
     /// One `<UlLi>`/`<OlLi>` item per marker — runs coalesce into `<ul>`/`<ol>` in the runtime's
     /// Reforest pass (design/solid.md). A trailing attrs group (`- item [class: "hot"]`) hoists
-    /// onto the item's element — `UlLi`/`OlLi` spread it onto the `<li>` they render.
+    /// onto the item's element — `UlLi`/`OlLi` spread it onto the `<li>` they render. Built
+    /// directly as a reference-named element via [`Self::build_named_element`] — NOT routed
+    /// through [`build::JsxTag::Host`]/[`Self::build_element`], so a literal user tag spelled
+    /// `@nota-ul-li`/`@nota-ol-li` (which *does* take that path, via [`Self::lower_tagged`])
+    /// cannot collide with this construct and stays a plain host element.
     fn lower_list_item(&mut self, li: NotaListItem<'a>) -> Expression<'a> {
         let NotaListItem { span, kind, mut children, .. } = li;
-        let tag_name = match kind {
-            NotaListKind::Unordered => "nota-ul-li",
-            NotaListKind::Ordered => "nota-ol-li",
+        let name = match kind {
+            NotaListKind::Unordered => super::UL_LI,
+            NotaListKind::Ordered => super::OL_LI,
         };
         let attrs = self.take_trailing_attrs(&mut children);
         let props = match attrs {
@@ -545,13 +549,7 @@ impl<'a> NotaLowering<'a> {
             None => self.ast.vec(),
         };
         let children = self.lower_children(children, false);
-        self.build_element(
-            span,
-            build::JsxTag::Host { name: tag_name, span: Span::empty(span.start) },
-            props,
-            children,
-            None,
-        )
+        self.build_named_element(span, name, props, children)
     }
 
     // ===========================================================================================

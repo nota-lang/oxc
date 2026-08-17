@@ -1118,6 +1118,26 @@ fn dash_without_space_is_literal() {
 }
 
 #[test]
+fn literal_nota_ul_li_tag_is_a_plain_host_element() {
+    // `-`/`+` list-item sugar lowers straight to the reference-named `<UlLi>`/`<OlLi>` (build.rs's
+    // `build_named_element`) — it never round-trips through the tag name "nota-ul-li"/"nota-ol-li".
+    // So a *literal* element spelled with that hyphenated name (`@nota-ul-li{x}`, a host tag per
+    // `hyphenated_tag_should_be_a_host_tag`) must stay a plain host element and must NOT be
+    // silently captured as the `UlLi`/`OlLi` component.
+    let js = nota_doc("@nota-ul-li{x}\n@nota-ol-li{y}\n");
+    assert!(
+        js.contains(r#"<nota-ul-li>{"x"}</nota-ul-li>"#),
+        "literal @nota-ul-li should lower to a plain host element: {js}"
+    );
+    assert!(
+        js.contains(r#"<nota-ol-li>{"y"}</nota-ol-li>"#),
+        "literal @nota-ol-li should lower to a plain host element: {js}"
+    );
+    assert!(!js.contains("<UlLi"), "must not be captured as the UlLi component: {js}");
+    assert!(!js.contains("<OlLi"), "must not be captured as the OlLi component: {js}");
+}
+
+#[test]
 fn line_start_sugar_chains_after_a_construct() {
     // Line-start sugar (a heading / list) on the line right after another construct — a list run, a
     // `%%%` fence — is recognized, not read as literal text. The collector consumes a *run* of
