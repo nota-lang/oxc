@@ -336,6 +336,88 @@ pub fn highlight_kind_names() -> Vec<String> {
     NotaHighlightKind::ALL.iter().map(|kind| highlight_kind_name(*kind).to_string()).collect()
 }
 
+/// The reader's **emit surface**, grouped by binding module — the introspectable truth
+/// `@nota-lang/compiler` derives its name lists from (no hand-copied TS mirror). The groups are
+/// the `oxc_transformer` `*_EMIT_NAMES` constants verbatim; `reserved` is `Doc` + all groups (the
+/// binding-collision set); `flowTags` is the emit's `<Reforest>`-interior policy list.
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NotaEmitSurface {
+    /// `@nota-lang/core` structural names (`NotaDoc`, `Reforest`, …).
+    pub structural: Vec<String>,
+    /// `solid-js` names the lowering emits (`For`, `Show`).
+    pub solid: Vec<String>,
+    /// `solid-js/web` names the lowering emits (`Dynamic`).
+    pub solid_web: Vec<String>,
+    /// Ambient-prelude names the lowering emits free (`Tex`, `Heading`, …).
+    pub prelude: Vec<String>,
+    /// Every reserved emit name (`Doc` + all groups) — user bindings of these are diagnosed.
+    pub reserved: Vec<String>,
+    /// Host tags whose interior the emit wraps in `<Reforest>`.
+    pub flow_tags: Vec<String>,
+}
+
+/// The emit surface — see [`NotaEmitSurface`].
+///
+/// JS: `emitSurface(): NotaEmitSurface`.
+#[wasm_bindgen(js_name = emitSurface)]
+pub fn emit_surface() -> NotaEmitSurface {
+    use oxc::transformer::{
+        FLOW_TAGS, PRELUDE_EMIT_NAMES, SOLID_EMIT_NAMES, SOLID_WEB_EMIT_NAMES,
+        STRUCTURAL_EMIT_NAMES, reserved_emit_names,
+    };
+    let own = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect();
+    NotaEmitSurface {
+        structural: own(STRUCTURAL_EMIT_NAMES),
+        solid: own(SOLID_EMIT_NAMES),
+        solid_web: own(SOLID_WEB_EMIT_NAMES),
+        prelude: own(PRELUDE_EMIT_NAMES),
+        reserved: own(&reserved_emit_names()),
+        flow_tags: own(FLOW_TAGS),
+    }
+}
+
+/// The reader's line-classifier regex patterns (the `regex` crate originals, JS-compatible) —
+/// the truth that editor line-tier transliterations (the LSP's delegated-line walk, emacs
+/// font-lock) consume or are checked against.
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct NotaLineClassifiers {
+    pub percent_line: String,
+    pub fence_line: String,
+    pub fence_close_line: String,
+    pub empty_statement: String,
+    pub heading: String,
+    pub list_marker: String,
+    pub prop_line: String,
+}
+
+/// The line classifiers — see [`NotaLineClassifiers`].
+///
+/// JS: `lineClassifiers(): NotaLineClassifiers`.
+#[wasm_bindgen(js_name = lineClassifiers)]
+pub fn line_classifiers() -> NotaLineClassifiers {
+    let sources = oxc::parser::line_classifier_sources();
+    let get = |name: &str| -> String {
+        sources
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, pattern)| (*pattern).to_string())
+            .expect("classifier name present in line_classifier_sources")
+    };
+    NotaLineClassifiers {
+        percent_line: get("percentLine"),
+        fence_line: get("fenceLine"),
+        fence_close_line: get("fenceCloseLine"),
+        empty_statement: get("emptyStatement"),
+        heading: get("heading"),
+        list_marker: get("listMarker"),
+        prop_line: get("propLine"),
+    }
+}
+
 /// Wire the panic hook on module load so a Rust panic surfaces as a readable `console.error` in the
 /// browser (wasm-bindgen calls `start` automatically after instantiation).
 #[wasm_bindgen(start)]

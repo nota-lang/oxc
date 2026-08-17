@@ -2273,24 +2273,11 @@ fn comments_stay_literal_in_raw_spans() {
 
 #[test]
 fn flow_tags_get_reforest_interior() {
-    // Table-driven over the lowering's FLOW_TAGS (build.rs): every flow container's non-empty
-    // interior is wrapped in `<Reforest>` at emit; empty children skip the wrap; a non-flow tag
-    // never gets one.
-    const FLOW_TAGS: &[&str] = &[
-        "section",
-        "article",
-        "aside",
-        "nav",
-        "header",
-        "footer",
-        "main",
-        "div",
-        "blockquote",
-        "figure",
-        "td",
-        "th",
-    ];
-    for tag in FLOW_TAGS {
+    // Table-driven over the lowering's REAL `FLOW_TAGS` (no local copy — adding a tag to the
+    // emit policy exercises it here automatically): every flow container's non-empty interior is
+    // wrapped in `<Reforest>` at emit; empty children skip the wrap; a non-flow tag never gets
+    // one.
+    for tag in oxc_transformer::FLOW_TAGS {
         nota_expr(
             &format!("@{tag}{{x}}"),
             &format!(r#"<{tag}><Reforest>{{"x"}}</Reforest></{tag}>"#),

@@ -10,8 +10,9 @@
 //! bindings; they never reach the lowering, so they don't belong to this compile seam.)
 //!
 //! The emit is **Solid JSX** (design/solid.md): no imports are emitted here — the structural
-//! names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`), the ambient prelude, and the
-//! `solid-js` state surface are all *free names* the `@nota-lang/compiler` wrapper binds.
+//! names, the ambient prelude, and the `solid-js` state surface are all *free names* the
+//! `@nota-lang/compiler` wrapper binds. The authoritative name groups are `oxc_transformer`'s
+//! `*_EMIT_NAMES` constants, introspectable downstream via the wasm `emitSurface()` entry.
 
 use std::path::{Path, PathBuf};
 
@@ -801,13 +802,21 @@ mod tests {
 
     #[test]
     fn compile_reports_reserved_name_collision() {
-        // A `%` binding that shadows a reserved emit name (`NotaDoc`/`Doc`/…) is a lowering
-        // diagnostic. (`h` is no longer reserved — the h-call surface is gone.)
-        match compile("%let NotaDoc = 1\n@p{x}\n", None) {
-            Ok(out) => panic!("expected a collision diagnostic, got:\n{}", out.code),
-            Err(errors) => assert!(!errors.is_empty()),
+        // EVERY reserved emit name — `Doc`, the structural components, and the ambient-prelude
+        // names the markup lowers to (`Tex`, `Heading`, …) — is a lowering diagnostic when a `%`
+        // binding shadows it. Looped over the real list, so extending the emit surface extends
+        // this test. (`h` is no longer reserved — the h-call surface is gone.)
+        for name in oxc_transformer::reserved_emit_names() {
+            match compile(&format!("%let {name} = 1\n@p{{x}}\n"), None) {
+                Ok(out) => panic!("`{name}`: expected a collision diagnostic, got:\n{}", out.code),
+                Err(errors) => assert!(!errors.is_empty(), "`{name}`: empty diagnostics"),
+            }
         }
         assert!(compile("%let h = 1\n@p{x}\n", None).is_ok(), "`h` is an ordinary name now");
+        assert!(
+            compile("%let mathset = () => 1\n@p{x}\n", None).is_ok(),
+            "config fns are ambient but not emit-referenced — not reserved"
+        );
     }
 
     #[test]
@@ -846,12 +855,16 @@ mod tests {
     fn free_names_exclude_bound_and_textual_mentions() {
         // A `%`-imported name is bound (not free), and prose/string mentions of a name's *text*
         // are not references at all — the regex failure modes the metadata exists to kill.
-        let out =
-            compile("%import { Tex } from \"./my-tex.js\"\n@p{secset( is not a call}\n$y$\n", None)
-                .expect("compiles");
+        // (`Chart`, not `Tex`: emit-surface names are reserved now — importing one is a
+        // collision diagnostic, per-doc override happens at the integrator's prelude seam.)
+        let out = compile(
+            "%import { Chart } from \"./my-chart.js\"\n@p{secset( is not a call}\n$y$\n",
+            None,
+        )
+        .expect("compiles");
         assert!(
-            !out.free_names.iter().any(|n| n == "Tex"),
-            "imported Tex bound: {:?}",
+            !out.free_names.iter().any(|n| n == "Chart"),
+            "imported Chart bound: {:?}",
             out.free_names
         );
         assert!(

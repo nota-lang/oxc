@@ -17,13 +17,14 @@ use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
-use super::{ATTRS, DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI};
+use super::{DOC, DYNAMIC, FOR, NOTA_DOC, OL_LI, REFOREST, SHOW, UL_LI, is_reserved_emit_name};
 
 /// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
 /// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
 /// time (the tag is statically known here; a rendered element cannot be restructured from
-/// outside).
-const FLOW_TAGS: &[&str] = &[
+/// outside). `pub`: crosses the wasm boundary via `emitSurface()` so the runtime's categorizer
+/// can be checked disjoint against it, and the integration suite loops the real list.
+pub const FLOW_TAGS: &[&str] = &[
     "section",
     "article",
     "aside",
@@ -38,23 +39,15 @@ const FLOW_TAGS: &[&str] = &[
     "th",
 ];
 
-/// Is `name` a reader-injected emit-surface name a user module binding must not shadow? The
-/// lowered module references the default-export component `Doc` and the `@nota-lang/core`
-/// structural names (`NotaDoc`/`Reforest`/`UlLi`/`OlLi`, Solid's `For`/`Show`, and `Dynamic` for
-/// dynamic tags) as free identifiers the integrator binds; a colliding binding is diagnosed
-/// rather than silently shadowed.
-fn is_reserved_emit_name(name: &str) -> bool {
-    matches!(name, DOC | NOTA_DOC | REFOREST | UL_LI | OL_LI | FOR | SHOW | DYNAMIC | ATTRS)
-}
-
-/// Diagnostic for a user module binding that shadows a reader-injected emit-surface name.
+/// Diagnostic for a user module binding that shadows a reserved emit-surface name
+/// ([`is_reserved_emit_name`]).
 fn reserved_name_collision(name: &str, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::error(format!(
-        "`{name}` collides with a Nota reader-injected name. The emitted module declares `Doc` \
-         (the default-export document component) and references \
-         `NotaDoc`/`Reforest`/`UlLi`/`OlLi`/`For`/`Show`/`Dynamic`/`Attrs`, which the lowered \
-         markup uses; a module binding of the same name shadows them and breaks the emit. Rename \
-         the binding."
+        "`{name}` collides with a name the Nota emit declares or references: `Doc` (the \
+         default-export document component), the structural components \
+         (`NotaDoc`/`Reforest`/…), and the ambient prelude the markup lowers to \
+         (`Tex`/`Heading`/…). A module binding of the same name shadows it and breaks the emit. \
+         Rename the binding."
     ))
     .with_label(span)
 }

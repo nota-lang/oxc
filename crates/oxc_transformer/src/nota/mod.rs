@@ -22,6 +22,7 @@ mod lower;
 mod mapping;
 mod scribble;
 
+pub use build::FLOW_TAGS;
 pub use lower::{NotaLowering, NotaLoweringReturn};
 pub use mapping::{NotaMappingKind, NotaMappingMark};
 
@@ -60,3 +61,45 @@ const FOOTNOTE_TEXT: &str = "FootnoteText";
 /// The `@nota-lang/core` attrs marker (notation.md §Attrs): a flow-position attrs group lowers
 /// to `<Attrs …/>`, which the Reforest pass strips and applies to the paragraph it is forming.
 const ATTRS: &str = "Attrs";
+
+// ===================================================================================================
+// The emit surface, grouped — the introspectable source of truth.
+//
+// These arrays ARE the constants above, grouped by binding module. They cross the wasm boundary
+// as `emitSurface()` (napi/nota), where `@nota-lang/compiler` derives its name lists from them —
+// the TS side holds no hand-copied mirror. Extend the emit here and every downstream list,
+// reservation diagnostic, and coverage test follows.
+// ===================================================================================================
+
+/// The `@nota-lang/core` structural names the emit references free.
+pub const STRUCTURAL_EMIT_NAMES: &[&str] = &[NOTA_DOC, REFOREST, UL_LI, OL_LI, ATTRS];
+/// The `solid-js` names the lowering itself emits (`@for` → `<For>`, `@if` → `<Show>`).
+pub const SOLID_EMIT_NAMES: &[&str] = &[FOR, SHOW];
+/// The `solid-js/web` names the lowering emits (`@(expr)` dynamic tags).
+pub const SOLID_WEB_EMIT_NAMES: &[&str] = &[DYNAMIC];
+/// The ambient-prelude names the lowering emits free: code/math spans, heading sugar, and the
+/// doc-state sugars.
+pub const PRELUDE_EMIT_NAMES: &[&str] =
+    &[CODE_INLINE, CODE_BLOCK, MATH, HEADING, LABEL, REF, FOOTNOTE_MARK, FOOTNOTE_TEXT];
+
+/// Is `name` part of the emit surface — declared (`Doc`) or referenced free by lowered markup —
+/// such that a user module binding of it must be diagnosed rather than silently shadow the emit?
+/// Covers all four groups: `%let Tex = 1` breaks `$…$` exactly as `%let NotaDoc = …` breaks the
+/// document wrapper.
+pub fn is_reserved_emit_name(name: &str) -> bool {
+    name == DOC
+        || STRUCTURAL_EMIT_NAMES.contains(&name)
+        || SOLID_EMIT_NAMES.contains(&name)
+        || SOLID_WEB_EMIT_NAMES.contains(&name)
+        || PRELUDE_EMIT_NAMES.contains(&name)
+}
+
+/// Every reserved emit name, `Doc` first — for diagnostics and the wasm introspection surface.
+pub fn reserved_emit_names() -> Vec<&'static str> {
+    let mut names = vec![DOC];
+    names.extend_from_slice(STRUCTURAL_EMIT_NAMES);
+    names.extend_from_slice(SOLID_EMIT_NAMES);
+    names.extend_from_slice(SOLID_WEB_EMIT_NAMES);
+    names.extend_from_slice(PRELUDE_EMIT_NAMES);
+    names
+}

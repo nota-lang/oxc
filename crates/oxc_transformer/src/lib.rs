@@ -41,7 +41,11 @@ mod decorator;
 mod nota;
 mod plugins;
 
-pub use nota::{NotaLowering, NotaLoweringReturn, NotaMappingKind, NotaMappingMark};
+pub use nota::{
+    FLOW_TAGS, NotaLowering, NotaLoweringReturn, NotaMappingKind, NotaMappingMark,
+    PRELUDE_EMIT_NAMES, SOLID_EMIT_NAMES, SOLID_WEB_EMIT_NAMES, STRUCTURAL_EMIT_NAMES,
+    is_reserved_emit_name, reserved_emit_names,
+};
 
 use common::Common;
 use context::TraverseCtx;

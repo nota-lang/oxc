@@ -98,6 +98,7 @@ use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
 pub use crate::lexer::{Kind, Token};
+pub use crate::lexer::nota::line_classifier_sources;
 pub use crate::nota::highlight::{NotaHighlightKind, NotaHighlightSpan};
 use crate::{
     config::{

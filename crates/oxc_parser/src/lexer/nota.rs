@@ -785,6 +785,23 @@ static LIST_MARKER: Lazy<Regex> = lazy_regex!(r"^([ \t]*)([-+]|[0-9]+\.) ");
 /// A colon-sugar `|`-prop line: first non-whitespace is `|`.
 static PROP_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*\|");
 
+/// The line-classifier regex sources, `(name, pattern)` — the introspectable truth that editor
+/// line-tier transliterations (emacs font-lock, the LSP's delegated-line walk) are checked
+/// against instead of hand-copying. Crosses the wasm boundary via `lineClassifiers()`
+/// (napi/nota). Patterns are the `regex` crate's originals (`.as_str()`), so nothing here can
+/// drift from the classifiers above.
+pub fn line_classifier_sources() -> [(&'static str, &'static str); 7] {
+    [
+        ("percentLine", PERCENT_LINE.as_str()),
+        ("fenceLine", FENCE_LINE.as_str()),
+        ("fenceCloseLine", FENCE_CLOSE_LINE.as_str()),
+        ("emptyStatement", EMPTY_STATEMENT.as_str()),
+        ("heading", HEADING.as_str()),
+        ("listMarker", LIST_MARKER.as_str()),
+        ("propLine", PROP_LINE.as_str()),
+    ]
+}
+
 /// Detect an ATX heading marker (1–6 `#` + one space/tab) at `line_start` (leading indentation
 /// tolerated). Returns `(level, body_start, line_end)`, or `None` if not a heading.
 pub fn heading_at(source: &str, line_start: u32) -> Option<(u8, u32, u32)> {
