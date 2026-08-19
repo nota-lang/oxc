@@ -1,13 +1,12 @@
 //! Nota compiler entry — the `nota source → { code, map }` seam.
 //!
-//! This is the surface that `@nota-lang/compiler` (the wasm/napi wrapper) builds on: the three
-//! compile entries. It lives in the `oxc` umbrella crate because that is the only place with *all
-//! three* stages on the Nota path available together: the reader (`oxc_parser`, document mode → a
+//! This is the surface that `@nota-lang/compiler` (the wasm wrapper) builds on. It lives in the
+//! `oxc` umbrella crate because that is the only place with all stages on the Nota path available
+//! together: the reader (`oxc_parser`, document mode → a
 //! faithful Nota AST), the lowering ([`oxc_transformer::NotaLowering`], Nota AST → Solid JSX), and
 //! `oxc_codegen`. The lowering is the deferred-pass analog of how `oxc_transformer` lowers plain
-//! JSX. (The parse-stage *views* — the playground's `parseAst` document parse and the
-//! `parse_nota_highlights` editor spans — are `Parser` entries consumed directly by the wasm
-//! bindings; they never reach the lowering, so they don't belong to this compile seam.)
+//! JSX. [`analyze`] parses once and derives the editor's AST, highlights, virtual TSX, mappings,
+//! diagnostics, and free names from that parse.
 //!
 //! The emit is **Solid JSX** (design/solid.md): no imports are emitted here — the structural
 //! names, the ambient prelude, and the `solid-js` state surface are all *free names* the
@@ -19,30 +18,55 @@ use std::path::{Path, PathBuf};
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions, CodegenReturn};
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_parser::Parser;
-use oxc_semantic::SemanticBuilder;
+use oxc_parser::{Parser, nota_highlights_from_program};
+use oxc_semantic::{Scoping, SemanticBuilder};
 use oxc_span::SourceType;
 use oxc_transformer::{
     JsxOptions, NotaLowering, NotaMappingKind, NotaMappingMark, TransformOptions, Transformer,
     TypeScriptOptions,
 };
+use serde::Serialize;
+#[cfg(feature = "nota-wasm")]
+use tsify::Tsify;
 
-/// The result of compiling a `.nota` source string.
-pub struct NotaCompiled {
-    /// The emitted JS module source (document mode: `export default function Doc() { … }`).
+/// The output shared by strict compilation and recoverable editor analysis.
+#[derive(Serialize)]
+#[cfg_attr(feature = "nota-wasm", derive(Tsify))]
+#[cfg_attr(feature = "nota-wasm", tsify(into_wasm_abi, missing_as_null))]
+#[serde(rename_all = "camelCase")]
+pub struct NotaOutput {
     pub code: String,
-    /// The source map, if `source_map_path` was provided.
+    #[serde(skip)]
     pub map: Option<oxc_sourcemap::SourceMap>,
-    /// The **free names** of the emitted module: identifiers referenced in value position but bound
-    /// nowhere in it (root-unresolved references, sorted + deduped). `NotaDoc` always appears (every
-    /// document wraps its siblings in it); the rest of the structural JSX surface (`UlLi`/`OlLi`,
-    /// `Reforest`, `For`, `Show`, `Dynamic`, `Attrs`, …) appears when the construct is used. No
-    /// import for any of these is emitted here — the wrapper binds them. The remainder is the
-    /// ambient-prelude surface the lowering references free (`Tex`, `Heading`, `Label`, …;
-    /// `secset`-family config calls) plus any genuinely unbound user references. Mechanism only:
-    /// *which* of these an integrator binds, and from where, is the `@nota-lang/compiler` shim's
-    /// policy (it intersects this list with its ambient-name set to synthesize the prelude import).
     pub free_names: Vec<String>,
+    pub mappings: Vec<CodeMapping>,
+    pub errors: Vec<NotaDiagnostic>,
+    pub ast: Option<String>,
+    /// Flat `[start, end, kind]` triples over UTF-8 source bytes.
+    pub highlights: Vec<u32>,
+}
+
+/// One recovered parser or lowering diagnostic.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "nota-wasm", derive(Tsify))]
+#[cfg_attr(feature = "nota-wasm", tsify(missing_as_null))]
+#[serde(rename_all = "camelCase")]
+pub struct NotaDiagnostic {
+    pub message: String,
+    pub start: u32,
+    pub len: u32,
+}
+
+impl From<&OxcDiagnostic> for NotaDiagnostic {
+    #[expect(clippy::cast_possible_truncation)]
+    fn from(error: &OxcDiagnostic) -> Self {
+        let (start, len) = error
+            .labels
+            .as_ref()
+            .and_then(|labels| labels.first())
+            .map_or((0, 0), |label| (label.offset() as u32, label.len() as u32));
+        Self { message: error.to_string(), start, len }
+    }
 }
 
 // ===================================================================================================
@@ -62,7 +86,10 @@ pub struct NotaCompiled {
 ///
 /// Presets: [`MappingCapabilities::full`] (embedded JS/TS) and
 /// [`MappingCapabilities::navigation_hover`] (component identifiers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "nota-wasm", derive(Tsify))]
+#[cfg_attr(feature = "nota-wasm", tsify(missing_as_null))]
+#[serde(rename_all = "camelCase")]
 pub struct MappingCapabilities {
     /// Autocomplete in this range.
     pub completion: bool,
@@ -145,7 +172,10 @@ impl MappingCapabilities {
 /// `a+b`→`a + b`), and `data` = the capability flags. The Nota reader produces one segment per
 /// mapping here (1-element arrays); the language-server `LanguagePlugin` can pass them straight to
 /// Volar or coalesce them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "nota-wasm", derive(Tsify))]
+#[cfg_attr(feature = "nota-wasm", tsify(missing_as_null))]
+#[serde(rename_all = "camelCase")]
 pub struct CodeMapping {
     /// Source byte offsets (one per segment).
     pub source_offsets: Vec<u32>,
@@ -161,47 +191,9 @@ pub struct CodeMapping {
     pub data: MappingCapabilities,
 }
 
-/// The result of [`compile_with_mappings`] — JS + sourcemap + structured Volar CodeMappings.
-pub struct NotaCompiledWithMappings {
-    /// The emitted JS module source.
-    pub code: String,
-    /// The source map, if `source_map_path` was provided.
-    pub map: Option<oxc_sourcemap::SourceMap>,
-    /// The Volar `CodeMapping`s: source⇄generated ranges with capability flags.
-    pub mappings: Vec<CodeMapping>,
-}
-
-/// The result of [`compile_virtual`] — the type-preserving virtual `.tsx` emit + code mappings +
-/// recovered diagnostics. The virtual path uses EOF error-recovery, so it never fails: an
-/// unterminated construct still yields `code` + `mappings`, and the syntax/lowering problems come
-/// back in `errors` for the language server to surface as LSP diagnostics.
-pub struct NotaVirtualCompiled {
-    /// The emitted **virtual TypeScript** (`.tsx`) module source — TS types preserved, for the
-    /// language server's TS service.
-    pub code: String,
-    /// The Volar `CodeMapping`s for the virtual `.tsx`.
-    pub mappings: Vec<CodeMapping>,
-    /// Recovered Nota parse + lowering diagnostics (byte-spanned). Empty for a well-formed file.
-    pub errors: Vec<OxcDiagnostic>,
-}
-
 enum CompileMode {
     Build { source_map_path: Option<PathBuf> },
-    Mapped { source_map_path: Option<PathBuf> },
-    Virtual,
-}
-
-/// The output of [`compile_internal`]; each public wrapper takes the fields it exposes.
-struct CompileOutput {
-    code: String,
-    map: Option<oxc_sourcemap::SourceMap>,
-    mappings: Vec<CodeMapping>,
-    /// Recovered diagnostics (parse + lowering) — non-empty only on the `recover` path.
-    errors: Vec<OxcDiagnostic>,
-    /// Free (root-unresolved, value-position) names — harvested only on the `strip_ts` build path,
-    /// where a semantic pass already runs; empty on the mapping/virtual paths, which don't need it
-    /// (the language server prepends its own ambient typing preamble).
-    free_names: Vec<String>,
+    Analyze,
 }
 
 /// Parse, lower, optionally strip TypeScript, and generate code and mappings.
@@ -209,19 +201,16 @@ struct CompileOutput {
 /// The canonical Nota parse is `SourceType::tsx` (NOTA_READER.md §Compiler entries): embedded
 /// TypeScript in `%`/`[props]`/
 /// `@(expr)`/`@for` heads is admitted into the AST. The build path then *strips* the types (plain-JS
-/// emit); the mapping/virtual paths *preserve* them (the language server's TS service types them).
+/// emit); analysis preserves them for the language server's TS service.
 fn compile_internal(
     source_text: &str,
     mode: CompileMode,
-) -> Result<CompileOutput, Vec<OxcDiagnostic>> {
+) -> Result<NotaOutput, Vec<OxcDiagnostic>> {
     let strip_ts = matches!(&mode, CompileMode::Build { .. });
-    let collect_mappings = !matches!(&mode, CompileMode::Build { .. });
-    let recover = matches!(&mode, CompileMode::Virtual);
+    let recover = matches!(&mode, CompileMode::Analyze);
     let source_map_path = match mode {
-        CompileMode::Build { source_map_path } | CompileMode::Mapped { source_map_path } => {
-            source_map_path
-        }
-        CompileMode::Virtual => None,
+        CompileMode::Build { source_map_path } => source_map_path,
+        CompileMode::Analyze => None,
     };
 
     let allocator = Allocator::default();
@@ -235,8 +224,19 @@ fn compile_internal(
         (program, Vec::new())
     };
 
-    let lowered = NotaLowering::new(&allocator, source_text, collect_mappings)
-        .lower_document_program(&mut program);
+    let (ast, highlights) = if recover {
+        let ast = program.to_estree_js_json(true);
+        let highlights = nota_highlights_from_program(&allocator, source_text, &program)
+            .into_iter()
+            .flat_map(|span| [span.start, span.end, u32::from(span.kind as u8)])
+            .collect();
+        (Some(ast), highlights)
+    } else {
+        (None, Vec::new())
+    };
+
+    let lowered =
+        NotaLowering::new(&allocator, source_text, recover).lower_document_program(&mut program);
     if !lowered.diagnostics.is_empty() {
         if recover {
             errors.extend(lowered.diagnostics);
@@ -245,22 +245,26 @@ fn compile_internal(
         }
     }
 
-    let free_names =
-        if strip_ts { strip_typescript(&allocator, &mut program)? } else { Vec::new() };
+    let free_names = if strip_ts {
+        strip_typescript(&allocator, &mut program)?
+    } else {
+        free_names(SemanticBuilder::new().build(&program).semantic.scoping())
+    };
 
     let options = CodegenOptions { source_map_path, ..Default::default() };
     let mut codegen = Codegen::new().with_options(options);
-    if collect_mappings {
+    if recover {
         codegen = codegen.with_nota_offset_log();
     }
     let CodegenReturn { code, map, nota_offset_log, .. } = codegen.build(&program);
 
-    let mappings = if collect_mappings {
+    let mappings = if recover {
         build_code_mappings(source_text, &code, &lowered.mappings, &nota_offset_log)
     } else {
         Vec::new()
     };
-    Ok(CompileOutput { code, map, mappings, errors, free_names })
+    let errors = errors.iter().map(NotaDiagnostic::from).collect();
+    Ok(NotaOutput { code, map, free_names, mappings, errors, ast, highlights })
 }
 
 /// Strip embedded TypeScript from the (already Nota-lowered) plain-JS/TS `program` in place, leaving
@@ -268,7 +272,7 @@ fn compile_internal(
 /// non-TS JS byte-identical (no arrow/class/etc. lowering), so an all-JS document is unchanged. The
 /// transform needs scoping, so a `SemanticBuilder` pass runs first over the lowered program.
 ///
-/// Returns the module's **free names** ([`NotaCompiled::free_names`]), harvested from that same
+/// Returns the module's **free names** ([`NotaOutput::free_names`]), harvested from that same
 /// semantic pass: the root-unresolved references that are used in *value* position (a type-only
 /// reference — `const n: Foo = …` — is about to be stripped and must not count). Sorted + deduped
 /// (the underlying map's iteration order is arbitrary).
@@ -281,18 +285,7 @@ fn strip_typescript<'a>(
     // tsx parse — get stripped.
     program.source_type = program.source_type.with_typescript(true);
     let scoping = SemanticBuilder::new().build(program).semantic.into_scoping();
-    let mut free_names: Vec<String> = scoping
-        .root_unresolved_references()
-        .iter()
-        .filter(|(_, reference_ids)| {
-            reference_ids.iter().any(|&id| scoping.get_reference(id).is_value())
-        })
-        .map(|(name, _)| (*name).to_string())
-        .collect();
-    free_names.sort_unstable();
-    // TypeScript strip ONLY. `JsxOptions::default()` ENABLES the React JSX transform, which would
-    // compile the lowered JSX to `createElement` calls — the emit must stay JSX (the consumer's
-    // vite-plugin-solid owns JSX compilation, per target). Explicitly disabled.
+    let free_names = free_names(&scoping);
     let options = TransformOptions {
         typescript: TypeScriptOptions::default(),
         jsx: JsxOptions::disable(),
@@ -301,6 +294,19 @@ fn strip_typescript<'a>(
     let ret = Transformer::new(allocator, Path::new("doc.nota"), &options)
         .build_with_scoping(scoping, program);
     if ret.errors.is_empty() { Ok(free_names) } else { Err(ret.errors) }
+}
+
+fn free_names(scoping: &Scoping) -> Vec<String> {
+    let mut names: Vec<String> = scoping
+        .root_unresolved_references()
+        .iter()
+        .filter(|(_, reference_ids)| {
+            reference_ids.iter().any(|&id| scoping.get_reference(id).is_value())
+        })
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+    names.sort_unstable();
+    names
 }
 
 /// Compile a `.nota` source string to a JS module (+ optional source map).
@@ -317,191 +323,18 @@ fn strip_typescript<'a>(
 pub fn compile(
     source_text: &str,
     source_map_path: Option<PathBuf>,
-) -> Result<NotaCompiled, Vec<OxcDiagnostic>> {
-    let out = compile_internal(source_text, CompileMode::Build { source_map_path })?;
-    Ok(NotaCompiled { code: out.code, map: out.map, free_names: out.free_names })
+) -> Result<NotaOutput, Vec<OxcDiagnostic>> {
+    compile_internal(source_text, CompileMode::Build { source_map_path })
 }
 
-/// Compile a `.nota` source to JS **plus** structured Volar [`CodeMapping`]s.
+/// Parse once and derive every editor-facing view from the recovered AST.
 ///
-/// The mapping companion to [`compile`] that exposes the per-range source⇄generated code mappings the
-/// language server consumes. Parses TS-aware; codegen **preserves** TS types verbatim (mappings stay
-/// byte-exact — it does not strip, unlike the build [`compile`]).
-///
-/// # Errors
-/// If the source is not well-formed Nota, or a `%` binding collides with a reserved emit name.
-pub fn compile_with_mappings(
-    source_text: &str,
-    source_map_path: Option<PathBuf>,
-) -> Result<NotaCompiledWithMappings, Vec<OxcDiagnostic>> {
-    let out = compile_internal(source_text, CompileMode::Mapped { source_map_path })?;
-    Ok(NotaCompiledWithMappings { code: out.code, map: out.map, mappings: out.mappings })
-}
-
-/// Compile a `.nota` source to the **type-preserving virtual `.tsx`** emit + code mappings.
-///
-/// The language-server emit: TS-aware parse, and codegen **preserves** the TS type annotations
-/// verbatim (no strip step) so the TS service can type the virtual `.tsx`. Returns the virtual code +
-/// the [`CodeMapping`]s mapping `.tsx` offsets back to `.nota` offsets.
-///
-/// **For the Volar `LanguagePlugin`:** no imports are emitted here — the structural components
-/// (`NotaDoc`/`Reforest`/`UlLi`/…), the ambient prelude (`Tex`/`Heading`/`CodeBlock`/…), and the
-/// `solid-js` state surface are all free identifiers. `packages/language-server` prepends a typing
-/// preamble of ambient `declare const`/`declare global` decls (no import statement — see its
-/// `preamble.ts`) to the virtual `.tsx` so those free refs type-check. When it does, it must shift
-/// every mapping's `generated_offsets` by the prepended prefix length (the `source_offsets` are
-/// unchanged — they index the `.nota`).
-///
-/// Uses **EOF error-recovery**, so it does not fail on unterminated markup: an unclosed `[props]`
-/// group, `{ … }` body, or bare `@`-head still yields a virtual `.tsx` (with mappings, incl. a
-/// prop-completion anchor at `@tag[|`), and the syntax/lowering problems come back in
-/// [`NotaVirtualCompiled::errors`] for the language server to surface as diagnostics.
-pub fn compile_virtual(source_text: &str) -> NotaVirtualCompiled {
-    let out = compile_internal(source_text, CompileMode::Virtual)
-        .expect("virtual compilation has no fallible stage");
-    NotaVirtualCompiled { code: out.code, mappings: out.mappings, errors: out.errors }
-}
-
-// ===============================================================================================
-// `--virtual` JSON serialization — the binary ↔ shim ↔ language-server protocol. Lives here (not
-// in the `nota_compile` example) so the contract is testable; the example prints this verbatim.
-// The JSON is hand-rolled: no `serde` dependency is added to the published `oxc` crate.
-// ===============================================================================================
-
-impl NotaVirtualCompiled {
-    /// Serialize as the `nota_compile --virtual` stdout JSON — the contract the
-    /// `@nota-lang/compiler` shim's `compileVirtual` and the language server consume:
-    ///
-    /// ```json
-    /// { "code": "<virtual .tsx>",
-    ///   "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
-    ///                   "generatedLengths": [u32]|null,
-    ///                   "data": {"completion":bool,"format":bool,"navigation":bool,
-    ///                            "semantic":bool,"structure":bool,"verification":bool} } ],
-    ///   "errors": [ { "message": string, "start": u32, "len": u32 } ] }
-    /// ```
-    #[must_use]
-    pub fn to_json(&self) -> String {
-        let mut out = String::new();
-        out.push_str("{\"code\":");
-        push_json_string(&mut out, &self.code);
-        out.push_str(",\"mappings\":[");
-        for (i, m) in self.mappings.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            write_mapping_json(&mut out, m);
-        }
-        out.push_str("],\"errors\":[");
-        for (i, e) in self.errors.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            write_error_json(&mut out, e);
-        }
-        out.push_str("]}");
-        out
-    }
-}
-
-/// Serialize one diagnostic as `{ "message": string, "start": u32, "len": u32 }`. The span is the
-/// first label's offset/length (byte offsets into the `.nota`); a label-less diagnostic reports
-/// `start: 0, len: 0`.
-fn write_error_json(out: &mut String, error: &OxcDiagnostic) {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "label offsets/lengths fit u32 (Span model)"
-    )]
-    let (start, len) = error
-        .labels
-        .as_ref()
-        .and_then(|labels| labels.first())
-        .map_or((0u32, 0u32), |label| (label.offset() as u32, label.len() as u32));
-    out.push_str("{\"message\":");
-    push_json_string(out, &error.message);
-    out.push_str(",\"start\":");
-    out.push_str(&start.to_string());
-    out.push_str(",\"len\":");
-    out.push_str(&len.to_string());
-    out.push('}');
-}
-
-/// Serialize one [`CodeMapping`] as JSON (camelCase keys, parallel u32 arrays).
-fn write_mapping_json(out: &mut String, m: &CodeMapping) {
-    out.push_str("{\"sourceOffsets\":");
-    push_u32_array(out, &m.source_offsets);
-    out.push_str(",\"generatedOffsets\":");
-    push_u32_array(out, &m.generated_offsets);
-    out.push_str(",\"lengths\":");
-    push_u32_array(out, &m.lengths);
-    out.push_str(",\"generatedLengths\":");
-    match &m.generated_lengths {
-        Some(v) => push_u32_array(out, v),
-        None => out.push_str("null"),
-    }
-    out.push_str(",\"data\":");
-    write_caps_json(out, m.data);
-    out.push('}');
-}
-
-/// Serialize a [`MappingCapabilities`] as JSON (the six Volar `CodeInformation` flags).
-fn write_caps_json(out: &mut String, c: MappingCapabilities) {
-    out.push_str("{\"completion\":");
-    push_bool(out, c.completion);
-    out.push_str(",\"format\":");
-    push_bool(out, c.format);
-    out.push_str(",\"navigation\":");
-    push_bool(out, c.navigation);
-    out.push_str(",\"semantic\":");
-    push_bool(out, c.semantic);
-    out.push_str(",\"structure\":");
-    push_bool(out, c.structure);
-    out.push_str(",\"verification\":");
-    push_bool(out, c.verification);
-    out.push('}');
-}
-
-fn push_bool(out: &mut String, b: bool) {
-    out.push_str(if b { "true" } else { "false" });
-}
-
-fn push_u32_array(out: &mut String, xs: &[u32]) {
-    out.push('[');
-    for (i, x) in xs.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        // u32 decimal is always valid JSON number text.
-        out.push_str(&x.to_string());
-    }
-    out.push(']');
-}
-
-/// Push a JSON string literal (with surrounding quotes) for `s`, escaping per RFC 8259:
-/// `"` `\` `\n` `\r` `\t` `\b` `\f`, and any other control character `< 0x20` as `\u00XX`.
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0C}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                // Remaining control chars: \u00XX (two lowercase hex digits).
-                const HEX: &[u8; 16] = b"0123456789abcdef";
-                let code = c as u32;
-                out.push_str("\\u00");
-                out.push(HEX[((code >> 4) & 0xF) as usize] as char);
-                out.push(HEX[(code & 0xF) as usize] as char);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+/// # Panics
+/// Only if the recovered path reaches a build-only error branch.
+#[must_use]
+pub fn analyze(source_text: &str) -> NotaOutput {
+    compile_internal(source_text, CompileMode::Analyze)
+        .expect("recoverable analysis has no fallible stage")
 }
 
 /// Join the reader's [`NotaMappingMark`]s (source ranges + kinds) with codegen's offset log into
@@ -864,7 +697,7 @@ mod tests {
 }
 
 // ===============================================================================================
-// Code-mapping + type-preserving virtual emit tests.
+// Code-mapping + type-preserving analysis tests.
 // ===============================================================================================
 #[cfg(test)]
 #[expect(
@@ -872,7 +705,7 @@ mod tests {
     reason = "test fixtures: substring offsets/lengths fit in u32 (oxc's Span model)"
 )]
 mod code_mappings {
-    use super::{CodeMapping, MappingCapabilities, compile_virtual, compile_with_mappings};
+    use super::{CodeMapping, MappingCapabilities, analyze};
 
     /// Byte offset of the (unique) substring `needle` in `hay`.
     #[track_caller]
@@ -930,9 +763,9 @@ mod code_mappings {
         // A `%` statement with embedded TS: the identifiers `n` and `count` are byte-exact leaves
         // with full caps; the TS annotation `: number` survives in the emit.
         let src = "% const n: number = count();\n@p{hi}\n";
-        let out = compile_with_mappings(src, None).expect("compiles");
+        let out = analyze(src);
 
-        // The TS type annotation is preserved (codegen does not strip — see compile_virtual).
+        // Analysis preserves the TS type annotation.
         assert!(out.code.contains(": number"), "type annotation preserved:\n{}", out.code);
 
         // `count` (a unique identifier) maps to its emitted location with full capabilities.
@@ -948,7 +781,7 @@ mod code_mappings {
     #[test]
     fn prop_expr_and_interpolation_map_with_full_caps() {
         let src = "@p[id: theId]{@(user) world}\n";
-        let out = compile_with_mappings(src, None).expect("compiles");
+        let out = analyze(src);
 
         // Prop value expression `theId` — full caps, byte-exact.
         let (g, len, caps) = segment_at(&out.mappings, offset_of(src, "theId"));
@@ -968,7 +801,7 @@ mod code_mappings {
     fn component_identifier_maps_with_navigation_hover_only() {
         // `@Aside` → `<Aside>`: navigation + hover, NOT a completion/format/structure region.
         let src = "@Aside{hi}\n";
-        let out = compile_with_mappings(src, None).expect("compiles");
+        let out = analyze(src);
 
         let (g, len, caps) = segment_at(&out.mappings, offset_of(src, "Aside"));
         assert_eq!(len, "Aside".len() as u32);
@@ -983,7 +816,7 @@ mod code_mappings {
         // `@p` is a host tag (emitted as the string `"p"`), NOT a TS symbol → unmapped. The
         // generated `h(`, `{}`, `[`, `decode`, `Fragment` boilerplate is unmapped too.
         let src = "@p{@(x)}\n";
-        let out = compile_with_mappings(src, None).expect("compiles");
+        let out = analyze(src);
 
         // The host tag name `p` in the source is not mapped (its source offset 1).
         let p_src = 1u32; // `@p` → the `p`
@@ -1000,16 +833,16 @@ mod code_mappings {
     }
 
     #[test]
-    fn virtual_emit_preserves_ts_annotation_and_frames_tsx() {
-        // The virtual emit keeps the TS type annotation `: number` (no strip step) and the
+    fn analysis_preserves_ts_annotation_and_frames_tsx() {
+        // Analysis keeps the TS type annotation `: number` (no strip step) and the
         // `@for` head `as` cast, ready for the language server's `.tsx` TS service.
         let src = "% const n: number = count();\n@for (x of xs as string[]) {@x}\n";
-        let out = compile_virtual(src);
+        let out = analyze(src);
 
         assert!(out.code.contains(": number"), "`: number` preserved:\n{}", out.code);
         assert!(out.code.contains("as string[]"), "`as string[]` preserved:\n{}", out.code);
 
-        // The mappings still resolve embedded identifiers byte-exactly in the virtual `.tsx`.
+        // The mappings still resolve embedded identifiers byte-exactly in the `.tsx`.
         let (g, _, caps) = segment_at(&out.mappings, offset_of(src, "count"));
         assert_eq!(&out.code[g as usize..g as usize + 5], "count");
         assert_eq!(caps, MappingCapabilities::full());
@@ -1020,7 +853,7 @@ mod code_mappings {
         // The headline invariant: a source offset *inside* an embedded-JS span maps to the correct
         // generated offset, and back.
         let src = "@p[onClick: () => go()]{hi}\n";
-        let out = compile_with_mappings(src, None).expect("compiles");
+        let out = analyze(src);
 
         // `go` is inside the embedded prop arrow body; it maps to the `go` in the generated code.
         let go_src = offset_of(src, "go()");
@@ -1030,21 +863,6 @@ mod code_mappings {
         assert_eq!(out.code.as_bytes()[g as usize], b'g');
     }
 
-    #[test]
-    fn build_and_virtual_share_mappings_modulo_code() {
-        // Same parse, two tails: `compile_with_mappings` (build) and `compile_virtual` (.tsx)
-        // produce the same mapping structure over the same source ranges.
-        let src = "@p[id: theId]{@(user)}\n";
-        let build = compile_with_mappings(src, None).expect("compiles");
-        let virt = compile_virtual(src);
-
-        let build_srcs: Vec<u32> =
-            build.mappings.iter().flat_map(|m| m.source_offsets.iter().copied()).collect();
-        let virt_srcs: Vec<u32> =
-            virt.mappings.iter().flat_map(|m| m.source_offsets.iter().copied()).collect();
-        assert_eq!(build_srcs, virt_srcs, "same source ranges mapped in both emits");
-    }
-
     /// The canonical golden, exercising the code mappings: the component binding, the `@Colorized`
     /// tag reference, the `@for` iterable + binding, the `@x`/`@(props.children)` interps — all
     /// map byte-exactly, with the right capabilities, and no boilerplate leaks in.
@@ -1052,7 +870,7 @@ mod code_mappings {
 
     #[test]
     fn canonical_golden_mappings_are_byte_exact() {
-        let out = compile_with_mappings(CANONICAL_NOTA, None).expect("compiles");
+        let out = analyze(CANONICAL_NOTA);
 
         // Every segment round-trips byte-for-byte (the core invariant).
         assert_segments_byte_exact(CANONICAL_NOTA, &out.code, &out.mappings);
@@ -1082,21 +900,21 @@ mod code_mappings {
 }
 
 // ===============================================================================================
-// EOF error-recovery (the `--virtual` recover path): the reader keeps the partial AST + reports
+// EOF error-recovery: analysis keeps the partial AST + reports
 // diagnostics on an unterminated construct, and materialises a prop-completion anchor at `@tag[|`.
 // ===============================================================================================
 #[cfg(test)]
 mod recover {
-    use super::compile_virtual;
+    use super::analyze;
 
     /// The load-bearing P5 case: `@a[` at EOF still emits the recovered JSX opening tag, and a
     /// mapping anchors a completion cursor (the position just after `[`) into it, just inside the
     /// tag's attribute position.
     #[test]
     fn unclosed_props_group_yields_opening_tag_with_completion_anchor() {
-        let out = compile_virtual("@a[");
+        let out = analyze("@a[");
 
-        // The virtual contains the recovered JSX element.
+        // The analysis contains the recovered JSX element.
         assert!(out.code.contains("<a"), "recovered opening tag present:\n{}", out.code);
 
         // A syntax diagnostic is reported, not swallowed.
@@ -1122,7 +940,7 @@ mod recover {
     /// A well-formed file recovers to *exactly* the strict result: no phantom errors, no anchor.
     #[test]
     fn well_formed_input_recovers_identically() {
-        let out = compile_virtual("@a[id: x]{ok}\n");
+        let out = analyze("@a[id: x]{ok}\n");
         assert!(out.errors.is_empty(), "no diagnostics on well-formed input: {:?}", out.errors);
         // No zero-width completion anchor is synthesised (props closed normally).
         assert!(
@@ -1132,10 +950,10 @@ mod recover {
     }
 
     /// An unterminated `{ … }` body keeps its already-collected children and reports the missing
-    /// `}` — the body text survives into the virtual for the TS service.
+    /// `}` — the body text survives into the analysis for the TS service.
     #[test]
     fn unclosed_body_keeps_children_and_reports() {
-        let out = compile_virtual("@p{unterminated");
+        let out = analyze("@p{unterminated");
         assert!(out.code.contains("\"unterminated\""), "body text preserved:\n{}", out.code);
         assert_eq!(out.errors.len(), 1, "missing-`}}` diagnostic: {:?}", out.errors);
     }
@@ -1143,7 +961,7 @@ mod recover {
     /// A bare `@` at EOF drops to an empty fragment (no phantom identifier binding) + diagnostic.
     #[test]
     fn bare_at_drops_to_empty_fragment() {
-        let out = compile_virtual("@");
+        let out = analyze("@");
         assert_eq!(out.errors.len(), 1, "bare-`@` diagnostic: {:?}", out.errors);
         // Recovered as `<></>` — no dangling identifier reference.
         assert!(out.code.contains("<></>"), "empty fragment recovery:\n{}", out.code);
@@ -1154,15 +972,15 @@ mod recover {
     /// diagnostics instead of returning `Err`.
     #[test]
     fn reserved_name_collision_surfaces_as_diagnostic() {
-        let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n");
+        let out = analyze("%let NotaDoc = 1\n@p{x}\n");
         assert!(!out.errors.is_empty(), "collision surfaced as a diagnostic");
     }
 
-    /// An unterminated verbatim body (`@pre|{` with no `}|`) still yields a framed virtual `.tsx`
+    /// An unterminated verbatim body (`@pre|{` with no `}|`) still yields framed `.tsx`
     /// (the `Doc` wrapper + the recovered element), with the parse diagnostic surfaced.
     #[test]
     fn unterminated_verbatim_recovers_framed_tsx() {
-        let out = compile_virtual("before\n@pre|{\nraw run");
+        let out = analyze("before\n@pre|{\nraw run");
         assert_eq!(out.errors.len(), 1, "verbatim diagnostic: {:?}", out.errors);
         assert!(out.errors[0].message.contains("verbatim"), "mentions verbatim: {:?}", out.errors);
         assert!(
@@ -1173,12 +991,12 @@ mod recover {
         assert!(out.code.contains("<pre"), "the recovered verbatim element:\n{}", out.code);
     }
 
-    /// The unterminated-`%%%`-fence contract, virtual side: the fence body parses as JS to EOF
+    /// The unterminated-`%%%`-fence contract: the fence body parses as JS to EOF
     /// with NO diagnostic (`find_fence_close` treats EOF as the close), and the statements land
     /// in the framed emit — the parser-level pin lives in `oxc_parser`'s recover_tests.
     #[test]
     fn unterminated_fence_recovers_silently_with_statements() {
-        let out = compile_virtual("%%%\nconst x = 1\n");
+        let out = analyze("%%%\nconst x = 1\n");
         assert!(
             out.errors.is_empty(),
             "no diagnostic for an EOF-terminated fence: {:?}",
@@ -1194,18 +1012,18 @@ mod recover {
 }
 
 // ===============================================================================================
-// The `--virtual` JSON contract ([`NotaVirtualCompiled::to_json`]): the exact key set and shapes
+// The analysis JSON contract: the exact key set and shapes
 // the `@nota-lang/compiler` shim and the language server parse.
 // ===============================================================================================
 #[cfg(test)]
-mod virtual_json {
+mod analysis_json {
     use serde_json::Value;
 
-    use super::compile_virtual;
+    use super::analyze;
 
     fn parse(source: &str) -> Value {
-        let out = compile_virtual(source);
-        serde_json::from_str(&out.to_json()).expect("to_json emits valid JSON")
+        let out = analyze(source);
+        serde_json::to_value(&out).expect("NotaOutput is serializable")
     }
 
     /// Assert `value` is an object with exactly `keys` (in any order).
@@ -1222,10 +1040,15 @@ mod virtual_json {
     #[test]
     fn top_level_and_mapping_shapes() {
         let json = parse("@a[k: theId]{@(user)}\n");
-        assert_keys(&json, &["code", "mappings", "errors"]);
+        assert_keys(&json, &["ast", "code", "errors", "freeNames", "highlights", "mappings"]);
 
         let code = json["code"].as_str().expect("`code` is a string");
         assert!(code.contains("export default function Doc()"), "framed TSX: {code}");
+        assert!(json["ast"].as_str().is_some_and(|ast| ast.contains("NotaDocument")));
+        assert!(json["freeNames"].as_array().is_some_and(|names| !names.is_empty()));
+        let highlights = json["highlights"].as_array().expect("`highlights` is an array");
+        assert_eq!(highlights.len() % 3, 0, "highlight triples");
+        assert!(!highlights.is_empty(), "markup produces highlights");
 
         let mappings = json["mappings"].as_array().expect("`mappings` is an array");
         assert!(!mappings.is_empty(), "the embedded JS produced mappings");
@@ -1275,13 +1098,12 @@ mod virtual_json {
         assert!(json["code"].as_str().unwrap().contains("export default function Doc()"));
     }
 
-    /// The escaping path: `code` contains newlines, quotes, backslashes, and a control char —
-    /// round-tripping through a real JSON parser proves the hand-rolled writer escapes correctly.
+    /// The escaping path: `code` contains newlines, quotes, and backslashes.
     #[test]
     fn code_string_escaping_round_trips() {
         let src = "@p{a \"quoted\" \\@ literal}\n";
-        let out = compile_virtual(src);
-        let json: Value = serde_json::from_str(&out.to_json()).expect("valid JSON");
+        let out = analyze(src);
+        let json: Value = serde_json::to_value(&out).expect("NotaOutput is serializable");
         assert_eq!(json["code"].as_str().unwrap(), out.code, "code round-trips exactly");
     }
 }

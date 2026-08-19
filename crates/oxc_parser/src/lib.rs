@@ -306,6 +306,22 @@ impl<'a, C: ParserConfig> Parser<'a, C> {
     }
 }
 
+/// Derive reader-faithful highlights from an already parsed Nota program.
+pub fn nota_highlights_from_program<'a>(
+    allocator: &'a Allocator,
+    source_text: &'a str,
+    program: &Program<'a>,
+) -> Vec<NotaHighlightSpan> {
+    parser_parse::nota_highlights_from_program(
+        allocator,
+        source_text,
+        SourceType::nota(),
+        ParseOptions::default(),
+        NoTokensParserConfig,
+        program,
+    )
+}
+
 mod parser_parse {
     use super::*;
 
@@ -504,31 +520,45 @@ mod parser_parse {
                 UniquePromise::new(),
             )
             .parse_nota_document()?;
-
-            let (mut spans, mut js_ranges) =
-                crate::nota::highlight::collect_structural(self.source_text, &program);
-            // Markup comments are Program trivia; embedded-JS comments come from the lexer pass.
-            spans.extend(program.comments.iter().map(|c| NotaHighlightSpan {
-                start: c.span.start,
-                end: c.span.end,
-                kind: NotaHighlightKind::Comment,
-            }));
-            // Nested frames are collected inside-out; the lexer pass expects source order.
-            js_ranges.sort_unstable_by_key(|range| range.start);
-            // The document parse consumed its parser, so use a fresh one to lex the JS ranges.
-            let mut pump = ParserImpl::<C>::new(
+            Ok(nota_highlights_from_program(
                 self.allocator,
                 self.source_text,
                 self.source_type,
                 self.options,
                 C::default(),
-                UniquePromise::new(),
-            );
-            pump.nota_lex_highlight_ranges(&js_ranges, &mut spans);
-
-            spans.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
-            Ok(spans)
+                &program,
+            ))
         }
+    }
+
+    /// Derive highlights from an existing Nota AST without parsing it again.
+    pub fn nota_highlights_from_program<'a, C: ParserConfig>(
+        allocator: &'a Allocator,
+        source_text: &'a str,
+        source_type: SourceType,
+        options: ParseOptions,
+        config: C,
+        program: &Program<'a>,
+    ) -> Vec<NotaHighlightSpan> {
+        let (mut spans, mut js_ranges) =
+            crate::nota::highlight::collect_structural(source_text, program);
+        spans.extend(program.comments.iter().map(|c| NotaHighlightSpan {
+            start: c.span.start,
+            end: c.span.end,
+            kind: NotaHighlightKind::Comment,
+        }));
+        js_ranges.sort_unstable_by_key(|range| range.start);
+        let mut pump = ParserImpl::<C>::new(
+            allocator,
+            source_text,
+            source_type,
+            options,
+            config,
+            UniquePromise::new(),
+        );
+        pump.nota_lex_highlight_ranges(&js_ranges, &mut spans);
+        spans.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+        spans
     }
 
     // ===========================================================================

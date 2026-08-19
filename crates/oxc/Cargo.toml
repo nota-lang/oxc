@@ -56,6 +56,9 @@ oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 oxc_transformer = { workspace = true, optional = true }
 oxc_transformer_plugins = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+tsify = { version = "0.5.6", default-features = false, features = ["js"], optional = true }
+wasm-bindgen = { version = "=0.2.126", optional = true }
 
 [features]
 default = ["regular_expression"]
@@ -77,7 +80,16 @@ minifier = ["oxc_mangler", "oxc_minifier"]
 # `codegen` is the Nota compile path (`oxc::nota`), which lowers the Nota AST via `oxc_transformer`
 # before codegen — so it pulls the transformer in too. The build path additionally strips embedded
 # TypeScript via the transformer (which needs `oxc_semantic` for scoping), so it pulls that in as well.
-codegen = ["oxc_codegen", "oxc_codegen/sourcemap", "oxc_sourcemap", "oxc_transformer", "oxc_semantic"]
+codegen = [
+  "oxc_ast/serialize",
+  "oxc_codegen",
+  "oxc_codegen/sourcemap",
+  "oxc_sourcemap",
+  "oxc_transformer",
+  "oxc_semantic",
+  "dep:serde",
+]
+nota-wasm = ["dep:tsify", "dep:wasm-bindgen"]
 mangler = ["oxc_mangler"]
 cfg = ["oxc_cfg", "oxc_semantic/cfg"]
 isolated_declarations = ["oxc_isolated_declarations"]

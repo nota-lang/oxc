@@ -31,6 +31,7 @@ const DOC: &str = "Doc";
 /// The `@nota-lang/core` structural names the emit references free (the shim binds them):
 /// the document wrapper, the flow-interior restructurer, and the list-item sentinels.
 const NOTA_DOC: &str = "NotaDoc";
+const NOTA_SOURCE: &str = "NotaSource";
 const REFOREST: &str = "Reforest";
 const UL_LI: &str = "UlLi";
 const OL_LI: &str = "OlLi";
@@ -71,7 +72,7 @@ const ATTRS: &str = "Attrs";
 // ===================================================================================================
 
 /// The `@nota-lang/core` structural names the emit references free.
-pub const STRUCTURAL_EMIT_NAMES: &[&str] = &[NOTA_DOC, REFOREST, UL_LI, OL_LI, ATTRS];
+pub const STRUCTURAL_EMIT_NAMES: &[&str] = &[NOTA_DOC, NOTA_SOURCE, REFOREST, UL_LI, OL_LI, ATTRS];
 /// The `solid-js` names the lowering itself emits (`@for` → `<For>`, `@if` → `<Show>`).
 pub const SOLID_EMIT_NAMES: &[&str] = &[FOR, SHOW];
 /// The `solid-js/web` names the lowering emits (`@(expr)` dynamic tags).

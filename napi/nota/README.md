@@ -1,84 +1,40 @@
-# `nota_wasm` — the Nota wasm compiler backend
+# Nota wasm reader
 
-The Nota reader (`oxc::nota`) compiled to WebAssembly via [`wasm-bindgen`], so it runs **in-browser**
-for the playground: wasm-bindgen over the same compile entries, plus `parseAst` and
-`highlight`/`highlightKindNames` (NOTA_READER.md §Compiler entries).
+`oxc::nota` compiled with `wasm-bindgen`. The crate lives under `napi/` for workspace-layout
+reasons; it does not use napi-rs. `@nota-lang/compiler` vendors the generated bundler target.
 
-It wraps the `oxc::nota` entries and returns plain JS objects (via [`serde-wasm-bindgen`]).
-This crate lives under `napi/` only because the workspace `members = [… "napi/*" …]` glob auto-includes
-it; it does **not** use the `napi`/`napi-derive` stack the sibling `napi/*` crates use — it is a
-`wasm-pack` crate.
-
-## JS API (what the playground calls)
+The public reader operations are:
 
 ```ts
-import init, { compile, compileWithMappings, compileVirtual, parseAst,
-              highlight, highlightKindNames } from "@nota-lang/nota-wasm";
-
-await init();                          // load + instantiate the .wasm (default export; `target web`)
-
-compile(source: string): { code: string };
-//   the build path — emits the JS module (oxc::nota::compile).
-
-compileWithMappings(source: string): { code: string; mappings: CodeMapping[] };
-//   build + Volar CodeMappings (oxc::nota::compile_with_mappings).
-
-compileVirtual(source: string): { code: string; mappings: CodeMapping[] };
-//   type-preserving virtual `.tsx` emit + CodeMappings (oxc::nota::compile_virtual).
-
-parseAst(source: string): { ast: string };
-//   the post-parse Nota AST as ESTree JSON (parser stage only — the playground's AST pane).
-
-highlight(source: string): Uint32Array;
-//   reader-faithful highlight spans, flat [start, end, kind] u32 triples sorted outer-first
-//   (Parser::parse_nota_highlights — the playground editor paints these as CM6 decorations;
-//   this crate owns the editor-facing encoding: the flat triples and the kind-name table).
-
+compile(source: string): NotaOutput; // strict, TypeScript-stripped build emit
+analyze(source: string): NotaOutput; // recovered editor analysis
 highlightKindNames(): string[];
-//   kind discriminant → stable kebab-case name (CSS-class-ready), indexing highlight()'s kinds.
-
-// CodeMapping (the `--virtual` JSON shape, camelCase — NOTA_READER.md §Compiler entries):
-//   { sourceOffsets: number[]; generatedOffsets: number[]; lengths: number[];
-//     generatedLengths: number[] | null;
-//     data: { completion, format, navigation, semantic, structure, verification: boolean } }
+emitSurface(): NotaEmitSurface;
+lineClassifiers(): NotaLineClassifiers;
 ```
 
-The compile entries, `parseAst`, and `highlight` all **throw** a `JsError` (a normal JS `Error`) on a Nota parse error; its `.message` is the
-rendered diagnostics (one per line). Wrap calls in `try/catch` in the playground.
+Both compilation paths return the same shape:
 
-`init` is the default export (`__wbg_init`): in a browser/bundler it fetches `nota_wasm_bg.wasm` next
-to the JS; in Node, read the `.wasm` bytes and pass them to the named `initSync(bytes)` export instead.
+```ts
+interface NotaOutput {
+  code: string;
+  freeNames: string[];
+  mappings: CodeMapping[];
+  errors: NotaDiagnostic[];
+  ast: string | null;
+  highlights: number[]; // flat [start, end, kind] triples
+}
+```
 
-## Build
+`analyze` parses once and derives its type-preserving TSX, mappings, recovered diagnostics, AST,
+free names, and highlights from that parse. `compile` throws a `JsError` on invalid input and leaves
+the editor-only fields empty.
+
+Build from the oxc workspace root:
 
 ```sh
-# from the oxc/ workspace root. Requires: rustup target add wasm32-unknown-unknown ; cargo install wasm-pack
-wasm-pack build napi/nota_wasm --target web --out-dir pkg --out-name nota_wasm
+just nota-build
 ```
 
-Output: `napi/nota_wasm/pkg/` — the package the playground imports
-(`nota_wasm.js`, `nota_wasm_bg.wasm`, `nota_wasm.d.ts`, `package.json`). The generated
-`package.json` `name` is `nota_wasm`; the playground can `pnpm add`/alias it as `@nota-lang/nota-wasm`
-(the `@nota-lang/*` scoped naming), or import the `pkg/` path directly.
-
-Use `--target bundler` instead of `web` if the playground bundler (Vite) prefers the bundler glue.
-
-### `wasm-opt` note
-
-`[package.metadata.wasm-pack.profile.release] wasm-opt = false` is set in `Cargo.toml`: the Rust
-toolchain here emits bulk-memory ops (`memory.fill`/`memory.copy`), and an older `wasm-opt` on `PATH`
-rejects them without `--enable-bulk-memory-opt`, failing the optimize step (the `.wasm` itself compiles
-+ bindgens fine). The `.wasm` ships unoptimized (~0.95 MB); re-enable with a newer `wasm-opt`
-(`wasm-opt = ["-O", "--enable-bulk-memory"]`) or let Vite optimize it.
-
-## Develop / verify (no wasm-pack needed for these)
-
-```sh
-cargo check -p nota_wasm                                  # native typecheck
-cargo check -p nota_wasm --target wasm32-unknown-unknown  # the real target
-cargo fmt -p nota_wasm -- --check
-cargo clippy -p nota_wasm
-```
-
-[`wasm-bindgen`]: https://github.com/rustwasm/wasm-bindgen
-[`serde-wasm-bindgen`]: https://github.com/cloudflare/serde-wasm-bindgen
+This writes the bundler glue and wasm to `target/js`. The main repository copies those artifacts
+into `packages/compiler/src/generated` during the compiler build.

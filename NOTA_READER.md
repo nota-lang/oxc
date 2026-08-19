@@ -24,10 +24,10 @@ fork — kept shallow (see the fork seam below).
   → oxc_parser         document/expression entry → faithful Nota AST
   → oxc_transformer    NotaLowering: Nota AST → Solid JSX Program
   → oxc_codegen        JS text (+ sourcemap, + opt-in offset log)
-  → crates/oxc/src/nota.rs   the compile entries + Volar CodeMapping join
+  → crates/oxc/src/nota.rs   strict compile / recovered analysis + CodeMapping join
 ```
-(The parse-stage views — `parseAst`'s document parse and the highlight spans — branch off after
-`oxc_parser`; the wasm bindings consume them directly as `Parser` entries.)
+The recovered analysis derives the ESTree JSON and highlight spans from the same parsed program
+before lowering it to virtual TSX.
 
 | Piece | File |
 |---|---|
@@ -51,7 +51,7 @@ fork — kept shallow (see the fork seam below).
 that converts by zero-cost `From`, and the lowering has a single `lower_form` dispatch;
 `NotaLowering` (a `VisitMut` + document rebuild) produces the emitted module. This reverses the
 original plan (parse-time lowering, zero new AST nodes) — the faithful AST buys
-the playground's `parseAst` ESTree view, testable stages, and the groundwork for a `.nota`
+the playground's ESTree view, testable stages, and the groundwork for a `.nota`
 formatter, at the cost of a one-time generated-code churn (regenerate with
 `just ast`, which panics at the end on a missing `oxfmt` — exit 101 is expected; verify with
 `cargo build -p oxc_ast`).
@@ -203,8 +203,11 @@ Semantic pins (deliberate, tested):
   whose printed body must equal the runtime string). Content containing a template breaker (a
   backtick or `${`) falls back to a **cooked string literal** — a `\`-escape inside `String.raw`
   would leak into the runtime value.
-- The reader emits **no imports at all** — the structural names (`NotaDoc`/`Reforest`/`UlLi`/
-  `OlLi`/`For`/`Dynamic`), the ambient prelude (`CodeInline`/`CodeBlock`/`Tex`/…; `Tex`, not
+- Component boundaries and the Heading/Label/Ref sugars are wrapped in
+  `<NotaSource pos={byteOffset}>`. The runtime uses that context to order registrations by source
+  instead of Solid evaluation order.
+- The reader emits **no imports at all** — the structural names (`NotaDoc`/`NotaSource`/
+  `Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`), the ambient prelude (`CodeInline`/`CodeBlock`/`Tex`/…; `Tex`, not
   `Math` — an ambient `Math` would capture the JS global), and the `solid-js` state surface are
   all free names the `@nota-lang/compiler` shim binds.
 - The TS-strip pass explicitly disables the transformer's (default-on) React JSX plugin — the
@@ -212,13 +215,10 @@ Semantic pins (deliberate, tested):
 
 ## Compiler entries (`crates/oxc/src/nota.rs`)
 
-One internal pipeline (`compile_internal`: tsx parse → lower → optional TS strip → codegen), three
-wrappers:
-- `compile(src, map_path?)` — build path; **strips embedded TS** via `oxc_transformer`'s TS pass.
-- `compile_with_mappings(src, map_path?)` — build + Volar `CodeMapping`s (types preserved —
-  stripping would shift offsets).
-- `compile_virtual(src)` — the type-preserving virtual `.tsx` for the language server (lenient on
-  collision diagnostics so the editor degrades gracefully).
+One internal pipeline returns one `NotaOutput` shape through two entries:
+- `compile(src, map_path?)` is strict and strips embedded TypeScript.
+- `analyze(src)` recovers errors and returns type-preserving TSX, mappings, diagnostics, ESTree
+  JSON, highlights, and free names from one parse.
 
 The CodeMapping join: lowering records source-span *marks* (embedded JS = full caps, component
 identifiers = navigation/hover); codegen's offset log records where each source-spanned node was
@@ -229,38 +229,34 @@ reinterpretations. Every surviving segment round-trips byte-for-byte. `CodeMappi
 `data: {completion, format, navigation, semantic, structure, verification}`); generated
 boilerplate is unmapped.
 
-The binary's `--virtual` mode is **dev tooling**, not the live language-server path: it prints
-`compile_virtual`'s result as JSON to stdout for ad-hoc inspection (`NotaVirtualCompiled::to_json`,
-serialized in the library and test-pinned there; the `nota_compile` example prints it verbatim):
+The example's `--analyze` mode prints that result as JSON for inspection:
 ```
-nota_compile --virtual <file>  →  stdout JSON:
+nota_compile --analyze <file>  →  stdout JSON:
 { "code": "<virtual .tsx>",
+  "freeNames": [string],
   "mappings": [ { "sourceOffsets":[u32], "generatedOffsets":[u32], "lengths":[u32],
                   "generatedLengths": [u32]|null,
                   "data": {"completion":bool,"format":bool,"navigation":bool,
                            "semantic":bool,"structure":bool,"verification":bool} } ],
-  "errors": [ { "message": string, "start": u32, "len": u32 } ] }
+  "errors": [ { "message": string, "start": u32, "len": u32 } ],
+  "ast": "<ESTree JSON>",
+  "highlights": [start, end, kind, ...] }
 ```
-The live path never touches this JSON text: `@nota-lang/compiler` calls the **wasm** `compileVirtual`
-binding (`napi/nota`, `#[wasm_bindgen(js_name = compileVirtual)]`) in-process, getting the same shape
-back as a structured value straight across the wasm boundary — no subprocess, no serialize/parse
-round trip. `packages/language-server` then prepends its typing preamble to `code` and shifts every
+The live path calls the wasm `analyze` binding and receives the structured value without a JSON
+round trip. `packages/language-server` prepends its typing preamble to `code` and shifts every
 `generatedOffsets` by the preamble length (`sourceOffsets` index the `.nota`, unchanged). The same
-wasm bindings (plus `parseAst` and `highlight`/`highlightKindNames`) serve the browser playground and
-the language server's semantic tokens.
+analysis is cached by `@nota-lang/compiler`, so the virtual document, diagnostics, semantic tokens,
+CodeMirror decorations, and playground AST do not reparse unchanged source.
 
 ## Highlighting (`oxc_parser/src/nota/highlight.rs`)
 
-`Parser::parse_nota_highlights(src)` is the **reader-faithful syntax highlighter** — a
-parser-stage view (like the document parse behind `parseAst`), consumed directly by the wasm
-bindings rather than through `oxc::nota` (it never reaches the lowering, so it is not part of the
-compile seam): parse in document mode, walk the Nota AST (`oxc_ast_visit::Visit`) emitting
+The reader-faithful syntax highlighter walks the Nota AST (`oxc_ast_visit::Visit`) to emit
 structural spans (sigils, tag names, prop names, markers, raw runs, escapes), and re-lex the
 embedded-JS extents with the crate's own lexer for token classes — holes punched where
 `Expression::NotaMarkup` re-enters the JS. Output: `NotaHighlightSpan` (`start`/`end`/
 `NotaHighlightKind`) sorted start-asc/end-desc (outer under-layers before contained overlays;
-clients paint in list order). The wasm crate ships it as `highlight()` (flat `[start, end, kind]`
-`Uint32Array` triples) + `highlightKindNames()`; the playground's CM6 editor paints these
+clients paint in list order). `analyze()` carries flat `[start, end, kind]` triples and
+`highlightKindNames()` supplies their names; the playground's CM6 editor paints these
 (`packages/playground/src/nota-mode.ts`), replacing the TextMate-grammar path, which structurally
 cannot track markup⇄JS mutual nesting. Kind discriminants are a stable wire format — append,
 never renumber (`NotaHighlightKind::ALL` is test-guarded). Known approximation: regex literals in
@@ -273,7 +269,7 @@ embedded JS re-lex as `/` operators (no parser context in the pump).
 | E2E fixtures (exact emit + validity invariant) | `oxc_codegen/tests/integration/nota.rs` | `cargo test -p oxc_codegen --test integration nota` |
 | Lexer scan units (boundaries, classifiers, string-aware skips) + highlight spans | `oxc_parser` lib (`lexer/nota.rs`, `nota/highlight.rs`) | `cargo test -p oxc_parser --lib nota` |
 | Scribble whitespace + mapping marks | `oxc_transformer` lib | `cargo test -p oxc_transformer --lib nota` |
-| Compile entries + CodeMapping / virtual emit | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
+| Compile + analysis / CodeMapping join | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
 | AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |
 
 `just nota-tests` runs the first four rows in one recipe — the single source of truth; CI's test

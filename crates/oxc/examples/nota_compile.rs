@@ -10,31 +10,26 @@
 //! cargo run -q -p oxc --example nota_compile --features codegen -- path/to/doc.nota
 //! ```
 //!
-//! ## `--virtual` mode
+//! ## `--analyze` mode
 //!
-//! With `--virtual <file>` it instead calls [`oxc::nota::compile_virtual`] (the type-preserving
-//! `.tsx` emit + [`CodeMapping`](oxc::nota::CodeMapping)s) and prints a single JSON object to
-//! stdout — [`NotaVirtualCompiled::to_json`](oxc::nota::NotaVirtualCompiled::to_json), where the
-//! shape is documented and tested. The virtual path uses **EOF error-recovery**: an unterminated
-//! construct still yields `code` + `mappings`, and the syntax/lowering problems come back in
-//! `errors` — so `--virtual` **exits 0** even on a malformed document.
+//! This prints [`oxc::nota::analyze`]'s recoverable editor result as JSON.
 //!
 //! ```sh
-//! cargo run -q -p oxc --example nota_compile --features codegen -- --virtual path/to/doc.nota
+//! cargo run -q -p oxc --example nota_compile --features codegen -- --analyze path/to/doc.nota
 //! ```
-//!
-//! This is a debugging view of the same structured result exposed directly by the WebAssembly
-//! `compileVirtual` binding.
 #![expect(clippy::print_stdout, clippy::print_stderr)]
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let first = args.next().expect("usage: nota_compile [--virtual] <file.nota>");
+    let first = args.next().expect("usage: nota_compile [--analyze] <file.nota>");
 
-    if first == "--virtual" {
-        let path = args.next().expect("usage: nota_compile --virtual <file.nota>");
+    if first == "--analyze" {
+        let path = args.next().expect("usage: nota_compile --analyze <file.nota>");
         let source = std::fs::read_to_string(&path).expect("read .nota file");
-        run_virtual(&source);
+        print!(
+            "{}",
+            serde_json::to_string(&oxc::nota::analyze(&source)).expect("serialize analysis")
+        );
     } else {
         // `first` is the path. Keep the no-flag behavior byte-identical to the original example.
         let source = std::fs::read_to_string(&first).expect("read .nota file");
@@ -48,11 +43,4 @@ fn main() {
             }
         }
     }
-}
-
-/// `--virtual` path: compile to the virtual `.tsx` + code mappings + recovered diagnostics and
-/// print the JSON. EOF error-recovery means this **exits 0** even on a malformed document — the
-/// syntax problems are reported in the `errors` array, not via a non-zero exit.
-fn run_virtual(source: &str) {
-    print!("{}", oxc::nota::compile_virtual(source).to_json());
 }

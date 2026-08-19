@@ -1696,7 +1696,10 @@ dependencies = [
  "oxc_syntax",
  "oxc_transformer",
  "oxc_transformer_plugins",
+ "serde",
  "serde_json",
+ "tsify",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -502,7 +502,8 @@ impl<'a> NotaLowering<'a> {
         if let Some(attrs) = attrs {
             props.extend(self.lower_attrs(attrs.unbox().props));
         }
-        self.build_named_element(span, super::HEADING, props, children)
+        let heading = self.build_named_element(span, super::HEADING, props, children);
+        self.with_source(span.start, heading)
     }
 
     /// Doc-state sugar (notation.md §Doc-state references, design/references.md) →
@@ -527,7 +528,8 @@ impl<'a> NotaLowering<'a> {
             Some(value),
         ));
         jsx_props.extend(self.lower_attrs(props));
-        self.build_named_element(span, slot, jsx_props, children)
+        let element = self.build_named_element(span, slot, jsx_props, children);
+        self.with_source(span.start, element)
     }
 
     /// `---` thematic-break sugar → `<hr />` — a plain host element (a block, so the runtime's
