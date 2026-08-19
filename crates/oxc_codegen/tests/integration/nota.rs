@@ -172,8 +172,8 @@ fn host_element_text() {
 #[test]
 fn component_element() {
     // Capitalized tag → identifier (component); `@Unknown{}` is a downstream TS scope error, not ours.
-    nota_expr("@Aside{hi}", r#"<NotaSource pos={0}><Aside>{"hi"}</Aside></NotaSource>"#);
-    nota_expr("@Unknown{}", "<NotaSource pos={0}><Unknown /></NotaSource>");
+    nota_expr("@Aside{hi}", r#"<Aside>{"hi"}</Aside>"#);
+    nota_expr("@Unknown{}", "<Unknown />");
 }
 
 #[test]
@@ -271,10 +271,7 @@ fn head_boundary_dispatch() {
     nota_expr("@(a + b)", "a + b");
 
     // A `{` glued to a dynamic head opens an element; a space before any would-be trigger does not.
-    nota_expr(
-        "@(Box){hi}",
-        r#"<NotaSource pos={0}><Dynamic component={Box}>{"hi"}</Dynamic></NotaSource>"#,
-    );
+    nota_expr("@(Box){hi}", r#"<Dynamic component={Box}>{"hi"}</Dynamic>"#);
     nota_expr("@p{@(Box) x}", r#"<p>{Box}{" x"}</p>"#);
 
     // Bare-identifier head: a glued `{` is an element trigger; a trailing space is not.
@@ -325,7 +322,7 @@ fn jsx_unsafe_string_prop_rides_expression_container() {
     );
     // Doc-state-relevant: an element-form label id with an `&` must not entity-decode (a JSX
     // attribute string would turn `"a&amp;b"`-style content into different runtime bytes).
-    nota_expr(r#"@Label[id: "a&b"]{}"#, r#"<NotaSource pos={0}><Label id={"a&b"} /></NotaSource>"#);
+    nota_expr(r#"@Label[id: "a&b"]{}"#, r#"<Label id={"a&b"} />"#);
 }
 
 #[test]
@@ -334,26 +331,14 @@ fn dynamic_tag_direct() {
     // arbitrary expression, so there is no grammatical restriction on what may sit in tag position
     // (a plain JSX tag needs a bound identifier there). Capitalized ident, static member, and
     // arbitrary expression alike.
-    nota_expr(
-        "@(Box){hi}",
-        r#"<NotaSource pos={0}><Dynamic component={Box}>{"hi"}</Dynamic></NotaSource>"#,
-    );
-    nota_expr(
-        "@(ui.Card){hi}",
-        r#"<NotaSource pos={0}><Dynamic component={ui.Card}>{"hi"}</Dynamic></NotaSource>"#,
-    );
-    nota_expr(
-        "@(getTag()){hi}",
-        r#"<NotaSource pos={0}><Dynamic component={getTag()}>{"hi"}</Dynamic></NotaSource>"#,
-    );
+    nota_expr("@(Box){hi}", r#"<Dynamic component={Box}>{"hi"}</Dynamic>"#);
+    nota_expr("@(ui.Card){hi}", r#"<Dynamic component={ui.Card}>{"hi"}</Dynamic>"#);
+    nota_expr("@(getTag()){hi}", r#"<Dynamic component={getTag()}>{"hi"}</Dynamic>"#);
 }
 
 #[test]
 fn dynamic_tag_with_props() {
-    nota_expr(
-        "@(comps[k])[x:1]{hi}",
-        r#"<NotaSource pos={0}><Dynamic component={comps[k]} x={1}>{"hi"}</Dynamic></NotaSource>"#,
-    );
+    nota_expr("@(comps[k])[x:1]{hi}", r#"<Dynamic component={comps[k]} x={1}>{"hi"}</Dynamic>"#);
 }
 
 #[test]
@@ -385,12 +370,12 @@ fn props_then_verbatim_body() {
     // catch-all as self-closing, silently leaking `|{...}|` out as sibling markup text.
     nota_expr(
         r#"@CodeBlock[lang: "hello"]|{some code}|"#,
-        r#"<NotaSource pos={0}><CodeBlock lang="hello">{String.raw`some code`}</CodeBlock></NotaSource>"#,
+        r#"<CodeBlock lang="hello">{String.raw`some code`}</CodeBlock>"#,
     );
     // Multiple prop groups still accumulate ahead of the verbatim body.
     nota_expr(
         r#"@CodeBlock[lang: "hello"][foo: 1]|{code}|"#,
-        r#"<NotaSource pos={0}><CodeBlock lang="hello" foo={1}>{String.raw`code`}</CodeBlock></NotaSource>"#,
+        r#"<CodeBlock lang="hello" foo={1}>{String.raw`code`}</CodeBlock>"#,
     );
 }
 
@@ -427,7 +412,7 @@ fn props_then_colon_body() {
     assert_js_eq(
         &nota_doc("@Footnote[id: \"n2\"]: def two\n"),
         r#"export default function Doc() {
-	return <NotaDoc><NotaSource pos={0}><Footnote id="n2">{"def two"}</Footnote></NotaSource></NotaDoc>;
+	return <NotaDoc><Footnote id="n2">{"def two"}</Footnote></NotaDoc>;
 }
 "#,
     );
@@ -467,7 +452,7 @@ fn props_colon_and_verbatim_coexist() {
     assert_js_eq(
         &nota_doc("@CodeBlock[lang: \"python\"]|{f(x)}|\n\n@aside[class: \"x\"]: note\n"),
         r#"export default function Doc() {
-	return <NotaDoc><NotaSource pos={0}><CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock></NotaSource>{"\n\n"}<aside class="x"><Reforest>{"note"}</Reforest></aside></NotaDoc>;
+	return <NotaDoc><CodeBlock lang="python">{String.raw`f(x)`}</CodeBlock>{"\n\n"}<aside class="x"><Reforest>{"note"}</Reforest></aside></NotaDoc>;
 }
 "#,
     );
@@ -845,7 +830,7 @@ fn err_unterminated_fence() {
 fn unknown_component_is_not_a_reader_error() {
     // `@Unknown{}` is valid to the reader (→ `<Unknown>`, a free identifier reference); the
     // missing binding is a downstream TS scope error, NOT a reader diagnostic.
-    nota_expr("@Unknown{x}", r#"<NotaSource pos={0}><Unknown>{"x"}</Unknown></NotaSource>"#);
+    nota_expr("@Unknown{x}", r#"<Unknown>{"x"}</Unknown>"#);
 }
 
 // ===============================================================================================
@@ -1128,10 +1113,8 @@ fn heading_sugar_relowers_but_raw_element_stays_host() {
 
 #[test]
 fn line_start_constructs_resume_after_colon_body_definition() {
-    // A colon-body definition (`@Footnote[id]: body` — the footnote-definition form) consumes
-    // through trailing blank lines, so the parser resumes AT a line start and must re-run
-    // line-start detection there. A heading and a list directly after the definition are sugar,
-    // not literal text.
+    // A heading and a list directly after a colon-body definition (`@Footnote[id]: body`) remain
+    // line-start sugar, not literal text.
     let js = nota_doc("@Footnote[id: \"a\"]: A def.\n\n## After\n\n- item\n");
     assert!(js.contains(r#"<Footnote id="a">{"A def."}</Footnote>"#), "def parses: {js}");
     assert!(js.contains(r#"<Heading rank={2}>{"After"}</Heading>"#), "heading resumes: {js}");
@@ -1258,11 +1241,8 @@ fn line_start_sugar_chains_after_a_construct() {
 
 #[test]
 fn line_start_sugar_after_a_colon_block() {
-    // TODO.md bug 7 regression: a colon-sugar body consumes through its final line's `\n` (and
-    // any trailing blank lines), so the parse resumes AT a line start — a position the `\n` arm's
-    // line-start hook never saw. Sugar directly after a colon element must still fire (the
-    // `Kind::At` arm now runs `consume_line_start_constructs` when it resumes at a line start).
-    // The mega-test's `## Nested statements` (after the `@section:` block) was the field failure.
+    // Sugar directly after a colon element must still fire. The mega-test's
+    // `## Nested statements` (after the `@section:` block) was the field failure.
     assert!(
         nota_doc("@section:\n  body\n# After\n")
             .contains(r#"<Heading rank={1}>{"After"}</Heading>"#),
@@ -1347,19 +1327,13 @@ fn body_start_is_a_line_start() {
 #[test]
 fn docstate_label_row() {
     // Emit-table row: `<sec_intro>` ≡ `@Label[id: "sec_intro"]{}` (Typst-minus-period label).
-    nota_expr(
-        "@{<sec_intro>}",
-        r#"<><NotaSource pos={2}><Label id="sec_intro" /></NotaSource></>"#,
-    );
+    nota_expr("@{<sec_intro>}", r#"<><Label id="sec_intro" /></>"#);
 }
 
 #[test]
 fn docstate_ref_row() {
     // Emit-table row: `&sec_intro` ≡ `@Ref[id: "sec_intro"]{}`; ends at the first non-ident char.
-    nota_expr(
-        "@{see &sec_intro, ok}",
-        r#"<>{"see "}<NotaSource pos={6}><Ref id="sec_intro" /></NotaSource>{", ok"}</>"#,
-    );
+    nota_expr("@{see &sec_intro, ok}", r#"<>{"see "}<Ref id="sec_intro" />{", ok"}</>"#);
 }
 
 #[test]
@@ -1369,13 +1343,10 @@ fn docstate_ref_postfix_props() {
     // props after.
     nota_expr(
         "@{see &knuth84[page: \"33\"], ok}",
-        r#"<>{"see "}<NotaSource pos={6}><Ref id="knuth84" page="33" /></NotaSource>{", ok"}</>"#,
+        r#"<>{"see "}<Ref id="knuth84" page="33" />{", ok"}</>"#,
     );
     // Expression values + chained groups compose exactly as on an element head.
-    nota_expr(
-        "@{&k[a: 1][b: x]}",
-        r#"<><NotaSource pos={2}><Ref id="k" a={1} b={x} /></NotaSource></>"#,
-    );
+    nota_expr("@{&k[a: 1][b: x]}", r#"<><Ref id="k" a={1} b={x} /></>"#);
 }
 
 #[test]
@@ -1383,12 +1354,12 @@ fn docstate_ref_postfix_body() {
     // A glued `{` opens authored reference text; markup nests.
     nota_expr(
         "@{&sec{the *intro* section}}",
-        r#"<><NotaSource pos={2}><Ref id="sec">{"the "}<strong>{"intro"}</strong>{" section"}</Ref></NotaSource></>"#,
+        r#"<><Ref id="sec">{"the "}<strong>{"intro"}</strong>{" section"}</Ref></>"#,
     );
     // Props + body compose: the design doc's `&smith2020[page: "33"]{Smith}` row.
     nota_expr(
         "@{&smith2020[page: \"33\"]{Smith}}",
-        r#"<><NotaSource pos={2}><Ref id="smith2020" page="33">{"Smith"}</Ref></NotaSource></>"#,
+        r#"<><Ref id="smith2020" page="33">{"Smith"}</Ref></>"#,
     );
 }
 
@@ -1396,13 +1367,10 @@ fn docstate_ref_postfix_body() {
 fn docstate_ref_postfix_gate() {
     // A non-props-shaped glued `[` stays prose (the attrs-group gate — `see [1]` precedent):
     // the ref closes at the ident and the bracket rides as text.
-    nota_expr(
-        "@{see &sec[1] x}",
-        r#"<>{"see "}<NotaSource pos={6}><Ref id="sec" /></NotaSource>{"[1] x"}</>"#,
-    );
+    nota_expr("@{see &sec[1] x}", r#"<>{"see "}<Ref id="sec" />{"[1] x"}</>"#);
     // Unglued groups are not postfix: a space ends the ref, and literal braces in prose stay
     // text (notation.md §Markup sugar).
-    nota_expr("@{&sec {x}}", r#"<><NotaSource pos={2}><Ref id="sec" /></NotaSource>{" {x}"}</>"#);
+    nota_expr("@{&sec {x}}", r#"<><Ref id="sec" />{" {x}"}</>"#);
 }
 
 #[test]
@@ -1432,31 +1400,19 @@ fn docstate_guard_fires_after_closing_punctuation() {
     // Closing/terminal punctuation opens the guard (design/references.md): a footnote use glues
     // after its sentence — `shown.&note` — while ident-adjacency still blocks `R&D`.
     let js = nota_doc("As shown.&note1 Again,&note1 and (twice)&note2\n");
-    assert!(
-        js.contains(r#"{"As shown."}<NotaSource pos={9}><Ref id="note1" /></NotaSource>"#),
-        "{js}"
-    );
-    assert!(
-        js.contains(r#"{" Again,"}<NotaSource pos={22}><Ref id="note1" /></NotaSource>"#),
-        "{js}"
-    );
-    assert!(
-        js.contains(r#"{" and (twice)"}<NotaSource pos={40}><Ref id="note2" /></NotaSource>"#),
-        "{js}"
-    );
+    assert!(js.contains(r#"{"As shown."}<Ref id="note1" />"#), "{js}");
+    assert!(js.contains(r#"{" Again,"}<Ref id="note1" />"#), "{js}");
+    assert!(js.contains(r#"{" and (twice)"}<Ref id="note2" />"#), "{js}");
 }
 
 #[test]
 fn docstate_fires_at_body_and_bounded_starts() {
     // A body/range start counts as a line start: emphasis body, braced body, heading body.
-    nota_expr(
-        "@{*<a>* x}",
-        r#"<><strong><NotaSource pos={3}><Label id="a" /></NotaSource></strong>{" x"}</>"#,
-    );
-    nota_expr("@p{<b>}", r#"<p><NotaSource pos={3}><Label id="b" /></NotaSource></p>"#);
+    nota_expr("@{*<a>* x}", r#"<><strong><Label id="a" /></strong>{" x"}</>"#);
+    nota_expr("@p{<b>}", r#"<p><Label id="b" /></p>"#);
     let js = nota_doc("# Intro <sec_intro>\n");
     assert!(
-        js.contains(r#"<NotaSource pos={0}><Heading rank={1}>{"Intro "}<NotaSource pos={8}><Label id="sec_intro" /></NotaSource></Heading></NotaSource>"#),
+        js.contains(r#"<Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>"#),
         "{js}"
     );
 }
@@ -1474,10 +1430,7 @@ fn docstate_clips_at_bounded_frame_end() {
     // A ref postfix whose opener sits past the frame end is not consumed: the `[` belongs to the
     // text after the emphasis close, so the ref stays bare.
     let js = nota_doc("q *&x*[k: 1] z\n");
-    assert!(
-        js.contains(r#"<strong><NotaSource pos={3}><Ref id="x" /></NotaSource></strong>"#),
-        "{js}"
-    );
+    assert!(js.contains(r#"<strong><Ref id="x" /></strong>"#), "{js}");
     assert!(!js.contains(r#"k="1""#) && !js.contains("k={1}"), "no postfix across the frame: {js}");
 }
 
@@ -1509,25 +1462,19 @@ fn docstate_ident_charset() {
     // Charset is **Typst minus period** (notation.md §Doc-state references): start `[A-Za-z0-9_]`,
     // continue `[A-Za-z0-9_:-]`, ASCII-only. Kebab/namespaced labels work; digits may start; `.`,
     // `$`, and Unicode are NOT label chars.
-    nota_expr(
-        "@{<sec_intro_2>}",
-        r#"<><NotaSource pos={2}><Label id="sec_intro_2" /></NotaSource></>"#,
-    );
+    nota_expr("@{<sec_intro_2>}", r#"<><Label id="sec_intro_2" /></>"#);
     // Kebab: `-` joins now (`<sec-intro>` / `&sec-intro` fire — the emit-table rows).
-    nota_expr(
-        "@{<sec-intro>}",
-        r#"<><NotaSource pos={2}><Label id="sec-intro" /></NotaSource></>"#,
-    );
-    nota_expr("@{&sec-intro}", r#"<><NotaSource pos={2}><Ref id="sec-intro" /></NotaSource></>"#);
+    nota_expr("@{<sec-intro>}", r#"<><Label id="sec-intro" /></>"#);
+    nota_expr("@{&sec-intro}", r#"<><Ref id="sec-intro" /></>"#);
     // `:` joins (namespaced labels) — documented behavior; a trailing `-` also glues.
-    nota_expr("@{&ns:x y}", r#"<><NotaSource pos={2}><Ref id="ns:x" /></NotaSource>{" y"}</>"#);
-    nota_expr("@{&sec- y}", r#"<><NotaSource pos={2}><Ref id="sec-" /></NotaSource>{" y"}</>"#);
+    nota_expr("@{&ns:x y}", r#"<><Ref id="ns:x" />{" y"}</>"#);
+    nota_expr("@{&sec- y}", r#"<><Ref id="sec-" />{" y"}</>"#);
     // Digits may start a label (Markdown-style): `<1a>` / `&1x` fire.
-    nota_expr("@{<1a>}", r#"<><NotaSource pos={2}><Label id="1a" /></NotaSource></>"#);
-    nota_expr("@{&1x y}", r#"<><NotaSource pos={2}><Ref id="1x" /></NotaSource>{" y"}</>"#);
+    nota_expr("@{<1a>}", r#"<><Label id="1a" /></>"#);
+    nota_expr("@{&1x y}", r#"<><Ref id="1x" />{" y"}</>"#);
     // A trailing `.` drops (`&sec.` → `Ref("sec")` + a literal "."), so a ref never glues sentence
     // punctuation.
-    nota_expr("@{&sec. and}", r#"<><NotaSource pos={2}><Ref id="sec" /></NotaSource>{". and"}</>"#);
+    nota_expr("@{&sec. and}", r#"<><Ref id="sec" />{". and"}</>"#);
     // `$` and Unicode are NOT label chars: `&$x` stays literal, and a would-be `<café>` label breaks
     // at `é` (no glued `>`), so the whole `<` stays literal text. (The element forms are
     // charset-free: `@Label[id: "café"]{}` still accepts any string.)
@@ -1565,7 +1512,7 @@ fn docstate_mixed_document() {
     assert_js_eq(
         &js,
         r#"export default function Doc() {
-            return <NotaDoc><NotaSource pos={0}><Heading rank={1}>{"Intro "}<NotaSource pos={8}><Label id="sec_intro" /></NotaSource></Heading></NotaSource>{"\n\nSee "}<NotaSource pos={25}><Ref id="sec_intro" page="7" /></NotaSource>{" for Vec<T> and R&D details."}<NotaSource pos={74}><Ref id="note1" /></NotaSource>{"\n\n"}<NotaSource pos={82}><Footnote id="note1">{"The "}<strong>{"fine"}</strong>{" print."}</Footnote></NotaSource></NotaDoc>;
+            return <NotaDoc><Heading rank={1}>{"Intro "}<Label id="sec_intro" /></Heading>{"\n\nSee "}<Ref id="sec_intro" page="7" />{" for Vec<T> and R&D details."}<Ref id="note1" />{"\n\n"}<Footnote id="note1">{"The "}<strong>{"fine"}</strong>{" print."}</Footnote></NotaDoc>;
         }"#,
     );
 }
@@ -1648,7 +1595,7 @@ const CANONICAL_STAGE3: &str = r#"export default function Doc() {
     let [color, setColor] = createSignal("red");
     return <span onClick={() => setColor("green")} style={{ color: color() }}>{props.children}</span>;
   };
-  return <NotaDoc><For each={["a", "b"]}>{(x) => <><UlLi><NotaSource pos={203}><Colorized>{x}</Colorized></NotaSource></UlLi></>}</For></NotaDoc>;
+  return <NotaDoc><For each={["a", "b"]}>{(x) => <><UlLi><Colorized>{x}</Colorized></UlLi></>}</For></NotaDoc>;
 }"#;
 
 #[test]
@@ -1716,6 +1663,15 @@ fn doc_paragraph_break_is_double_newline() {
     // coalesced text child — Reforest's paragraph-break marker (design/solid.md).
     let js = nota_doc("@p{one}\n\n@p{two}\n");
     assert!(js.contains(r#"{"\n\n"}"#), "expected the coalesced para-break marker: {js}");
+}
+
+#[test]
+fn colon_body_leaves_its_paragraph_break_in_the_document() {
+    let js = nota_doc("@Definition[id: \"term\"]: definition\n\nmore text\n");
+    assert!(
+        js.contains(r#"</Definition>{"\n\nmore text"}"#),
+        "the blank line after a colon body must remain visible to Reforest: {js}"
+    );
 }
 
 // ===============================================================================================
@@ -1803,7 +1759,7 @@ fn verbatim_armed_then_following_content() {
 #[test]
 fn verbatim_component_tag() {
     // A verbatim body on a component tag.
-    nota_expr(r"@Pre|{x@y}|", "<NotaSource pos={0}><Pre>{String.raw`x@y`}</Pre></NotaSource>");
+    nota_expr(r"@Pre|{x@y}|", "<Pre>{String.raw`x@y`}</Pre>");
 }
 
 #[test]

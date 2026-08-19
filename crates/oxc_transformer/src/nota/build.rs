@@ -17,7 +17,7 @@ use oxc_ecmascript::BoundNames;
 use oxc_span::{GetSpan, SourceType, Span};
 
 use super::lower::NotaLowering;
-use super::{DOC, DYNAMIC, FOR, NOTA_DOC, NOTA_SOURCE, REFOREST, SHOW, is_reserved_emit_name};
+use super::{DOC, DYNAMIC, FOR, NOTA_DOC, REFOREST, SHOW, is_reserved_emit_name};
 
 /// decode.md's HOST_FLOW_TAGS, now an **emit policy** (design/solid.md): the host containers
 /// whose interior decodes as flow, realized by wrapping their children in `<Reforest>` at emit
@@ -326,8 +326,7 @@ impl<'a> NotaLowering<'a> {
             }
             JsxTag::Component(ident) => {
                 let name = JSXElementName::IdentifierReference(self.ast.alloc(ident));
-                let element = self.jsx_element(span, name, attrs, children, opening_span);
-                self.with_source(span.start, element)
+                self.jsx_element(span, name, attrs, children, opening_span)
             }
             JsxTag::Dynamic(expr) => {
                 let component_attr = self.jsx_attr(
@@ -337,25 +336,15 @@ impl<'a> NotaLowering<'a> {
                     Some(expr),
                 );
                 attrs.insert(0, component_attr);
-                let element = self.jsx_element(
+                self.jsx_element(
                     span,
                     self.jsx_ref_name(Span::empty(span.start), DYNAMIC),
                     attrs,
                     children,
                     opening_span,
-                );
-                self.with_source(span.start, element)
+                )
             }
         }
-    }
-
-    /// Provide the source offset to registrations performed below a component boundary.
-    pub(super) fn with_source(&self, pos: u32, child: Expression<'a>) -> Expression<'a> {
-        let empty = Span::empty(pos);
-        let value =
-            self.ast.expression_numeric_literal(empty, f64::from(pos), None, NumberBase::Decimal);
-        let props = self.ast.vec1(self.jsx_attr(empty, empty, "pos", Some(value)));
-        self.build_named_element(empty, NOTA_SOURCE, props, self.ast.vec1(child))
     }
 
     /// A runtime/ambient-named element (`<Tex …>`, `<Heading …>`, `<NotaDoc>`, `<Reforest>`):

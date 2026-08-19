@@ -694,7 +694,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// Run line-start sugar after a form that consumed its trailing newline, such as a colon body.
+    /// Run line-start sugar when a form leaves the parser positioned directly at a line start.
     fn consume_line_start_after_form(&mut self, depth: u32) {
         let at = self.cur_token().start();
         if !self.has_fatal_error() && at > 0 && byte_at(self.source_text, at - 1) == Some(b'\n') {

@@ -387,7 +387,8 @@ pub fn line_indent_of(source: &str, offset: u32) -> usize {
 
 /// The end of an indentation-scoped block: starting at line `line_start`, consume lines that are
 /// blank or indented strictly past `min_indent`; return the first line at/under it (or EOF).
-/// This is the shared block-extent rule for list-item bodies and colon-sugar continuations.
+/// List-item bodies include their trailing blank lines, so they use this broader extent than
+/// colon-sugar bodies.
 fn indented_block_end(source: &str, mut line_start: u32, min_indent: u32) -> u32 {
     while (line_start as usize) < source.len() {
         let (content, is_blank) = line_probe(source, line_start);
@@ -876,8 +877,10 @@ pub fn brace_clip_on_line(source: &str, from: u32) -> Option<u32> {
 
 /// Compute the source extent `[start, end)` of a `@head:` colon-sugar body: the rest of the
 /// `@head:` line (after inline whitespace) plus following lines indented strictly past
-/// `head_indent`. When `clip_at_brace`, a depth-0 `}` (closing an enclosing `{…}` body) ends the
-/// body on the first line ([`brace_clip_on_line`]).
+/// `head_indent`. The extent stops before the final content line's newline, leaving that newline
+/// and any trailing blank lines to the parent body as paragraph separators. Blank lines followed
+/// by another indented line remain inside the body. When `clip_at_brace`, a depth-0 `}` (closing an
+/// enclosing `{…}` body) ends the body on the first line ([`brace_clip_on_line`]).
 pub fn colon_block_extent(
     source: &str,
     colon_end: u32,
@@ -890,8 +893,20 @@ pub fn colon_block_extent(
     if clip_at_brace && let Some(clip) = brace_clip_on_line(source, colon_end) {
         return (start, clip);
     }
-    let first_line_end = next_line_start(source, colon_end);
-    (start, indented_block_end(source, first_line_end, head_indent as u32))
+    let first_line_end = line_content_end(source, colon_end);
+    let mut end = if start < first_line_end { first_line_end } else { start };
+    let mut line_start = next_line_start(source, colon_end);
+    while (line_start as usize) < source.len() {
+        let (content, is_blank) = line_probe(source, line_start);
+        if !is_blank && content - line_start <= head_indent as u32 {
+            break;
+        }
+        if !is_blank {
+            end = line_content_end(source, line_start);
+        }
+        line_start = next_line_start(source, line_start);
+    }
+    (start, end)
 }
 
 // ================================================================================================
@@ -1493,6 +1508,21 @@ mod tests {
         let colon_end = src.find(':').unwrap() as u32 + 1;
         let (start, end) = colon_block_extent(src, colon_end, 0, true);
         assert_eq!(&src[start as usize..end as usize], "@f[x: \"}\"] y");
+    }
+
+    #[test]
+    fn colon_extent_leaves_paragraph_breaks_to_the_parent() {
+        let src = "@a: first\n\nnext";
+        let colon_end = src.find(':').unwrap() as u32 + 1;
+        let (start, end) = colon_block_extent(src, colon_end, 0, false);
+        assert_eq!(&src[start as usize..end as usize], "first");
+        assert_eq!(&src[end as usize..], "\n\nnext");
+
+        let src = "@a:\n  first\n\n  second\n\noutside";
+        let colon_end = src.find(':').unwrap() as u32 + 1;
+        let (start, end) = colon_block_extent(src, colon_end, 0, false);
+        assert_eq!(&src[start as usize..end as usize], "\n  first\n\n  second");
+        assert_eq!(&src[end as usize..], "\n\noutside");
     }
 
     /// Dollar spans mirror backtick spans: an inline `≥N`-close (with the TeX `\<c>` escape) or a

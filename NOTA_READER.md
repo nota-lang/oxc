@@ -203,10 +203,9 @@ Semantic pins (deliberate, tested):
   whose printed body must equal the runtime string). Content containing a template breaker (a
   backtick or `${`) falls back to a **cooked string literal** — a `\`-escape inside `String.raw`
   would leak into the runtime value.
-- Component boundaries and the Heading/Label/Ref sugars are wrapped in
-  `<NotaSource pos={byteOffset}>`. The runtime uses that context to order registrations by source
-  instead of Solid evaluation order.
-- The reader emits **no imports at all** — the structural names (`NotaDoc`/`NotaSource`/
+- Component boundaries and the Heading/Label/Ref sugars emit directly as JSX. Document facts use
+  ordinary Solid evaluation/registration order; the reader adds no source-location wrapper.
+- The reader emits **no imports at all** — the structural names (`NotaDoc`/
   `Reforest`/`UlLi`/`OlLi`/`For`/`Dynamic`), the ambient prelude (`CodeInline`/`CodeBlock`/`Tex`/…; `Tex`, not
   `Math` — an ambient `Math` would capture the JS global), and the `solid-js` state surface are
   all free names the `@nota-lang/compiler` shim binds.
