@@ -61,14 +61,8 @@ pub struct CodegenReturn {
     /// All the legal comments returned from [LegalComment::Linked] or [LegalComment::External].
     pub legal_comments: Vec<Comment>,
 
-    /// The Nota source→generated **offset log**, populated iff [`Codegen::with_nota_offset_log`]
-    /// was called. Each entry is `(source_start, source_end, generated_start)`: at every point
-    /// codegen mapped an AST *leaf* with a non-empty source span, the node's source span and the
-    /// byte offset in the generated output where its text began. The Nota compile entry intersects
-    /// this (by source range) with the reader's `NotaMappingMark`s to build per-leaf Volar
-    /// `CodeMapping`s — see `oxc_parser`'s `nota::mapping` module.
-    ///
-    /// Empty unless the offset log was enabled.
+    /// `(source_start, source_end, generated_start)` entries used to build Nota's Volar mappings.
+    /// Empty unless [`Codegen::with_nota_offset_log`] was called.
     #[cfg(feature = "sourcemap")]
     pub nota_offset_log: Vec<(u32, u32, u32)>,
 }
@@ -233,14 +227,8 @@ impl<'a> Codegen<'a> {
         self
     }
 
-    /// Enable the Nota source→generated **offset log**.
-    ///
-    /// When enabled, every AST node that codegen maps (i.e. carries a non-empty source span)
-    /// appends a `(source_offset, generated_offset)` pair to [`CodegenReturn::nota_offset_log`].
-    /// This is the generated-offset oracle the Nota compile entry pairs with the reader's
-    /// `NotaMappingMark`s to build Volar `CodeMapping`s. [`CodegenOptions::source_map_path`]
-    /// is **not** required — the log is independent of the encoded sourcemap, though both are driven
-    /// by the same `add_source_mapping` hook. Has no effect without the `sourcemap` feature.
+    /// Enable the offset log used to build Nota's Volar mappings. This does not require an encoded
+    /// source map, but it does require the `sourcemap` feature.
     #[must_use]
     #[cfg(feature = "sourcemap")]
     pub fn with_nota_offset_log(mut self) -> Self {

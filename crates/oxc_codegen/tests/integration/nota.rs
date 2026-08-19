@@ -1387,10 +1387,7 @@ fn docstate_left_boundary_guard_negatives() {
     for sugar in ["<Label", "<Ref"] {
         assert!(!js.contains(sugar), "{sugar} must not fire: {js}");
     }
-    assert!(
-        js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x"),
-        "prose intact: {js}"
-    );
+    assert!(js.contains("Vec<T> and R&D, a<b, a&b, 1 < 2, < b, <->, &$x"), "prose intact: {js}");
 }
 
 #[test]

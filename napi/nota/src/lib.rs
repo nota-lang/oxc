@@ -9,22 +9,6 @@ use serde::Serialize;
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
-// ===================================================================================================
-// Serializable mirrors of the `oxc::nota` result shapes (camelCase for the JS playground).
-//
-// `#[derive(Tsify)]` emits each shape's TypeScript declaration into the generated `.d.ts`, and
-// `#[tsify(into_wasm_abi)]` makes the entries below return the *named* type rather than `any`. The
-// Rust struct is therefore the single source of truth: the field names, the types, and this doc
-// prose all reach TypeScript from here, so the two cannot drift.
-//
-// `missing_as_null` is set on *every* container: it declares `Option<T>` as `T | null` rather than
-// `T | undefined`, and configures the serde-wasm-bindgen serializer to actually emit `null`. It
-// must appear on the top-level returned types, not just the nested ones that hold the `Option` —
-// `Tsify::into_js` reads `SERIALIZATION_CONFIG` off the container being returned and applies it to
-// the whole tree, so a nested-only attribute would declare `| null` while still emitting
-// `undefined`. Uniform application keeps that from depending on which entry returns the shape.
-// ===================================================================================================
-
 /// The six Volar `CodeInformation` capability flags for a mapped range.
 #[derive(Serialize, Tsify)]
 #[tsify(missing_as_null)]
@@ -257,19 +241,13 @@ pub fn compile_with_mappings(source: &str) -> Result<NotaMappedResult, JsError> 
 /// JS: `compileVirtual(source: string): { code: string, mappings: CodeMapping[], errors: {
 /// message: string, start: number, len: number }[] }`.
 ///
-/// # Errors
-/// Returns a `JsError` (thrown in JS) carrying the rendered diagnostics if `source` is not
-/// well-formed Nota.
 #[wasm_bindgen(js_name = compileVirtual)]
-pub fn compile_virtual(source: &str) -> Result<NotaVirtualResult, JsError> {
-    match nota::compile_virtual(source) {
-        Ok(compiled) => Ok(NotaVirtualResult {
-            code: compiled.code,
-            mappings: map_mappings(&compiled.mappings),
-            errors: compiled.errors.iter().map(NotaError::from_diagnostic).collect(),
-        }),
-        // Practically unreachable on the recovery path; kept total.
-        Err(errors) => Err(diagnostics_to_error(&errors)),
+pub fn compile_virtual(source: &str) -> NotaVirtualResult {
+    let compiled = nota::compile_virtual(source);
+    NotaVirtualResult {
+        code: compiled.code,
+        mappings: map_mappings(&compiled.mappings),
+        errors: compiled.errors.iter().map(NotaError::from_diagnostic).collect(),
     }
 }
 

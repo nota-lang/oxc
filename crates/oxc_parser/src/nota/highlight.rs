@@ -1,32 +1,10 @@
-//! Reader-faithful syntax highlighting: classified source spans from the *parsed* Nota AST.
+//! Syntax highlighting derived from the parsed Nota AST.
 //!
-//! The TextMate grammar (`vscode-nota`) is regex-only and cannot track Nota's context-sensitivity
-//! (`[` is props only after an element head), its markup⇄JS mutual nesting (`@`-forms inside
-//! `%`/`[props]`/`@(expr)` JS), or the line/indent machinery (`%` continuations, colon blocks) —
-//! so a markup-valued prop or a stray `[` derails it for the rest of the document. This pass is
-//! the faithful alternative: parse with the real reader, then
+//! The AST walk emits markup spans and records embedded-JS ranges, excluding nested Nota forms.
+//! Those ranges are then tokenized with oxc's lexer. Results are sorted by start ascending and end
+//! descending so clients can paint broad under-layers before nested spans.
 //!
-//!  1. **walk the Nota AST** ([`Highlighter`], an [`oxc_ast_visit::Visit`]) emitting structural
-//!     spans — sigils, tag names, prop names, markers, raw runs — and collecting the extents of
-//!     embedded JS (statements, prop values, `@(expr)` heads, control-flow heads), with *holes*
-//!     punched where markup re-enters the JS (`Expression::NotaMarkup`);
-//!  2. **re-lex the JS gap ranges** with the crate's own lexer
-//!     ([`ParserImpl::nota_lex_highlight_ranges`]) to classify keywords, strings, numbers,
-//!     comments, and operators.
-//!
-//! The result is a single sorted span list (start ascending, end descending — outer spans before
-//! the spans they contain). Spans may nest: a heading emits an under-layer for its whole line
-//! beneath its children's spans, so a client painting in list order gets correct layering.
-//!
-//! Known lexical approximation: regex literals in embedded JS re-lex as `/` operators (the pump
-//! has no parser context to disambiguate division; the reader itself parses them correctly).
-//!
-//! Entry: [`crate::Parser::parse_nota_highlights`] — an editor-tooling view of the parse, consumed
-//! directly by the wasm bindings (`napi/nota_wasm`, which own the kind→name table and the flat
-//! triple encoding); an LSP semantic-tokens provider can consume the same entry later. The pass
-//! lives *here*, not with its consumers, because both halves need crate-private machinery: the
-//! pump drives `ParserImpl`/lexer internals (`UniquePromise` is unmintable outside the parser),
-//! and the walker reuses the `lexer::nota` scans.
+//! Regex literals are approximated as `/` operators because the token pass has no parser context.
 
 // Source offsets fit u32 (oxc's `Span` model) — same policy as the reader in `super`.
 #![expect(
@@ -154,10 +132,6 @@ pub struct NotaHighlightSpan {
     pub end: u32,
     pub kind: NotaHighlightKind,
 }
-
-// ================================================================================================
-// Structural walk
-// ================================================================================================
 
 /// An embedded-JS subtree being walked: its source extent, plus the spans of any `NotaMarkup`
 /// islands encountered inside it (markup re-entering the JS). On pop, `range − holes` becomes the

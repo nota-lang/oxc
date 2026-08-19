@@ -185,21 +185,10 @@ pub struct NotaVirtualCompiled {
     pub errors: Vec<OxcDiagnostic>,
 }
 
-/// Per-call configuration for the one shared Nota compile pipeline ([`compile_internal`]). The three
-/// public entries are thin wrappers that differ only in these knobs.
-struct CompileConfig {
-    /// Strip embedded TypeScript to plain JS (the build path). Mutually exclusive with
-    /// `collect_mappings` — stripping shifts codegen offsets, so it never runs on a mapping path.
-    strip_ts: bool,
-    /// Collect Volar `CodeMapping`s (the mapping / virtual paths) — also enables codegen's offset log.
-    collect_mappings: bool,
-    /// EOF error-recovery: parse with [`Parser::parse_nota_document_recover`] so an unterminated
-    /// construct still yields a virtual `.tsx` + mappings, and collect the parse/lowering
-    /// diagnostics into [`CompileOutput::errors`] instead of returning `Err`. The language-server
-    /// `--virtual` path only; the build paths stay strict (`false`).
-    recover: bool,
-    /// Source-map path (names the source in the emitted map); `None` skips map generation.
-    source_map_path: Option<PathBuf>,
+enum CompileMode {
+    Build { source_map_path: Option<PathBuf> },
+    Mapped { source_map_path: Option<PathBuf> },
+    Virtual,
 }
 
 /// The output of [`compile_internal`]; each public wrapper takes the fields it exposes.
@@ -215,10 +204,7 @@ struct CompileOutput {
     free_names: Vec<String>,
 }
 
-/// The one Nota compile pipeline: parse (TS-aware) → Nota-lower → optionally strip TS → codegen,
-/// joining mapping marks with the codegen offset log when requested. The public [`compile`],
-/// [`compile_with_mappings`], and [`compile_virtual`] are wrappers over this with different
-/// [`CompileConfig`]s — keeping the parse mode, the lowering, and the mapping assembly in one place.
+/// Parse, lower, optionally strip TypeScript, and generate code and mappings.
 ///
 /// The canonical Nota parse is `SourceType::tsx` (NOTA_READER.md §Compiler entries): embedded
 /// TypeScript in `%`/`[props]`/
@@ -226,12 +212,20 @@ struct CompileOutput {
 /// emit); the mapping/virtual paths *preserve* them (the language server's TS service types them).
 fn compile_internal(
     source_text: &str,
-    config: CompileConfig,
+    mode: CompileMode,
 ) -> Result<CompileOutput, Vec<OxcDiagnostic>> {
+    let strip_ts = matches!(&mode, CompileMode::Build { .. });
+    let collect_mappings = !matches!(&mode, CompileMode::Build { .. });
+    let recover = matches!(&mode, CompileMode::Virtual);
+    let source_map_path = match mode {
+        CompileMode::Build { source_map_path } | CompileMode::Mapped { source_map_path } => {
+            source_map_path
+        }
+        CompileMode::Virtual => None,
+    };
+
     let allocator = Allocator::default();
-    // The recover path (`--virtual`) keeps the partial AST + its diagnostics; the build/mapping
-    // paths discard the tree on the first fatal error.
-    let (mut program, mut errors) = if config.recover {
+    let (mut program, mut errors) = if recover {
         let recovered =
             Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document_recover();
         (recovered.program, recovered.errors)
@@ -241,11 +235,10 @@ fn compile_internal(
         (program, Vec::new())
     };
 
-    let lowered = NotaLowering::new(&allocator, source_text, config.collect_mappings)
+    let lowered = NotaLowering::new(&allocator, source_text, collect_mappings)
         .lower_document_program(&mut program);
     if !lowered.diagnostics.is_empty() {
-        if config.recover {
-            // Surface reserved-name-collision diagnostics as editor diagnostics too.
+        if recover {
             errors.extend(lowered.diagnostics);
         } else {
             return Err(lowered.diagnostics);
@@ -253,16 +246,16 @@ fn compile_internal(
     }
 
     let free_names =
-        if config.strip_ts { strip_typescript(&allocator, &mut program)? } else { Vec::new() };
+        if strip_ts { strip_typescript(&allocator, &mut program)? } else { Vec::new() };
 
-    let options = CodegenOptions { source_map_path: config.source_map_path, ..Default::default() };
+    let options = CodegenOptions { source_map_path, ..Default::default() };
     let mut codegen = Codegen::new().with_options(options);
-    if config.collect_mappings {
+    if collect_mappings {
         codegen = codegen.with_nota_offset_log();
     }
     let CodegenReturn { code, map, nota_offset_log, .. } = codegen.build(&program);
 
-    let mappings = if config.collect_mappings {
+    let mappings = if collect_mappings {
         build_code_mappings(source_text, &code, &lowered.mappings, &nota_offset_log)
     } else {
         Vec::new()
@@ -325,15 +318,7 @@ pub fn compile(
     source_text: &str,
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiled, Vec<OxcDiagnostic>> {
-    let out = compile_internal(
-        source_text,
-        CompileConfig {
-            strip_ts: true,
-            collect_mappings: false,
-            recover: false,
-            source_map_path,
-        },
-    )?;
+    let out = compile_internal(source_text, CompileMode::Build { source_map_path })?;
     Ok(NotaCompiled { code: out.code, map: out.map, free_names: out.free_names })
 }
 
@@ -349,15 +334,7 @@ pub fn compile_with_mappings(
     source_text: &str,
     source_map_path: Option<PathBuf>,
 ) -> Result<NotaCompiledWithMappings, Vec<OxcDiagnostic>> {
-    let out = compile_internal(
-        source_text,
-        CompileConfig {
-            strip_ts: false,
-            collect_mappings: true,
-            recover: false,
-            source_map_path,
-        },
-    )?;
+    let out = compile_internal(source_text, CompileMode::Mapped { source_map_path })?;
     Ok(NotaCompiledWithMappings { code: out.code, map: out.map, mappings: out.mappings })
 }
 
@@ -379,23 +356,10 @@ pub fn compile_with_mappings(
 /// group, `{ … }` body, or bare `@`-head still yields a virtual `.tsx` (with mappings, incl. a
 /// prop-completion anchor at `@tag[|`), and the syntax/lowering problems come back in
 /// [`NotaVirtualCompiled::errors`] for the language server to surface as diagnostics.
-/// The only `Err` is the internal invariant break in `strip_typescript` — never reached here, since
-/// the virtual path does not strip.
-///
-/// # Errors
-/// Practically infallible on the virtual path (recovery + no TS strip); the signature keeps `Result`
-/// only to share [`compile_internal`] with the strict build paths.
-pub fn compile_virtual(source_text: &str) -> Result<NotaVirtualCompiled, Vec<OxcDiagnostic>> {
-    let out = compile_internal(
-        source_text,
-        CompileConfig {
-            strip_ts: false,
-            collect_mappings: true,
-            recover: true,
-            source_map_path: None,
-        },
-    )?;
-    Ok(NotaVirtualCompiled { code: out.code, mappings: out.mappings, errors: out.errors })
+pub fn compile_virtual(source_text: &str) -> NotaVirtualCompiled {
+    let out = compile_internal(source_text, CompileMode::Virtual)
+        .expect("virtual compilation has no fallible stage");
+    NotaVirtualCompiled { code: out.code, mappings: out.mappings, errors: out.errors }
 }
 
 // ===============================================================================================
@@ -1040,7 +1004,7 @@ mod code_mappings {
         // The virtual emit keeps the TS type annotation `: number` (no strip step) and the
         // `@for` head `as` cast, ready for the language server's `.tsx` TS service.
         let src = "% const n: number = count();\n@for (x of xs as string[]) {@x}\n";
-        let out = compile_virtual(src).expect("compiles");
+        let out = compile_virtual(src);
 
         assert!(out.code.contains(": number"), "`: number` preserved:\n{}", out.code);
         assert!(out.code.contains("as string[]"), "`as string[]` preserved:\n{}", out.code);
@@ -1072,7 +1036,7 @@ mod code_mappings {
         // produce the same mapping structure over the same source ranges.
         let src = "@p[id: theId]{@(user)}\n";
         let build = compile_with_mappings(src, None).expect("compiles");
-        let virt = compile_virtual(src).expect("compiles");
+        let virt = compile_virtual(src);
 
         let build_srcs: Vec<u32> =
             build.mappings.iter().flat_map(|m| m.source_offsets.iter().copied()).collect();
@@ -1130,7 +1094,7 @@ mod recover {
     /// tag's attribute position.
     #[test]
     fn unclosed_props_group_yields_opening_tag_with_completion_anchor() {
-        let out = compile_virtual("@a[").expect("recovers");
+        let out = compile_virtual("@a[");
 
         // The virtual contains the recovered JSX element.
         assert!(out.code.contains("<a"), "recovered opening tag present:\n{}", out.code);
@@ -1158,7 +1122,7 @@ mod recover {
     /// A well-formed file recovers to *exactly* the strict result: no phantom errors, no anchor.
     #[test]
     fn well_formed_input_recovers_identically() {
-        let out = compile_virtual("@a[id: x]{ok}\n").expect("compiles");
+        let out = compile_virtual("@a[id: x]{ok}\n");
         assert!(out.errors.is_empty(), "no diagnostics on well-formed input: {:?}", out.errors);
         // No zero-width completion anchor is synthesised (props closed normally).
         assert!(
@@ -1171,7 +1135,7 @@ mod recover {
     /// `}` — the body text survives into the virtual for the TS service.
     #[test]
     fn unclosed_body_keeps_children_and_reports() {
-        let out = compile_virtual("@p{unterminated").expect("recovers");
+        let out = compile_virtual("@p{unterminated");
         assert!(out.code.contains("\"unterminated\""), "body text preserved:\n{}", out.code);
         assert_eq!(out.errors.len(), 1, "missing-`}}` diagnostic: {:?}", out.errors);
     }
@@ -1179,7 +1143,7 @@ mod recover {
     /// A bare `@` at EOF drops to an empty fragment (no phantom identifier binding) + diagnostic.
     #[test]
     fn bare_at_drops_to_empty_fragment() {
-        let out = compile_virtual("@").expect("recovers");
+        let out = compile_virtual("@");
         assert_eq!(out.errors.len(), 1, "bare-`@` diagnostic: {:?}", out.errors);
         // Recovered as `<></>` — no dangling identifier reference.
         assert!(out.code.contains("<></>"), "empty fragment recovery:\n{}", out.code);
@@ -1190,7 +1154,7 @@ mod recover {
     /// diagnostics instead of returning `Err`.
     #[test]
     fn reserved_name_collision_surfaces_as_diagnostic() {
-        let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n").expect("recovers");
+        let out = compile_virtual("%let NotaDoc = 1\n@p{x}\n");
         assert!(!out.errors.is_empty(), "collision surfaced as a diagnostic");
     }
 
@@ -1198,7 +1162,7 @@ mod recover {
     /// (the `Doc` wrapper + the recovered element), with the parse diagnostic surfaced.
     #[test]
     fn unterminated_verbatim_recovers_framed_tsx() {
-        let out = compile_virtual("before\n@pre|{\nraw run").expect("recovers");
+        let out = compile_virtual("before\n@pre|{\nraw run");
         assert_eq!(out.errors.len(), 1, "verbatim diagnostic: {:?}", out.errors);
         assert!(out.errors[0].message.contains("verbatim"), "mentions verbatim: {:?}", out.errors);
         assert!(
@@ -1214,7 +1178,7 @@ mod recover {
     /// in the framed emit — the parser-level pin lives in `oxc_parser`'s recover_tests.
     #[test]
     fn unterminated_fence_recovers_silently_with_statements() {
-        let out = compile_virtual("%%%\nconst x = 1\n").expect("recovers");
+        let out = compile_virtual("%%%\nconst x = 1\n");
         assert!(
             out.errors.is_empty(),
             "no diagnostic for an EOF-terminated fence: {:?}",
@@ -1240,7 +1204,7 @@ mod virtual_json {
     use super::compile_virtual;
 
     fn parse(source: &str) -> Value {
-        let out = compile_virtual(source).expect("compiles");
+        let out = compile_virtual(source);
         serde_json::from_str(&out.to_json()).expect("to_json emits valid JSON")
     }
 
@@ -1316,7 +1280,7 @@ mod virtual_json {
     #[test]
     fn code_string_escaping_round_trips() {
         let src = "@p{a \"quoted\" \\@ literal}\n";
-        let out = compile_virtual(src).expect("compiles");
+        let out = compile_virtual(src);
         let json: Value = serde_json::from_str(&out.to_json()).expect("valid JSON");
         assert_eq!(json["code"].as_str().unwrap(), out.code, "code round-trips exactly");
     }

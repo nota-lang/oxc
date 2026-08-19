@@ -601,8 +601,7 @@ impl<'a> NotaLowering<'a> {
 /// Only *whitespace-only* text is dropped, and only for a statically known host tag — a component
 /// that happens to render a `<table>` is out of reach here, as is deliberate non-whitespace text
 /// in table position (which is a document bug the browser will relocate either way).
-const FOSTER_PARENTING_TAGS: [&str; 6] =
-    ["table", "thead", "tbody", "tfoot", "tr", "colgroup"];
+const FOSTER_PARENTING_TAGS: [&str; 6] = ["table", "thead", "tbody", "tfoot", "tr", "colgroup"];
 
 /// Whether `tag` is a host element from {@link FOSTER_PARENTING_TAGS}.
 fn is_foster_parenting_tag(tag: &NotaTag<'_>) -> bool {

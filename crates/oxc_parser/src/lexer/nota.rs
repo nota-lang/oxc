@@ -44,9 +44,7 @@ static MARKUP_TEXT_END_TABLE: SafeByteMatchTable = safe_byte_match_table!(|b| b 
     || b == b'`'
     || b == b'$'
     || b == b'|'
-    // Doc-state sugar openers (notation.md §Doc-state references): `<label>`, `&ref`, `[^mark]`.
-    // Each is validated at
-    // the sigil in `next_nota_child` (left-guard / digraph shape); a non-opener stays 1-byte text.
+    // Doc-state and attrs sugar openers. Invalid openers remain one-byte text.
     || b == b'<'
     || b == b'&'
     || b == b'['
@@ -86,9 +84,7 @@ impl<C: Config> Lexer<'_, C> {
                 self.consume_char();
                 return self.finish_re_lex(kind);
             }
-            // Doc-state sugar openers. A marker token only at a valid opener (the
-            // left-boundary guard for `<`/`&`, the `[^`+ident digraph for `[`); otherwise a 1-byte
-            // text token. The parser (`parse_*_sugar`) resolves the terminator and marker-vs-literal.
+            // Doc-state sugar openers. The parser resolves boundaries and terminators.
             Some(b'<') => {
                 let kind = if label_can_open(self.source.whole(), start) {
                     Kind::LAngle
@@ -107,9 +103,7 @@ impl<C: Config> Lexer<'_, C> {
                 self.consume_char();
                 return self.finish_re_lex(kind);
             }
-            // A `[` is always a typed token (unless escaped): the parser resolves whether a
-            // trailing attrs group applies, or falls back to a literal `[` (notation.md §Attrs
-            // groups; the footnote digraph `[^…]` retired — design/references.md).
+            // A `[` is always typed unless escaped; the parser recognizes attrs groups.
             Some(b'[') => {
                 let kind = if is_escaped(self.source.whole(), start) {
                     Kind::MarkupText
@@ -183,10 +177,6 @@ impl<C: Config> Lexer<'_, C> {
     }
 }
 
-// ================================================================================================
-// Shared classifications (produced by the scans below, consumed by the parser)
-// ================================================================================================
-
 /// The element trigger immediately following an `@`-form head (see [`markup_trigger`]).
 #[derive(Clone, Copy)]
 pub enum MarkupTrigger {
@@ -225,10 +215,6 @@ pub enum ElsePeek {
     /// `else {…}` — resume parsing at the body `{`.
     Else { brace_offset: u32 },
 }
-
-// ================================================================================================
-// Byte primitives
-// ================================================================================================
 
 /// Peek the raw byte at `offset`, or `None` at/after end of source.
 pub fn byte_at(source: &str, offset: u32) -> Option<u8> {
@@ -463,15 +449,9 @@ pub fn at_line_start_in_frame(source: &str, at: u32, frame_start: u32) -> bool {
     pos == frame_start || pos == 0 || bytes.get(pos as usize - 1) == Some(&b'\n')
 }
 
-// ================================================================================================
-// Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` /
-// line-start `[^label]: body`
-// ================================================================================================
+// Doc-state sugar: `<label>` and `&ref`.
 
-/// The doc-state sugar **label** charset: **Typst minus period**, ASCII-only
-/// (notation.md §Doc-state references). Start `[A-Za-z0-9_]`: digits are legal at a label's *start* (`[^1]` fires,
-/// Markdown-style), unlike a JS identifier. The element forms remain charset-free (`@Label[id:
-/// "π.α"]{}` takes any string) — only the sugar is restricted.
+/// The ASCII doc-state label-start charset: `[A-Za-z0-9_]`.
 fn is_docstate_label_start(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
@@ -483,9 +463,7 @@ fn is_docstate_label_part(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'-')
 }
 
-/// Is the byte at `off` a doc-state label-*start* char (`[A-Za-z0-9_]`)? The shape half of the
-/// `<`/`&`/`[^` opener checks. ASCII-only: a non-ASCII lead byte (`≥0x80`) is not a label char, so a
-/// Unicode-letter label never opens the sugar.
+/// Whether `off` starts an ASCII doc-state label.
 fn is_docstate_start_at(source: &str, off: u32) -> bool {
     byte_at(source, off).is_some_and(is_docstate_label_start)
 }
@@ -784,13 +762,9 @@ static LIST_MARKER: Lazy<Regex> = lazy_regex!(r"^([ \t]*)([-+]|[0-9]+\.) ");
 /// A colon-sugar `|`-prop line: first non-whitespace is `|`.
 static PROP_LINE: Lazy<Regex> = lazy_regex!(r"^[ \t]*\|");
 
-/// The line-classifier regex sources — the introspectable truth that editor line-tier
-/// transliterations (emacs font-lock, the LSP's delegated-line walk) are checked against instead
-/// of hand-copying. Struct-shaped (not a `(name, pattern)` list) so a field rename is a Rust
-/// compile error at every consumer, not a stringly-keyed wasm runtime panic. Crosses the wasm
-/// boundary via `lineClassifiers()` (napi/nota), which consumes these fields directly. Patterns
-/// are the `regex` crate's originals (`.as_str()`), so nothing here can drift from the
-/// classifiers above.
+/// Regex sources exported to editor integrations by `lineClassifiers()`.
+///
+/// Named fields make classifier changes compile-time errors for Rust consumers.
 pub struct LineClassifierSources {
     pub percent_line: &'static str,
     pub fence_line: &'static str,

@@ -1289,10 +1289,9 @@ impl GenExpr for Expression<'_> {
             Self::TSInstantiationExpression(e) => e.print_expr(p, precedence, ctx),
             // V8 intrinsics (rare)
             Self::V8IntrinsicExpression(e) => e.print_expr(p, precedence, ctx),
-            // Nota markup is lowered to hyperscript before codegen in the build path; it never
-            // reaches codegen. Phase 4 may add real `Gen` impls for round-trip printing.
+            // Nota markup is lowered to JSX before codegen.
             Self::NotaMarkup(_) => {
-                unreachable!("NotaMarkup must be lowered to hyperscript before codegen")
+                unreachable!("NotaMarkup must be lowered to JSX before codegen")
             }
         }
     }

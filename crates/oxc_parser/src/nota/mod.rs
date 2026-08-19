@@ -35,11 +35,11 @@ use crate::{
         ArmedBoundary, CodeScan, ElsePeek, MarkupTrigger, MathScan, VerbatimBoundary,
         armed_boundary, at_line_start_in_frame, attrs_group_at, brace_clip_on_line, byte_at,
         colon_block_extent, colon_prop_line_at, docstate_left_guard, else_peek, escape_span,
-        find_emphasis_close, find_fence_close, find_strike_close, heading_at,
-        is_ident_start_at, is_statement_line, label_sugar_at, lex_code_span, lex_comment,
-        lex_math_span, line_content_end, line_indent_of, list_item_extent, list_marker_at,
-        markup_trigger, next_line_start, percent_line_is_empty, props_shape_at, ref_sugar_at,
-        scan_hyphen_tail, statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
+        find_emphasis_close, find_fence_close, find_strike_close, heading_at, is_ident_start_at,
+        is_statement_line, label_sugar_at, lex_code_span, lex_comment, lex_math_span,
+        line_content_end, line_indent_of, list_item_extent, list_marker_at, markup_trigger,
+        next_line_start, percent_line_is_empty, props_shape_at, ref_sugar_at, scan_hyphen_tail,
+        statement_bound, statement_kind, thematic_break_at, verbatim_boundary,
     },
 };
 
@@ -363,9 +363,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         // with a colon body exactly as with a braced/verbatim one — notation.md §Colon & block
         // sugar), anything else →
         // self-closing (a `:` under a dead gate stays literal text, exactly as for a bare head).
-        let mut self_closing_end = None;
-        let mut verbatim_start = None;
-        let mut colon_body = false;
+        let mut tail = ElementTail::Braced;
         while self.at(Kind::LBrack) {
             self.parse_props_group(&mut props);
             if self.has_fatal_error() {
@@ -382,7 +380,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // Verbatim body: scanned by absolute offset, like the bare `@head|{…}|` form —
                     // the boundary token stays current (the JS lexer must not eat the `|`; mirrors
                     // `commit_head`'s `MarkupTrigger::Verbatim` arm).
-                    verbatim_start = Some(bracket_end + 2);
+                    tail = ElementTail::Verbatim { body_start: bracket_end + 2 };
                     break;
                 }
                 Some(b':') if colon_live => {
@@ -391,7 +389,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // `Kind::Colon`, exactly as `commit_head`'s `MarkupTrigger::Colon` path does; the
                     // already-collected `props` thread through unchanged.
                     self.nota_seek_to(bracket_end);
-                    colon_body = true;
+                    tail = ElementTail::Colon;
                     break;
                 }
                 _ => {
@@ -399,31 +397,29 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                     // in a `Js` host, seeking at `bracket_end` re-lexes exactly the token a plain
                     // advance past `]` would, so no body text is dropped and no raw byte is JS-lexed.
                     self.resume_at(bracket_end);
-                    self_closing_end = Some(bracket_end);
+                    tail = ElementTail::SelfClosing { end: bracket_end };
                     break;
                 }
             }
         }
 
-        if let Some(body_start) = verbatim_start {
-            let v = self.parse_verbatim_element(span_start, head, props, body_start);
-            return NotaForm::Verbatim(self.ast.alloc(v));
-        }
-
-        if colon_body {
-            let e = self.parse_colon_body(span_start, head, props);
-            return NotaForm::Element(self.ast.alloc(e));
-        }
-
-        let (children, end) = if let Some(end) = self_closing_end {
-            (self.ast.vec(), end)
-        } else if self.at(Kind::LCurly) && !self.has_fatal_error() {
-            let (children, end) = self.parse_braced_body();
-            self.resume_at(end);
-            (children, end)
-        } else {
-            // Reached only after a fatal error in a prop group; keep a faithful span.
-            (self.ast.vec(), self.prev_token_end)
+        let (children, end) = match tail {
+            ElementTail::Verbatim { body_start } => {
+                let v = self.parse_verbatim_element(span_start, head, props, body_start);
+                return NotaForm::Verbatim(self.ast.alloc(v));
+            }
+            ElementTail::Colon => {
+                let e = self.parse_colon_body(span_start, head, props);
+                return NotaForm::Element(self.ast.alloc(e));
+            }
+            ElementTail::SelfClosing { end } => (self.ast.vec(), end),
+            ElementTail::Braced if self.at(Kind::LCurly) && !self.has_fatal_error() => {
+                let (children, end) = self.parse_braced_body();
+                self.resume_at(end);
+                (children, end)
+            }
+            // A prop-group diagnostic ended parsing before a body was selected.
+            ElementTail::Braced => (self.ast.vec(), self.prev_token_end),
         };
 
         let span = Span::new(span_start, end);
@@ -615,10 +611,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 Kind::NotaDollar => {
                     self.parse_math_or_literal(self.cur_token().start());
                 }
-                // Doc-state sugar (notation.md §Doc-state references): the lexer emits these only
-                // for a valid *shape*
-                // (`<`/`&` + ident-start, the `[^`+ident digraph); the parser resolves the left
-                // guard (`<`/`&`), the terminator scan, and marker-vs-literal.
+                // The lexer checks the opener shape; the parser checks boundaries and terminators.
                 Kind::LAngle => {
                     self.parse_label_sugar(self.cur_token().start());
                 }
@@ -627,10 +620,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 }
                 Kind::LBrack => {
                     self.parse_bracket_sugar(self.cur_token().start(), depth);
-                    // A `[^x]: body` definition reuses the colon-body extent machinery, so it can
-                    // resume at a line start exactly like an `@head:` form — same hook (else a
-                    // heading/list/`%` after the definition lexes as literal text; the mid-line
-                    // forms — mark/link/literal — resume mid-line and fall through it).
                     self.consume_line_start_after_form(depth);
                 }
                 Kind::Pipe => {
@@ -670,7 +659,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// or `%` statement directly after a comment line is sugar, not literal text). An unterminated
     /// block comment (no matching `*/` within the frame) is a fatal diagnostic.
     fn parse_nota_comment(&mut self, open: u32, depth: u32) {
-        let limit = self.docstate_scan_limit();
+        let limit = self.markup_scan_limit();
         let scan = lex_comment(self.nota_scan_source(), open, limit);
         if scan.block && !scan.terminated {
             let error = diagnostics::nota_unterminated_comment(Span::new(open, scan.end));
@@ -705,12 +694,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         }
     }
 
-    /// A colon-sugar body (`@head: …` — or a `[^x]: …` footnote definition, which reuses the same
-    /// extent machinery) consumes through its final line's `\n` and any trailing blank lines, so
-    /// the form can resume AT a line start — a position the `NotaNewline` arm's line-start hook
-    /// never sees. Run the same hook after such a form: a heading, list, or `%` statement directly
-    /// after a colon block is sugar, not literal text. (Forms that resume mid-line fail the
-    /// preceding-`\n` check and fall through — the hook is safe after any form.)
+    /// Run line-start sugar after a form that consumed its trailing newline, such as a colon body.
     fn consume_line_start_after_form(&mut self, depth: u32) {
         let at = self.cur_token().start();
         if !self.has_fatal_error() && at > 0 && byte_at(self.source_text, at - 1) == Some(b'\n') {
@@ -1240,21 +1224,14 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     }
 }
 
-// ===============================================================================================
-// Doc-state sugar (notation.md §Doc-state references): `<label>` / `&ref` / `[^mark]` /
-// line-start `[^label]: body`.
-// Each is surface sugar for an element form (`@Label[id: "…"]{}` / `@Ref[id: "…"]{}` /
-// `@FootnoteMark[label: "…"]{}` / `@FootnoteText[label: "…"]: body`) and inherits the element
-// machinery — the bounded-frame clip, the positional colon gate, the colon-body extent —
-// rather than growing extent rules of its own. A non-matching open is literal text (1-byte sigil).
-// ===============================================================================================
+// Doc-state sugar: `<label>` and `&ref`.
 
 impl<'a, C: Config> ParserImpl<'a, C> {
     /// The exclusive scan limit for a doc-state sugar: the clamped scan view's end (an armed form
     /// inside a raw span must not read past its extent), further clipped to a bounded frame's end
     /// (a match may not reach past the frame — `*<ab_-x>_` must not steal the `>` beyond the
     /// emphasis close).
-    fn docstate_scan_limit(&self) -> u32 {
+    fn markup_scan_limit(&self) -> u32 {
         let src_end = self.lexer.nota_source_end();
         match self.nota_body_mode().bound() {
             Some(bound) => bound.min(src_end),
@@ -1290,7 +1267,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// `<label>` at `open` (≡ `@Label[id: "label"]{}`), or a literal `<`.
     fn parse_label_sugar(&mut self, open: u32) {
-        let limit = self.docstate_scan_limit();
+        let limit = self.markup_scan_limit();
         if self.docstate_guard_ok(open)
             && let Some(label_span) = label_sugar_at(self.nota_scan_source(), open, limit)
         {
@@ -1312,7 +1289,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// `&ref` at `open` (≡ `@Ref[id: "ref"]{}`), or a literal `&`. A matched ref continues into
     /// [`Self::parse_ref_postfix`] for its glued `[props]`/`{body}` groups.
     fn parse_ref_sugar(&mut self, open: u32) {
-        let limit = self.docstate_scan_limit();
+        let limit = self.markup_scan_limit();
         if self.docstate_guard_ok(open)
             && let Some(label_span) = ref_sugar_at(self.nota_scan_source(), open, limit)
         {
@@ -1374,7 +1351,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
     /// digraph `[^…]` held the first tier until design/references.md retired it — footnote uses
     /// are `&id` refs, definitions the `@Footnote[id]: …` element form.)
     fn parse_bracket_sugar(&mut self, open: u32, depth: u32) {
-        let limit = self.docstate_scan_limit();
+        let limit = self.markup_scan_limit();
         // A depth-0 `}` may sit in an attrs group's trailing position only where it closes the
         // enclosing braced body.
         let closer_ok = matches!(self.nota_body_mode(), BodyMode::Body) && depth == 0;
@@ -1404,7 +1381,6 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         self.push_nota_item(NotaChild::Attrs(self.ast.alloc(node)));
         self.nota_seek_markup(end);
     }
-
 }
 
 // ===============================================================================================
@@ -1710,6 +1686,13 @@ enum HeadKind<'a> {
     Named { name: &'a str, span: Span },
     /// `@(expr)` — a dynamic head.
     Dynamic(Expression<'a>),
+}
+
+enum ElementTail {
+    Braced,
+    SelfClosing { end: u32 },
+    Verbatim { body_start: u32 },
+    Colon,
 }
 
 /// A tag name is a *component* (identifier) iff it starts with an uppercase ASCII letter;

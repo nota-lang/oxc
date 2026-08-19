@@ -97,8 +97,8 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 
-pub use crate::lexer::{Kind, Token};
 pub use crate::lexer::nota::{LineClassifierSources, line_classifier_sources};
+pub use crate::lexer::{Kind, Token};
 pub use crate::nota::highlight::{NotaHighlightKind, NotaHighlightSpan};
 use crate::{
     config::{
@@ -195,10 +195,9 @@ pub struct ParserReturn<'a> {
     pub is_flow_language: bool,
 }
 
-/// The result of [`Parser::parse_nota_document_recover`] — a (possibly truncated) Nota document
-/// `Program` **plus** the diagnostics recovered from it. Unlike [`ParserReturn`], the `Program` is
-/// always the real (partial) tree, never a dummy: EOF error-recovery keeps whatever was parsed
-/// before the open construct so the language server can still emit a virtual `.tsx`.
+/// A partial Nota program and its recovered diagnostics.
+///
+/// Unlike [`ParserReturn`], `program` is never replaced with a dummy after recovery.
 pub struct NotaDocumentRecover<'a> {
     /// The parsed (possibly truncated) Nota document `Program`.
     pub program: Program<'a>,
@@ -456,14 +455,9 @@ mod parser_parse {
             }
         }
 
-        /// Parse a whole `.nota` file in *document mode* → an oxc [`Program`].
-        ///
-        /// The file is markup at the top level; this returns the lowered module:
-        /// `export default function Doc() { …prelude…; return <NotaDoc>…</NotaDoc>; }` plus
-        /// hoisted `import`/`export` statements. Binding the emit's free names (`NotaDoc`,
-        /// `Reforest`, …) to imports is the caller's concern, not the parser's. To parse a single
-        /// expression-position markup element instead, use [`Parser::parse_expression`] with a
-        /// [`SourceType::is_nota`] source type.
+        /// Parse a `.nota` file into a faithful, unlowered Nota AST wrapped in a [`Program`].
+        /// Use [`Parser::parse_expression`] with [`SourceType::is_nota`] for expression-position
+        /// markup.
         ///
         /// # Errors
         /// If the file is not well-formed Nota.
@@ -479,18 +473,10 @@ mod parser_parse {
             .parse_nota_document()
         }
 
-        /// Parse a whole `.nota` file in *document mode* with **EOF error-recovery** (the
-        /// language-server `--virtual` path): at end of file with an open construct (an unclosed
-        /// `[props]` group, an unclosed `{ … }` body, a bare/incomplete `@`-head), the reader
-        /// synthesises the missing close and keeps the partial Nota AST, returning it **together
-        /// with** the collected diagnostics — instead of discarding the tree on the first fatal
-        /// error the way [`Self::parse_nota_document`] does. The editor thus still gets a virtual
-        /// `.tsx` (with mappings, incl. a props-completion anchor at `@tag[|`) plus syntax
-        /// diagnostics while a document is mid-edit.
+        /// Parse a `.nota` file with EOF recovery for editor tooling.
         ///
-        /// Never returns `Err`: a recovered parse always yields a (possibly truncated) `Program`.
-        /// `errors` is empty for a well-formed file, in which case the `Program` is byte-identical
-        /// to [`Self::parse_nota_document`]'s.
+        /// This always returns a partial or complete AST plus diagnostics. An unclosed props group
+        /// also records the completion anchor used by the virtual TSX mapping.
         pub fn parse_nota_document_recover(self) -> NotaDocumentRecover<'a> {
             ParserImpl::<C>::new(
                 self.allocator,
@@ -503,11 +489,8 @@ mod parser_parse {
             .parse_nota_document_recover()
         }
 
-        /// Reader-faithful syntax highlighting for a whole `.nota` file: parse in document mode,
-        /// walk the Nota AST for structural spans, and re-lex the embedded-JS extents for token
-        /// classes. Returns classified `[start, end)` spans sorted start-ascending /
-        /// end-descending (outer spans before the spans they contain — paint in list order).
-        /// See [`crate::nota::highlight`] for the classification model.
+        /// Parse a `.nota` file and return structural and embedded-JS highlight spans. Spans are
+        /// sorted by start ascending and end descending for paint-order layering.
         ///
         /// # Errors
         /// If the file is not well-formed Nota (clients keep their last-good highlights).
@@ -524,19 +507,15 @@ mod parser_parse {
 
             let (mut spans, mut js_ranges) =
                 crate::nota::highlight::collect_structural(self.source_text, &program);
-            // Markup comments are trivia (never AST children); the parse carried them on the
-            // Program's comments vec — merge them as `Comment` spans. (Embedded-JS comments are
-            // classified `JsComment` by the re-lex pump below instead.)
+            // Markup comments are Program trivia; embedded-JS comments come from the lexer pass.
             spans.extend(program.comments.iter().map(|c| NotaHighlightSpan {
                 start: c.span.start,
                 end: c.span.end,
                 kind: NotaHighlightKind::Comment,
             }));
-            // The walker pops nested JS frames before their parents; the pump wants source order
-            // (ranges are disjoint, so sorting by start suffices).
+            // Nested frames are collected inside-out; the lexer pass expects source order.
             js_ranges.sort_unstable_by_key(|range| range.start);
-            // A second, throwaway `ParserImpl` drives the lexer over the JS ranges (the first was
-            // consumed by the parse). `ParserConfig: Default`, so a fresh config is equivalent.
+            // The document parse consumed its parser, so use a fresh one to lex the JS ranges.
             let mut pump = ParserImpl::<C>::new(
                 self.allocator,
                 self.source_text,

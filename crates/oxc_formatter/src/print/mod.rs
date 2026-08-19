@@ -975,9 +975,7 @@ impl<'a> FormatWrite<'a> for AstNode<'a, V8IntrinsicExpression<'a>> {
     }
 }
 
-// Nota nodes are lowered to hyperscript before the JS formatter runs; the JS/TS formatter (oxfmt)
-// never encounters them. These stubs keep the generated per-node `Format` dispatch total. Phase 4
-// may give Nota nodes real formatting for a dedicated `.nota` formatter.
+// Nota nodes are lowered to JSX before the JS formatter runs.
 macro_rules! nota_format_unreachable {
     ($($ty:ident),+ $(,)?) => {
         $(

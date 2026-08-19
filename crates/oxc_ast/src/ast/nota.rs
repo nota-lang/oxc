@@ -153,7 +153,7 @@ pub enum NotaChild<'a> {
     Heading(Box<'a, NotaHeading<'a>>) = 11,
     /// `-`/`+`/`N.` list item (per-line; the runtime coalesces runs).
     ListItem(Box<'a, NotaListItem<'a>>) = 12,
-    /// `<label>` / `&ref` / `[^mark]` / line-start `[^label]: body` — inline doc-state sugar.
+    /// `<label>` / `&ref` — inline doc-state sugar.
     DocState(Box<'a, NotaDocState<'a>>) = 13,
     /// A `---` thematic-break line (a run of 3+ `-` alone on its line) → `<hr />`.
     ThematicBreak(Box<'a, NotaThematicBreak>) = 14,
@@ -518,10 +518,9 @@ pub struct NotaListItem<'a> {
     pub children: Vec<'a, NotaChild<'a>>,
 }
 
-/// Whether a list item is unordered (`-` → the reference-named `<UlLi>`) or ordered (`+`/`N.` →
-/// `<OlLi>`) — `oxc_transformer`'s `NotaLowering::lower_list_item` builds the element directly, not
-/// through the host-tag path, so a literal user tag spelled `@nota-ul-li`/`@nota-ol-li` cannot
-/// collide with it.
+/// Whether a list item lowers to the runtime's `<UlLi>` or `<OlLi>` component.
+///
+/// Lowering constructs the component directly, so literal tags with those names do not collide.
 #[ast]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[generate_derive(CloneIn, Dummy, ContentEq, ESTree)]
