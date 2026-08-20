@@ -32,10 +32,19 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v4
 
-      - name: Install wasm-bindgen + binaryen
+      - name: Install Binaryen
+        env:
+          BINARYEN_VERSION: "132"
+        run: |
+          mkdir -p "$RUNNER_TEMP/binaryen"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" \
+            | tar xz --strip-components=1 -C "$RUNNER_TEMP/binaryen"
+          echo "$RUNNER_TEMP/binaryen/bin" >> "$GITHUB_PATH"
+
+      - name: Install wasm-bindgen
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.126,binaryen
+          tool: wasm-bindgen@0.2.126
 
       - name: Tests
         run: just nota-tests
