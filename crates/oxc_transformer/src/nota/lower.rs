@@ -32,6 +32,13 @@ pub struct NotaLoweringReturn {
     pub mappings: Vec<NotaMappingMark>,
     /// Name-collision / duplicate-default-export diagnostics (empty on a clean document).
     pub diagnostics: Vec<OxcDiagnostic>,
+    /// The language tags written on fenced code blocks (```rust), sorted and deduplicated.
+    ///
+    /// Highlighting grammars are opt-in and cost 50-190 KB each, so the integrator turns this
+    /// into the imports and the `lstset` registration a document needs — see
+    /// `@nota-lang/compiler`. Collected here because this is where a fence tag is known to *be*
+    /// a fence tag; recovering it downstream would mean re-parsing the emit.
+    pub fence_langs: Vec<String>,
 }
 
 /// The Nota lowering pass. `collect_mappings` gates Volar CodeMapping mark collection (off for the
@@ -41,6 +48,7 @@ pub struct NotaLowering<'a> {
     pub(super) source_text: &'a str,
     mappings: Vec<NotaMappingMark>,
     diagnostics: Vec<OxcDiagnostic>,
+    fence_langs: Vec<String>,
     collect_mappings: bool,
 }
 
@@ -51,6 +59,7 @@ impl<'a> NotaLowering<'a> {
             source_text,
             mappings: Vec::new(),
             diagnostics: Vec::new(),
+            fence_langs: Vec::new(),
             collect_mappings,
         }
     }
@@ -79,7 +88,10 @@ impl<'a> NotaLowering<'a> {
         let mut marks = self.mappings;
         // Volar wants ascending source offsets (the walk visits children before some siblings).
         marks.sort_by_key(|m| (m.span.start, m.span.end));
-        NotaLoweringReturn { mappings: marks, diagnostics: self.diagnostics }
+        let mut fence_langs = self.fence_langs;
+        fence_langs.sort_unstable();
+        fence_langs.dedup();
+        NotaLoweringReturn { mappings: marks, diagnostics: self.diagnostics, fence_langs }
     }
 
     /// Record a source→generated mapping mark, iff collection is on. Empty spans (synthesized
@@ -401,6 +413,7 @@ impl<'a> NotaLowering<'a> {
                 let at = Span::empty(span.start);
                 let val = self.ast.expression_string_literal(at, lang.as_str(), None);
                 props.push(self.jsx_attr(at, at, "lang", Some(val)));
+                self.fence_langs.push(lang.as_str().to_string());
             }
             self.build_named_element(span, super::CODE_BLOCK, props, children)
         } else {

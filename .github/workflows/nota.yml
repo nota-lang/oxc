@@ -32,13 +32,11 @@ jobs:
       - name: Install Just
         uses: extractions/setup-just@v4
 
-      - name: Install wasm-pack
+      - name: Install wasm-bindgen + binaryen
         uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.126
+          tool: wasm-bindgen@0.2.126,binaryen
 
-      # `just nota-tests` is the single source of truth for the reader's test layers
-      # (oxc_codegen integration, oxc_parser lib, oxc_transformer lib, oxc --features codegen).
       - name: Tests
         run: just nota-tests
 

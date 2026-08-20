@@ -39,6 +39,9 @@ pub struct NotaOutput {
     #[serde(skip)]
     pub map: Option<oxc_sourcemap::SourceMap>,
     pub free_names: Vec<String>,
+    /// Language tags on fenced code blocks, sorted and deduplicated. The integrator turns these
+    /// into grammar imports + an `lstset` registration (grammars are opt-in and large).
+    pub fence_langs: Vec<String>,
     pub mappings: Vec<CodeMapping>,
     pub errors: Vec<NotaDiagnostic>,
     pub ast: Option<String>,
@@ -264,7 +267,16 @@ fn compile_internal(
         Vec::new()
     };
     let errors = errors.iter().map(NotaDiagnostic::from).collect();
-    Ok(NotaOutput { code, map, free_names, mappings, errors, ast, highlights })
+    Ok(NotaOutput {
+        code,
+        map,
+        free_names,
+        fence_langs: lowered.fence_langs,
+        mappings,
+        errors,
+        ast,
+        highlights,
+    })
 }
 
 /// Strip embedded TypeScript from the (already Nota-lowered) plain-JS/TS `program` in place, leaving
@@ -610,6 +622,37 @@ mod tests {
             compile("%let mathset = () => 1\n@p{x}\n", None).is_ok(),
             "config fns are ambient but not emit-referenced — not reserved"
         );
+    }
+
+    #[test]
+    fn fence_langs_are_collected_sorted_and_deduplicated() {
+        // Grammars are opt-in downstream, so the tags are reported rather than resolved here:
+        // aliases (`js`) and unknown tags (`wibble`) come through verbatim, and the integrator
+        // decides which of them names a grammar it can import.
+        let out = compile(
+            "```rust\nfn main() {}\n```\n\n```js\nlet x = 1\n```\n\n```rust\nfn f() {}\n```\n\n```wibble\n?\n```\n",
+            None,
+        )
+        .expect("compiles");
+        assert_eq!(out.fence_langs, vec!["js", "rust", "wibble"]);
+    }
+
+    #[test]
+    fn fence_langs_omit_untagged_fences_and_inline_code() {
+        // An untagged fence takes its language from `lstset` at runtime, which is a value this
+        // pass cannot see; inline code has no tag at all. Neither may invent an import.
+        let out = compile("```\nplain\n```\n\nSome `inline` code.\n", None).expect("compiles");
+        assert!(out.fence_langs.is_empty(), "{:?}", out.fence_langs);
+    }
+
+    #[test]
+    fn fence_langs_exclude_the_explicit_code_block_form() {
+        // Only the fence sugar reports a tag. `@CodeBlock[lang: …]` is the escape hatch, lowered
+        // as an ordinary tagged element whose `lang` prop is an arbitrary expression — literal
+        // here, but `lang: chosen` tomorrow — so there is no tag this pass can honestly report.
+        // Documents using that form register their grammar through `lstset({ langs })`.
+        let out = compile("@CodeBlock[lang: \"python\"]|{f(x)}|\n", None).expect("compiles");
+        assert!(out.fence_langs.is_empty(), "{:?}", out.fence_langs);
     }
 
     #[test]
@@ -1040,7 +1083,10 @@ mod analysis_json {
     #[test]
     fn top_level_and_mapping_shapes() {
         let json = parse("@a[k: theId]{@(user)}\n");
-        assert_keys(&json, &["ast", "code", "errors", "freeNames", "highlights", "mappings"]);
+        assert_keys(
+            &json,
+            &["ast", "code", "errors", "fenceLangs", "freeNames", "highlights", "mappings"],
+        );
 
         let code = json["code"].as_str().expect("`code` is a string");
         assert!(code.contains("export default function Doc()"), "framed TSX: {code}");

@@ -277,6 +277,9 @@ similar.opt-level = 3
 [profile.release.package.oxc_playground_napi]
 opt-level = 'z'
 
+[profile.release.package.nota]
+opt-level = 'z'
+
 [profile.release]
 # Configurations explicitly listed here for clarity.
 # Using the best options for performance.
