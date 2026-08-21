@@ -337,5 +337,5 @@ nota-lints:
 nota-build:
   cargo build -p nota --target wasm32-unknown-unknown --release
   wasm-bindgen target/wasm32-unknown-unknown/release/nota.wasm --out-dir target/js --target bundler
-  wasm-opt -O3 -all target/js/nota_bg.wasm --output tmp.wasm
+  wasm-opt -O3 target/js/nota_bg.wasm --output tmp.wasm
   mv tmp.wasm target/js/nota_bg.wasm
