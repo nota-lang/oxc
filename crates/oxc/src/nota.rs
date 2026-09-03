@@ -217,15 +217,9 @@ fn compile_internal(
     };
 
     let allocator = Allocator::default();
-    let (mut program, mut errors) = if recover {
-        let recovered =
-            Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document_recover();
-        (recovered.program, recovered.errors)
-    } else {
-        let program =
-            Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document()?;
-        (program, Vec::new())
-    };
+    let parsed = Parser::new(&allocator, source_text, SourceType::nota()).parse_nota_document();
+    let (mut program, mut errors) =
+        if recover { (parsed.program, parsed.errors) } else { (parsed.into_result()?, Vec::new()) };
 
     let (ast, highlights) = if recover {
         let ast = program.to_estree_js_json(true);

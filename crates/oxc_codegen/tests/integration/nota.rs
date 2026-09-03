@@ -102,7 +102,8 @@ fn nota_expr_err(source: &str) {
 #[track_caller]
 fn nota_doc_err(source: &str) {
     let allocator = Allocator::default();
-    let result = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document();
+    let result =
+        Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().into_result();
     assert!(
         result.is_err(),
         "expected a document-mode diagnostic for {source:?}, but parse succeeded"
@@ -142,7 +143,7 @@ fn reparses(js: &str) -> bool {
 /// its own right and should fail the calling test loudly rather than report `false`.
 fn doc_parses(source: &str) -> bool {
     let allocator = Allocator::default();
-    Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().is_ok()
+    Parser::new(&allocator, source, SourceType::nota()).parse_nota_document().errors.is_empty()
 }
 
 /// Compile a whole `.nota` file to a JS module string **without** the validity assertion — for
@@ -153,6 +154,7 @@ fn emit_doc_unchecked(source: &str) -> String {
     let allocator = Allocator::default();
     let mut program = Parser::new(&allocator, source, SourceType::nota())
         .parse_nota_document()
+        .into_result()
         .unwrap_or_else(|errors| panic!("Nota parse failed for {source:?}: {errors:?}"));
     oxc_transformer::NotaLowering::new(&allocator, source, false)
         .lower_document_program(&mut program);
@@ -2170,8 +2172,10 @@ fn attrs_reserved_name_collision() {
     // `Attrs` joined the reserved emit surface: a user binding of it is diagnosed at lowering.
     let allocator = Allocator::default();
     let src = "% const Attrs = 1;\nx\n";
-    let mut program =
-        Parser::new(&allocator, src, SourceType::nota()).parse_nota_document().expect("parses");
+    let mut program = Parser::new(&allocator, src, SourceType::nota())
+        .parse_nota_document()
+        .into_result()
+        .expect("parses");
     let ret = oxc_transformer::NotaLowering::new(&allocator, src, false)
         .lower_document_program(&mut program);
     assert!(
@@ -2612,6 +2616,7 @@ mod fuzz_findings_2 {
         let allocator = Allocator::default();
         let mut program = Parser::new(&allocator, source, SourceType::nota())
             .parse_nota_document()
+            .into_result()
             .unwrap_or_else(|e| panic!("Nota parse failed for {source:?}: {e:?}"));
         oxc_transformer::NotaLowering::new(&allocator, source, false)
             .lower_document_program(&mut program)
@@ -2974,6 +2979,7 @@ mod fuzz_findings_2 {
         let allocator = Allocator::default();
         let program = Parser::new(&allocator, "@p{Hello}", SourceType::nota())
             .parse_nota_document()
+            .into_result()
             .expect("parses");
         let Some(Statement::ExpressionStatement(stmt)) = program.body.first() else {
             panic!("expected an expression statement")

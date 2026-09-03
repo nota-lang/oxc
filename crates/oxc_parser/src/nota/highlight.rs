@@ -797,16 +797,18 @@ mod tests {
     use oxc_span::SourceType;
 
     use super::NotaHighlightKind as K;
-    use crate::Parser;
+    use crate::{Parser, nota_highlights_from_program};
 
     /// Highlight `source` → `(kind, excerpt)` pairs in paint order.
+    ///
+    /// Runs the production path — a recovered parse, then `nota_highlights_from_program` — so the
+    /// spans under test come from the same AST shape `oxc::nota::analyze` feeds the collector.
     fn hl(source: &str) -> Vec<(K, String)> {
         let allocator = Allocator::default();
-        let spans = Parser::new(&allocator, source, SourceType::nota())
-            .parse_nota_highlights()
-            .expect("test doc must parse");
-        spans
-            .iter()
+        let parsed = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document();
+        assert!(parsed.errors.is_empty(), "test doc must parse: {:?}", parsed.errors);
+        nota_highlights_from_program(&allocator, source, &parsed.program)
+            .into_iter()
             .map(|s| (s.kind, source[s.start as usize..s.end as usize].to_string()))
             .collect()
     }
@@ -1096,15 +1098,17 @@ mod tests {
         assert!(has(&spans, K::JsString, "\"tip\""));
     }
 
-    /// The malformed-document contract: `parse_nota_highlights` parses with the STRICT document
-    /// entry, so a malformed document returns `Err` (no spans-so-far) — clients keep their
-    /// last-good highlights (see the entry's doc in `lib.rs`).
+    /// The malformed-document contract as production actually runs it: `oxc::nota::analyze`
+    /// highlights a *recovered* parse, so a truncated document still paints the spans scanned so
+    /// far alongside its diagnostics.
     #[test]
-    fn malformed_document_returns_err_not_partial_spans() {
+    fn malformed_document_yields_partial_spans() {
         let allocator = Allocator::default();
-        let result = Parser::new(&allocator, "@p{", SourceType::nota()).parse_nota_highlights();
-        let errors = result.expect_err("malformed document must not yield spans");
-        assert!(!errors.is_empty(), "the parse diagnostics are returned");
+        let src = "@p{";
+        let parsed = Parser::new(&allocator, src, SourceType::nota()).parse_nota_document();
+        assert!(!parsed.errors.is_empty(), "the truncated document reports diagnostics");
+        let spans = nota_highlights_from_program(&allocator, src, &parsed.program);
+        assert!(!spans.is_empty(), "a recovered parse still paints what it scanned");
     }
 
     #[test]
@@ -1159,8 +1163,8 @@ mod tests {
     fn spans_are_sorted_outer_first() {
         let src = "# H *b*\n\n%let x = 1\n@em{y}\n";
         let allocator = Allocator::default();
-        let spans =
-            Parser::new(&allocator, src, SourceType::nota()).parse_nota_highlights().unwrap();
+        let parsed = Parser::new(&allocator, src, SourceType::nota()).parse_nota_document();
+        let spans = nota_highlights_from_program(&allocator, src, &parsed.program);
         for pair in spans.windows(2) {
             assert!(
                 pair[0].start < pair[1].start

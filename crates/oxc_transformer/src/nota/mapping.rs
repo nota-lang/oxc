@@ -78,6 +78,7 @@ mod mapping_collection_tests {
         let allocator = Allocator::default();
         let mut program = Parser::new(&allocator, src, SourceType::nota())
             .parse_nota_document()
+            .into_result()
             .unwrap_or_else(|e| panic!("parse failed for {src:?}: {e:?}"));
         NotaLowering::new(&allocator, src, true).lower_document_program(&mut program).mappings
     }
@@ -143,8 +144,10 @@ mod mapping_collection_tests {
         // directly, now that both paths return the same `Vec<NotaMappingMark>`.)
         let allocator = Allocator::default();
         let src = "@p[id: theId]{@(user)}\n";
-        let mut program =
-            Parser::new(&allocator, src, SourceType::nota()).parse_nota_document().unwrap();
+        let mut program = Parser::new(&allocator, src, SourceType::nota())
+            .parse_nota_document()
+            .into_result()
+            .unwrap();
         let marks =
             NotaLowering::new(&allocator, src, false).lower_document_program(&mut program).mappings;
         assert!(marks.is_empty(), "collect=false yields no marks: {marks:?}");

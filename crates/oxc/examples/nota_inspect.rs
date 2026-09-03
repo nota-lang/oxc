@@ -160,8 +160,9 @@ fn run_document<'a>(
     report: &mut Report,
 ) {
     // Stage 1 — parse.
-    let parsed =
-        caught(captured, || Parser::new(allocator, source, source_type).parse_nota_document());
+    let parsed = caught(captured, || {
+        Parser::new(allocator, source, source_type).parse_nota_document().into_result()
+    });
     let mut program = match parsed {
         Err(message) => {
             report.panic = Some(("parse".to_string(), message));

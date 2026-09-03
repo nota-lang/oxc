@@ -195,15 +195,22 @@ pub struct ParserReturn<'a> {
     pub is_flow_language: bool,
 }
 
-/// A partial Nota program and its recovered diagnostics.
+/// A Nota program and its diagnostics.
 ///
-/// Unlike [`ParserReturn`], `program` is never replaced with a dummy after recovery.
-pub struct NotaDocumentRecover<'a> {
+/// Unlike [`ParserReturn`], `program` is never replaced with a dummy after an error.
+pub struct NotaDocumentReturn<'a> {
     /// The parsed (possibly truncated) Nota document `Program`.
     pub program: Program<'a>,
-    /// Diagnostics collected during the recovered parse. Empty ⇒ the file was well-formed and the
+    /// Diagnostics collected during the parse. Empty ⇒ the file was well-formed and the
     /// `program` equals [`Parser::parse_nota_document`]'s.
     pub errors: Vec<OxcDiagnostic>,
+}
+
+impl<'a> NotaDocumentReturn<'a> {
+    /// Convert this parse into the strict result expected by compiler paths.
+    pub fn into_result(self) -> Result<Program<'a>, Vec<OxcDiagnostic>> {
+        if self.errors.is_empty() { Ok(self.program) } else { Err(self.errors) }
+    }
 }
 
 /// Parse options
@@ -475,9 +482,11 @@ mod parser_parse {
         /// Use [`Parser::parse_expression`] with [`SourceType::is_nota`] for expression-position
         /// markup.
         ///
-        /// # Errors
-        /// If the file is not well-formed Nota.
-        pub fn parse_nota_document(self) -> Result<Program<'a>, Vec<OxcDiagnostic>> {
+        /// This always returns the real, possibly truncated AST together with its diagnostics. An
+        /// unclosed props group also records the completion anchor used by virtual TSX mappings, so
+        /// editor tooling can keep operating on an incomplete document. Compiler callers should
+        /// use [`NotaDocumentReturn::into_result`] to reject a document with diagnostics.
+        pub fn parse_nota_document(self) -> NotaDocumentReturn<'a> {
             ParserImpl::<C>::new(
                 self.allocator,
                 self.source_text,
@@ -487,47 +496,6 @@ mod parser_parse {
                 UniquePromise::new(),
             )
             .parse_nota_document()
-        }
-
-        /// Parse a `.nota` file with EOF recovery for editor tooling.
-        ///
-        /// This always returns a partial or complete AST plus diagnostics. An unclosed props group
-        /// also records the completion anchor used by the virtual TSX mapping.
-        pub fn parse_nota_document_recover(self) -> NotaDocumentRecover<'a> {
-            ParserImpl::<C>::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                self.config,
-                UniquePromise::new(),
-            )
-            .parse_nota_document_recover()
-        }
-
-        /// Parse a `.nota` file and return structural and embedded-JS highlight spans. Spans are
-        /// sorted by start ascending and end descending for paint-order layering.
-        ///
-        /// # Errors
-        /// If the file is not well-formed Nota (clients keep their last-good highlights).
-        pub fn parse_nota_highlights(self) -> Result<Vec<NotaHighlightSpan>, Vec<OxcDiagnostic>> {
-            let program = ParserImpl::<C>::new(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                self.config,
-                UniquePromise::new(),
-            )
-            .parse_nota_document()?;
-            Ok(nota_highlights_from_program(
-                self.allocator,
-                self.source_text,
-                self.source_type,
-                self.options,
-                C::default(),
-                &program,
-            ))
         }
     }
 
@@ -748,13 +716,7 @@ struct ParserImpl<'a, C: ParserConfig> {
     /// Precomputed typescript detection
     is_ts: bool,
 
-    /// Nota EOF error-recovery mode. Set only by [`ParserImpl::parse_nota_document_recover`] (the
-    /// `--virtual` language-server path): at end of file with an open construct, the reader keeps
-    /// the partial Nota AST + reports the diagnostics rather than discarding both, so the editor
-    /// still gets a virtual `.tsx` and syntax diagnostics. Never set on the build/compile paths.
-    nota_recover: bool,
-
-    /// Pending Nota `[props]` completion anchor recorded during recovery: the `Span` of an unclosed
+    /// Pending Nota `[props]` completion anchor: the `Span` of an unclosed
     /// `[` whose group ran into EOF. [`ParserImpl::parse_element`] consumes it into the element's
     /// `props_recovery` field (then the lowering emits a completion anchor into the props object).
     nota_prop_anchor: Option<Span>,
@@ -790,7 +752,6 @@ impl<'a, C: ParserConfig> ParserImpl<'a, C> {
             ast: AstBuilder::new(allocator),
             module_record_builder: ModuleRecordBuilder::new(allocator, source_type),
             is_ts: source_type.is_typescript(),
-            nota_recover: false,
             nota_prop_anchor: None,
         }
     }

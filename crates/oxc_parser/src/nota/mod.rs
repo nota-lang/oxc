@@ -88,16 +88,13 @@ impl<'a, C: Config> ParserImpl<'a, C> {
 
     /// Parse a whole `.nota` file in *document mode* → a [`Program`] holding the un-lowered
     /// document as a single `Expression::NotaMarkup(Document)` statement.
-    ///
-    /// # Errors
-    /// If the file is not well-formed Nota.    
-    pub(crate) fn parse_nota_document(mut self) -> Result<Program<'a>, Vec<OxcDiagnostic>> {
+    pub(crate) fn parse_nota_document(mut self) -> crate::NotaDocumentReturn<'a> {
         // No JS `bump_any` priming: the file starts as markup (or a `%` line), and a leading
         // `\`/`%`/etc. would choke the JS lexer. `parse_document_body` seeks from offset 0 itself.
         let document = self.parse_document_body();
         let program = self.wrap_document_program(document);
-        self.finish_nota()?;
-        Ok(program)
+        let errors = self.finish_nota();
+        crate::NotaDocumentReturn { program, errors }
     }
 
     fn wrap_document_program(&mut self, document: NotaDocument<'a>) -> Program<'a> {
@@ -120,36 +117,12 @@ impl<'a, C: Config> ParserImpl<'a, C> {
         )
     }
 
-    /// Parse a whole `.nota` file in document mode with EOF error-recovery (the `--virtual`
-    /// language-server path). Returns the partial [`Program`] **and** all diagnostics — the tree is
-    /// never discarded (see [`crate::Parser::parse_nota_document_recover`]).
-    pub(crate) fn parse_nota_document_recover(mut self) -> crate::NotaDocumentRecover<'a> {
-        self.nota_recover = true;
-        let document = self.parse_document_body();
-        let program = self.wrap_document_program(document);
-        let errors = self.finish_nota_recover();
-        crate::NotaDocumentRecover { program, errors }
-    }
-
-    /// Shared finalize for the Nota entries: collect fatal/lexer/parser diagnostics.
-    fn finish_nota(mut self) -> Result<(), Vec<OxcDiagnostic>> {
-        if let Some(FatalError { error, .. }) = self.fatal_error.take() {
-            return Err(vec![error]);
-        }
-        self.check_unfinished_errors();
-        let errors = self.lexer.errors.into_iter().chain(self.errors).collect::<Vec<_>>();
-        if !errors.is_empty() {
-            return Err(errors);
-        }
-        Ok(())
-    }
-
-    /// Recover-path finalize: collect **all** diagnostics (fatal + lexer + parser) without
+    /// Collect **all** diagnostics (fatal + lexer + parser) without
     /// discarding the partial AST. Mirrors `parse()`'s post-fatal cleanup — truncate the parser
     /// errors accumulated *after* the fatal was recorded (they are downstream noise from the
     /// aborted construct) — but keeps the fatal itself as a real diagnostic rather than swallowing
     /// the whole parse.
-    fn finish_nota_recover(mut self) -> Vec<OxcDiagnostic> {
+    fn finish_nota(mut self) -> Vec<OxcDiagnostic> {
         let fatal = self.fatal_error.take();
         if let Some(FatalError { errors_len, .. }) = &fatal {
             self.errors.truncate(*errors_len);
@@ -930,11 +903,10 @@ impl<'a, C: Config> ParserImpl<'a, C> {
                 break;
             }
         }
-        // EOF error-recovery (`--virtual`): a `[props]` group that ran into end of file records a
+        // EOF recovery: a `[props]` group that ran into end of file records a
         // completion anchor at its `[` so the lowering can offer prop completions at `@tag[|`. The
-        // `expect_closing` diagnostic below still fires (demoted from fatal to recoverable by the
-        // recover entry), so the editor also shows "expected `]`".
-        if self.nota_recover && self.at(Kind::Eof) {
+        // `expect_closing` diagnostic below still fires, so the editor also shows "expected `]`".
+        if self.at(Kind::Eof) {
             self.nota_prop_anchor = Some(open);
         }
         self.expect_closing_without_advance(Kind::RBrack, open);
@@ -1814,7 +1786,7 @@ mod recover_tests {
     /// child count witnesses that a partial tree survived recovery.
     fn recover_probe(source: &str) -> (Vec<String>, usize) {
         let allocator = Allocator::default();
-        let r = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document_recover();
+        let r = Parser::new(&allocator, source, SourceType::nota()).parse_nota_document();
         let errors = r.errors.iter().map(std::string::ToString::to_string).collect();
         let Some(Statement::ExpressionStatement(stmt)) = r.program.body.first() else {
             panic!("recovered program is not a single expression statement");
@@ -1935,8 +1907,10 @@ mod comment_tests {
     fn markup_comments_land_on_the_program_comments_vec() {
         let src = "a // note\n/* block\nstill */\nb\n";
         let allocator = Allocator::default();
-        let program =
-            Parser::new(&allocator, src, SourceType::nota()).parse_nota_document().expect("parses");
+        let program = Parser::new(&allocator, src, SourceType::nota())
+            .parse_nota_document()
+            .into_result()
+            .expect("parses");
 
         assert_eq!(program.comments.len(), 2, "exactly two comments: {:?}", program.comments);
 
@@ -1953,6 +1927,7 @@ mod comment_tests {
         let single = "x /* one line */ y\n";
         let program = Parser::new(&allocator, single, SourceType::nota())
             .parse_nota_document()
+            .into_result()
             .expect("parses");
         assert_eq!(program.comments.len(), 1);
         assert_eq!(program.comments[0].kind, CommentKind::SingleLineBlock);

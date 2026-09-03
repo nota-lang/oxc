@@ -1,6 +1,6 @@
 # Nota reader — architecture notes (lives with the code)
 
-The Nota *reader* built into this oxc fork (branch `solid`, off `nota`): parser, AST, lowering,
+The Nota _reader_ built into this oxc fork (branch `solid`, off `nota`): parser, AST, lowering,
 and compiler entries. The spec lives in the main repo: `design/notation.md` (surface syntax) and
 `design/solid.md` (the Solid-only architecture — the emit is **Solid JSX**; it supersedes
 decode.md there). This file describes the **current architecture** — history lives in git.
@@ -10,10 +10,10 @@ decode.md there). This file describes the **current architecture** — history l
 Nota is **markup-outer, JS-embedded, mutually recursive** — the inverse of JSX: a `.nota` file is
 markup at the top level; JS is embedded inside it (`%` statements, `[props]` values, `@(expr)`,
 `@if`/`@for` heads); and markup re-embeds in that JS (`%let C = (props) => @span{…}`) because
-an `@`-form *is* an expression. Three capabilities are therefore required simultaneously: a
+an `@`-form _is_ an expression. Three capabilities are therefore required simultaneously: a
 document mode (a whole file parses as markup), markup parseable in JS expression position, and
 embedded JS parseable from markup. Component bodies are JS-containing-markup — you cannot locate
-the markup sub-spans inside a JS body without parsing the JS, so oxc's *own* expression parser
+the markup sub-spans inside a JS body without parsing the JS, so oxc's _own_ expression parser
 must recognize `@`. A separate front-end layered on top (Scribble-style) can't do this. Hence the
 fork — kept shallow (see the fork seam below).
 
@@ -26,22 +26,23 @@ fork — kept shallow (see the fork seam below).
   → oxc_codegen        JS text (+ sourcemap, + opt-in offset log)
   → crates/oxc/src/nota.rs   strict compile / recovered analysis + CodeMapping join
 ```
+
 The recovered analysis derives the ESTree JSON and highlight spans from the same parsed program
 before lowering it to virtual TSX.
 
-| Piece | File |
-|---|---|
-| Markup lexing (typed child tokens + pure scans) | `crates/oxc_parser/src/lexer/nota.rs` |
-| Parser (markup → Nota AST) | `crates/oxc_parser/src/nota/mod.rs` |
-| Highlight pass (AST walk + embedded-JS re-lex → spans) | `crates/oxc_parser/src/nota/highlight.rs` |
-| Nota AST nodes (`Expression::NotaMarkup` umbrella) | `crates/oxc_ast/src/ast/nota.rs` |
-| Lowering pass (AST → Solid JSX, `%` routing) | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs` |
-| Scribble whitespace algorithm (pure + unit tests) | `crates/oxc_transformer/src/nota/scribble.rs` |
-| Volar mapping marks | `crates/oxc_transformer/src/nota/mapping.rs` |
-| Compile entries + CodeMapping join (+ mapping/virtual-emit tests) | `crates/oxc/src/nota.rs` |
-| Dev tools | `crates/oxc/examples/nota_compile.rs`, `nota_inspect.rs` |
-| wasm bindings (playground) | `napi/nota/src/lib.rs` |
-| E2E fixtures (parse→lower→codegen, exact-emit) | `crates/oxc_codegen/tests/integration/nota.rs` |
+| Piece                                                             | File                                                     |
+| ----------------------------------------------------------------- | -------------------------------------------------------- |
+| Markup lexing (typed child tokens + pure scans)                   | `crates/oxc_parser/src/lexer/nota.rs`                    |
+| Parser (markup → Nota AST)                                        | `crates/oxc_parser/src/nota/mod.rs`                      |
+| Highlight pass (AST walk + embedded-JS re-lex → spans)            | `crates/oxc_parser/src/nota/highlight.rs`                |
+| Nota AST nodes (`Expression::NotaMarkup` umbrella)                | `crates/oxc_ast/src/ast/nota.rs`                         |
+| Lowering pass (AST → Solid JSX, `%` routing)                      | `crates/oxc_transformer/src/nota/{mod,lower,build}.rs`   |
+| Scribble whitespace algorithm (pure + unit tests)                 | `crates/oxc_transformer/src/nota/scribble.rs`            |
+| Volar mapping marks                                               | `crates/oxc_transformer/src/nota/mapping.rs`             |
+| Compile entries + CodeMapping join (+ mapping/virtual-emit tests) | `crates/oxc/src/nota.rs`                                 |
+| Dev tools                                                         | `crates/oxc/examples/nota_compile.rs`, `nota_inspect.rs` |
+| wasm bindings (playground)                                        | `napi/nota/src/lib.rs`                                   |
+| E2E fixtures (parse→lower→codegen, exact-emit)                    | `crates/oxc_codegen/tests/integration/nota.rs`           |
 
 **Parse-then-lower** (the shape oxc uses for JSX): the parser leaves every `@`-form in place as
 `Expression::NotaMarkup` and a whole file as one `NotaMarkupKind::Document` statement. The eight
@@ -60,19 +61,20 @@ formatter, at the cost of a one-time generated-code churn (regenerate with
 
 1. **Lexer** — `lexer/nota.rs`, `pub mod` in `lexer/mod.rs`. `next_nota_child` (the
    `next_jsx_child` analog) returns one markup child per call: a maximal `Kind::MarkupText` run or
-   a single *consumed* sigil as a typed token (`@` `{` `}` `\n` `*` `_` `\` `` ` `` `$` `|`; new
+   a single _consumed_ sigil as a typed token (`@` `{` `}` `\n` `*` `_` `\` `` ` `` `$` `|`; new
    kinds in `lexer/kind.rs`). `next_nota_head` lexes an `@`-head with Nota identifier rules — a
-   `\` *terminates* the head (so `@foo\:` works) instead of starting a JS `\u` escape. Plus
+   `\` _terminates_ the head (so `@foo\:` works) instead of starting a JS `\u` escape. Plus
    offset-seek entries (`seek_and_lex{,_markup,_nota_head}`, `Source::set_offset`) and a temporary
    source-end clamp (`set_end_offset`) for bounding statement parses.
 2. **Parser hook** — `js/expression.rs`: `Kind::At if self.source_type.is_nota() =>
-   self.parse_nota_markup_expression()`, else `parse_decorated_expression()`. `SourceType::nota()`'s
-   `is_nota()` bit is the *entire* `@`-vs-decorator disambiguation — set once at `Parser::new` and
+self.parse_nota_markup_expression()`, else `parse_decorated_expression()`. `SourceType::nota()`'s
+   `is_nota()` bit is the _entire_ `@`-vs-decorator disambiguation — set once at `Parser::new` and
    read-only thereafter (a per-file property, not a mutable per-token flag, so there is no markup
    state to leak into `Context`). Sound because decorators are unavailable inside `.nota`, v1: they
    only appear in class/statement position, never in a Nota expression context.
 3. **The `nota` parser module** — `nota/mod.rs` + entries in `lib.rs`
-   (`parse_nota_document` / `parse_nota_document_recover` / `parse_nota_highlights`; an
+   (`parse_nota_document`, plus the free function
+   `nota_highlights_from_program`; an
    expression-position parse is plain `Parser::parse_expression` with a `SourceType::nota()` —
    the `@` hook fires, no dedicated entry), cursor seams in `cursor.rs`
    (`advance_for_nota_child`, `nota_seek_to/markup/head`), diagnostics in `diagnostics.rs`.
@@ -88,20 +90,20 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   `bump_any` (JS), `advance_for_nota_child` (markup), or a `nota_seek_*` re-entry at a raw offset.
   After any multi-byte extent is consumed by a scan, the parser re-seeks explicitly.
 - **`collect_markup` is the one body loop**, dispatching on typed tokens; `BodyMode`
-  (`Body`/`Document`/`Bounded`) is *Axis 1* — the **collection semantics** of a markup body: does a
+  (`Body`/`Document`/`Bounded`) is _Axis 1_ — the **collection semantics** of a markup body: does a
   depth-0 `}` close the body, do `%` statement lines fire, is collection clipped to a range.
   Balanced `{…}` inside a body is literal text (Scribble `@foo{f{o}o}`); brace depth is a parser
   counter over the typed `LCurly`/`RCurly` tokens.
-- **A parser-owned `NotaRegion` stack is *Axis 2*** — the host an inner `@`-form's *tail* resumes
+- **A parser-owned `NotaRegion` stack is _Axis 2_** — the host an inner `@`-form's _tail_ resumes
   into, orthogonal to `BodyMode`: `Markup(BodyMode)` (resume by markup-lex — the only region markup
   children may push into), `Js` (an expression-position form or a `k: @form` prop value — resume by
-  JS-lex), or `Raw` (the tail after a `|@` armed form in any raw span — *parked*). `resume_at` is the one
+  JS-lex), or `Raw` (the tail after a `|@` armed form in any raw span — _parked_). `resume_at` is the one
   exit primitive every construct returns through, a three-way dispatch on the top region;
   `nota_park` sets a zero-width `Undetermined` token and reads no source (the enclosing raw scan
   owns the following bytes and re-seeks itself from `prev_token_end`), and `Undetermined` makes an
   accidental token inspection after a park loud. A markup-child push under a `Js`/`Raw` top is a
   routing bug and panics.
-- **Line-start constructs chain**: the `\n` arm consumes a *run* of `%`/`%%%` statements, list
+- **Line-start constructs chain**: the `\n` arm consumes a _run_ of `%`/`%%%` statements, list
   runs, then a heading — each resumes at a line start that may open the next. **A body/range start
   is a line start too** (notation.md §Markup sugar): `collect_markup`'s entry runs the same hook, so the
   document opener, `@{- item}`, `@foo: - item`, and `*- item*` all arm — with first-line extents
@@ -109,7 +111,7 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   bounded range's end. Literal braces in prose never re-enter `collect_markup`, so `a {- b} c`
   stays text.
 - **Raw spans share ONE content model (notation.md §Verbatim)** — verbatim `|{…}|`, inline/block code, and
-  inline/fence math are all *raw runs interleaved with `|@`-armed `@`-forms*. Extents are **pure
+  inline/fence math are all _raw runs interleaved with `|@`-armed `@`-forms_. Extents are **pure
   pre-scans** first (`lex_code_span` / `lex_math_span` / `verbatim_boundary`); then a **second
   bounded scan** (`armed_boundary`) walks the fixed extent for `|@`, each of which re-enters Nota via
   `parse_nota_form_in(Raw)` — its tail parks, and the scan resumes from `prev_token_end`. A bare `@`
@@ -131,15 +133,15 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
 - **Embedded JS is parsed by oxc itself** (`parse_expr` / `parse_statement_list_item` /
   `parse_binding_pattern`) with `SourceType::is_nota()` set, so `@`-forms nest inside embedded JS.
   **The JS lexer's one-token lookahead never reads bytes past a region boundary it does not own**: a
-  `[props]` group's `]` is validated *without advancing* and the continuation chosen by a raw byte
+  `[props]` group's `]` is validated _without advancing_ and the continuation chosen by a raw byte
   peek at its end, a `|@`-armed form's exit inside a raw span is parked, and a raw span's runs stay
   the raw scan's — each once mis-lexed a trailing `\`-run as a JS escape. The lone exception is a `%`/`%%%`
-  statement region, whose boundary is discoverable only *after* the JS parse: it is **bounded** by
+  statement region, whose boundary is discoverable only _after_ the JS parse: it is **bounded** by
   temporarily clamping the lexer's source end (`with_source_end_bound`) to `statement_bound` — the
   next line-leading `%` or the first **blank line** (ASI applies as at end of input —
   notation.md §Statements) —
   / the closing fence; otherwise the JS lexer reads the delimiter as `%` (modulo) or `%%%` as three
-  operators. Within the bound a `%` line is a JS statement *list* (`% a(); b();`), transitioning to
+  operators. Within the bound a `%` line is a JS statement _list_ (`% a(); b();`), transitioning to
   markup at end-of-line; stale lexer diagnostics from the trailing one-token lookahead (markup bytes
   JS can't lex) are **erased** when the region parses clean.
 - **Every text child is a real source slice** — including single-byte sigils that turned out
@@ -150,7 +152,7 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   design/references.md retired it; a markdown-style `[text](url)` link sugar existed briefly and
   was reverted — the bracket syntax stays reserved, and links/refs are the `&`-ref family.)
 - **A matched `&ref` continues into its glued postfix groups** (design/references.md §Syntax):
-  `[props]` groups — the *first* gated on `props_shape_at` (the attrs-group first-entry gate, so
+  `[props]` groups — the _first_ gated on `props_shape_at` (the attrs-group first-entry gate, so
   `see &sec[1]` keeps `[1]` prose; once one commits, further glued `[` chain like an element
   head's) — then an optional braced `{body}` (authored reference text), both parsed by the
   ordinary props/body machinery. Openers must sit within the bounded-frame `limit`. The
@@ -166,12 +168,12 @@ Codegen has two additions: an opt-in offset log riding the existing `add_source_
   left as lookahead until `commit_head` classifies the glued trigger (`{` `[` `:` `|{` or none)
   and consumes it in the lexer mode that trigger implies. This is the single
   whitespace-sensitive byte peek at the head→body boundary (`@foo{` element vs `@foo ` interp).
-- **The glued `:` is *positional* (notation.md §Colon & block sugar)**: `@head:` sugars only where the form is a
+- **The glued `:` is _positional_ (notation.md §Colon & block sugar)**: `@head:` sugars only where the form is a
   markup-body child (the top `NotaRegion` is `Markup`, never a `Js` island or a `Raw` scan) **and**
   its `@` sits at a line start modulo whitespace — walking back over spaces/tabs reaches offset 0, a
   `\n`, or the top markup frame's body start (`Markup { start }`; a body's own start is a line start,
   so `@a: @b: c` chains and `@p{  @a: b}` fires). One `colon_trigger_live` is computed at
-  `parse_nota_form` entry and threaded into *both* trigger consumers — `commit_head` and the
+  `parse_nota_form` entry and threaded into _both_ trigger consumers — `commit_head` and the
   hyphen-extension check — so a dead colon uniformly demotes to interpolation (the `:` stays literal)
   and never extends a hyphenated head (`t @my-foo:` → `@my` + `-foo:`). A colon body nested in a
   bounded frame (emphasis / heading / list-item / colon) additionally clips at that frame's end, so
@@ -197,6 +199,7 @@ Component tags are JSX **identifier references** (they surface in free names and
 for the Volar mappings); host tags are plain intrinsic `JSXIdentifier`s.
 
 Semantic pins (deliberate, tested):
+
 - **`Doc` and the nested-`%` IIFE are always synchronous** — no `await`-driven auto-`async`
   (supersedes notation.md §Statements; top-level `await` emits non-parsing JS by design).
 - **`String.raw` emit**: never use codegen's `escape_raw` (it doubles `\`, wrong for `String.raw`,
@@ -215,11 +218,12 @@ Semantic pins (deliberate, tested):
 ## Compiler entries (`crates/oxc/src/nota.rs`)
 
 One internal pipeline returns one `NotaOutput` shape through two entries:
+
 - `compile(src, map_path?)` is strict and strips embedded TypeScript.
 - `analyze(src)` recovers errors and returns type-preserving TSX, mappings, diagnostics, ESTree
   JSON, highlights, and free names from one parse.
 
-The CodeMapping join: lowering records source-span *marks* (embedded JS = full caps, component
+The CodeMapping join: lowering records source-span _marks_ (embedded JS = full caps, component
 identifiers = navigation/hover); codegen's offset log records where each source-spanned node was
 emitted; the join keeps innermost leaves, then **byte-exact-filters** (source slice == generated
 slice) — the load-bearing safety net that drops reformatted composites and host-tag
@@ -229,6 +233,7 @@ reinterpretations. Every surviving segment round-trips byte-for-byte. `CodeMappi
 boilerplate is unmapped.
 
 The example's `--analyze` mode prints that result as JSON for inspection:
+
 ```
 nota_compile --analyze <file>  →  stdout JSON:
 { "code": "<virtual .tsx>",
@@ -241,6 +246,7 @@ nota_compile --analyze <file>  →  stdout JSON:
   "ast": "<ESTree JSON>",
   "highlights": [start, end, kind, ...] }
 ```
+
 The live path calls the wasm `analyze` binding and receives the structured value without a JSON
 round trip. `packages/language-server` prepends its typing preamble to `code` and shifts every
 `generatedOffsets` by the preamble length (`sourceOffsets` index the `.nota`, unchanged). The same
@@ -263,13 +269,13 @@ embedded JS re-lex as `/` operators (no parser context in the pump).
 
 ## Testing
 
-| What | Where | Run |
-|---|---|---|
-| E2E fixtures (exact emit + validity invariant) | `oxc_codegen/tests/integration/nota.rs` | `cargo test -p oxc_codegen --test integration nota` |
-| Lexer scan units (boundaries, classifiers, string-aware skips) + highlight spans | `oxc_parser` lib (`lexer/nota.rs`, `nota/highlight.rs`) | `cargo test -p oxc_parser --lib nota` |
-| Scribble whitespace + mapping marks | `oxc_transformer` lib | `cargo test -p oxc_transformer --lib nota` |
-| Compile + analysis / CodeMapping join | `crates/oxc/src/nota.rs` | `cargo test -p oxc --features codegen nota` |
-| AST plumbing smoke | `oxc_ast` lib | `cargo test -p oxc_ast --lib nota` |
+| What                                                                             | Where                                                   | Run                                                 |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------- |
+| E2E fixtures (exact emit + validity invariant)                                   | `oxc_codegen/tests/integration/nota.rs`                 | `cargo test -p oxc_codegen --test integration nota` |
+| Lexer scan units (boundaries, classifiers, string-aware skips) + highlight spans | `oxc_parser` lib (`lexer/nota.rs`, `nota/highlight.rs`) | `cargo test -p oxc_parser --lib nota`               |
+| Scribble whitespace + mapping marks                                              | `oxc_transformer` lib                                   | `cargo test -p oxc_transformer --lib nota`          |
+| Compile + analysis / CodeMapping join                                            | `crates/oxc/src/nota.rs`                                | `cargo test -p oxc --features codegen nota`         |
+| AST plumbing smoke                                                               | `oxc_ast` lib                                           | `cargo test -p oxc_ast --lib nota`                  |
 
 `just nota-tests` runs the first four rows in one recipe — the single source of truth; CI's test
 step (`.github/workflows/nota.yml`) calls it.

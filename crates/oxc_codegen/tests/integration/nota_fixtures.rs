@@ -34,6 +34,7 @@ fn compile_fixture(name: &str) -> Option<String> {
     let allocator = Allocator::default();
     let mut program = Parser::new(&allocator, &source, SourceType::nota())
         .parse_nota_document()
+        .into_result()
         .unwrap_or_else(|errors| panic!("{name}: parse diagnostics: {errors:?}"));
     let ret = oxc_transformer::NotaLowering::new(&allocator, &source, false)
         .lower_document_program(&mut program);
